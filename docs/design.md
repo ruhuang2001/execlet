@@ -1,6 +1,6 @@
 # Design
 
-tiny-sandbox provides Docker-backed code execution for AI agents through Go and Python SDKs, CLI, and HTTP API. It uses in-memory state and does not provide hardened isolation or multi-tenant access controls.
+tiny-sandbox provides Docker-backed code execution for AI agents through Go, Python, and TypeScript SDKs, a CLI, and an HTTP API. It uses in-memory state and does not provide hardened isolation or multi-tenant access controls.
 
 This document is the design source for the implementation. `api.md`, `sdk.md` and `cli.md` are normative contracts; where this document disagrees with them, they win.
 
@@ -56,6 +56,7 @@ internal/dockerbackend/  Backend implementation over dockerapi; cgroup reads
 api/                     openapi.yaml plus contract.go with go:embed
 sandbox-go/              Go SDK: client, sandbox and file methods, exec, stream, retry, errors
 sandbox-python/          Python SDK: typed synchronous client, cancellation, replay, Docker E2E
+sandbox-ts/              TypeScript SDK: browser-safe fetch, SSE, outcomes and AbortSignal recovery
 examples/agent-tool/     the SDK used as an agent tool function (built and tested in CI)
 ```
 
@@ -342,7 +343,7 @@ policy and deliberate differences from Go.
 
 ## CI/CD
 
-The reusable CI workflow has five jobs:
+The reusable CI workflow has these jobs:
 
 | Job | Contents |
 |---|---|
@@ -350,9 +351,8 @@ The reusable CI workflow has five jobs:
 | `test` | unit and contract tests under `-race`, coverage artifact |
 | `build` | `go build ./...`, both commands, the example, `goreleaser check`, four snapshot archives and checksum verification |
 | `e2e` | Docker-backed suite with coverage instrumentation; enforces the merged coverage gate; uploads `artifacts/`; asserts no containers remain |
-
-The Python SDK job builds and installs its distribution on Python 3.10 and
-3.15, runs real-Docker fault scenarios, and uploads reports and cleanup evidence.
+| `python-sdk` | distribution build and install on Python 3.10 and 3.15, real-Docker fault scenarios, reports and cleanup evidence |
+| `typescript` | strict consumer types, real-Docker fault-injection E2E, browser-safe bundle check, installed npm tarball |
 
 CI builds GoReleaser snapshots: four platform archives (Linux/macOS on
 amd64/arm64) plus a checksum file. Windows is not supported.

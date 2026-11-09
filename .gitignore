@@ -20,3 +20,8 @@ __pycache__/
 .venv/
 /sandbox-python/build/
 /sandbox-python/dist/
+
+# TypeScript SDK dependencies and generated package.
+/sandbox-ts/node_modules/
+/sandbox-ts/dist/
+/sandbox-ts/*.tgz

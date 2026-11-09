@@ -6,6 +6,10 @@ For the synchronous Python client, see [sdk-python.md](sdk-python.md), including
 its differences in zero-retry configuration, callback errors, and automatic
 cancellation confirmation.
 
+The [TypeScript SDK](sdk-typescript.md) uses the same HTTP contract with async
+iteration, AbortSignal and discriminated outcomes. Its additions do not change
+the Go interfaces or outcome/error behavior documented here.
+
 ## Configuration
 
 ```go

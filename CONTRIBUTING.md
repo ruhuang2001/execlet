@@ -22,10 +22,12 @@ bash scripts/coverage.sh artifacts/cov-unit artifacts/e2e/coverage 70
 goreleaser release --snapshot --clean       # four archives plus checksums
 ```
 
-CI runs five jobs: `lint`, `test` (race plus coverage), `build` (every command,
+CI runs these jobs: `lint`, `test` (race plus coverage), `build` (every command,
 `goreleaser check`, a snapshot, checksum verification), `e2e` (real Docker,
 merged coverage at or above 70%, and an assertion that no containers remain),
-and `python-sdk` (Python 3.10 and 3.15, package builds and real-Docker E2E).
+`python-sdk` (Python 3.10 and 3.15, package builds and real-Docker E2E), and
+`typescript` (strict consumer types, real-Docker fault-injection E2E,
+browser-safe bundle, and an installed npm tarball).
 See [versioning and release checks](docs/versioning.md) for release preparation.
 
 The Python SDK requires Python 3.10+ and has no runtime dependencies. Its
@@ -84,3 +86,16 @@ For changes to execution, cancellation, streaming, or container lifecycle,
 prefer end-to-end scenarios against real Docker. Keep repeatable evidence in
 `artifacts/`, including commands, responses, logs, and cleanup results.
 Only report checks that actually ran.
+
+For TypeScript SDK changes, use Node 22+ and run:
+
+~~~sh
+make typescript
+bash scripts/e2e-typescript.sh artifacts/typescript-e2e
+~~~
+
+The E2E runner starts an isolated authenticated daemon, injects faults through
+a proxy around real responses, verifies the package, and retains repeatable
+JSON/JSONL/log evidence plus container cleanup results. It does not add a
+fake-only unit suite. Write failure scenarios before implementation and keep
+the [SDK contract](docs/sdk-typescript.md) aligned with behavior.

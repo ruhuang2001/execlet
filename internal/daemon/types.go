@@ -238,7 +238,8 @@ type CreateRequest struct {
 // Env is this execution's environment. It is additive: a name here overrides
 // the container's value and every other container variable stays visible. Cwd
 // is the directory the command runs in; empty means the image's working
-// directory. Execution records retain only an environment fingerprint, and Env is never
+// directory. Execution records retain an environment fingerprint and entry count.
+// Raw environment values are never retained in history or
 // echoed in a response.
 type ExecuteRequest struct {
 	Command        []string          `json:"command"`

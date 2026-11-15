@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"io"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -39,6 +40,7 @@ type execution struct {
 	exitCode *int
 	reason   *Reason
 	log      *eventLog
+	logger   *slog.Logger
 
 	// intent is the recorded termination intent: canceled or timeout. It is
 	// set before the daemon acts and never cleared, so it wins over whatever
@@ -106,6 +108,11 @@ func (ex *execution) finish(at time.Time, exitCode int, outcome ExecOutcome) boo
 		FinishedAt:        ex.finished,
 	})
 	close(ex.done)
+	logger := ex.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.Info("execution completed", "sandbox_id", ex.sandboxID, "execution_id", ex.id, "exit_code", ex.exitCode, "reason", *ex.reason)
 	return true
 }
 
@@ -277,6 +284,7 @@ func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req Ex
 		startedAt:   s.now(),
 		state:       ExecRunning,
 		log:         newEventLog(),
+		logger:      contextLogger(ctx),
 		proc:        proc,
 		oomBaseline: baseline,
 		done:        make(chan struct{}),
@@ -364,8 +372,7 @@ func (s *Sandboxes) run(ctx context.Context, sb *sandbox, ex *execution) {
 	// finish to run inside it.
 	now := s.now()
 	sb.mu.Lock()
-	finished := ex.finish(now, exitCode, outcome)
-	if finished {
+	if ex.finish(now, exitCode, outcome) {
 		if sb.running == ex {
 			sb.running = nil
 		}
@@ -375,9 +382,6 @@ func (s *Sandboxes) run(ctx context.Context, sb *sandbox, ex *execution) {
 		s.terminateLocked(context.WithoutCancel(context.Background()), sb, KillEvicted)
 	}
 	sb.mu.Unlock()
-	if finished {
-		contextLogger(ctx).InfoContext(ctx, "execution completed", "sandbox_id", ex.sandboxID, "execution_id", ex.id, "exit_code", exitCode, "reason", outcome.Reason)
-	}
 }
 
 // pump copies r into the event log in chunks no larger than the per-event

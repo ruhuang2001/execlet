@@ -22,3 +22,8 @@ Docker socket proxy, HTTP requests, SSE, JSON logs, and retained artifacts.
 
 Repeatable evidence: scripts/e2e-observability.sh writes responses, request IDs,
 SSE timing, daemon JSON logs, proxy failures, report.json, and cleanup.json.
+
+Review follow-up failure (recorded before repair): eviction can win terminal
+finalization before the runner, leaving only a start log. Delay real Docker exec
+inspection in the private proxy, externally remove the owned container, and
+require exactly one correlated completion record matching the stored outcome.

@@ -25,6 +25,8 @@ sources = [*Path('internal').rglob('*.go'), *Path('cmd/sandboxd').rglob('*.go'),
 (out / 'command.txt').write_text('bash scripts/e2e-observability.sh ' + str(out) + '\n')
 mode = 'healthy'
 proxy_requests = []
+inspect_blocked = threading.Event()
+release_inspect = threading.Event()
 docker_host = os.environ.get('DOCKER_HOST') or subprocess.check_output(
     ['docker', 'context', 'inspect', '--format', '{{.Endpoints.docker.Host}}'], text=True).strip()
 assert docker_host.startswith('unix://'), docker_host
@@ -46,6 +48,9 @@ class Forward(socketserver.BaseRequestHandler):
             data += part
         path = data.split(b' ', 2)[1].decode()
         proxy_requests.append({'path': path, 'mode': mode})
+        if mode == 'delay-inspect' and '/exec/' in path and path.endswith('/json'):
+            inspect_blocked.set()
+            release_inspect.wait(timeout=8)
         if path.split('?', 1)[0].endswith('/containers/create') and mode == 'create-error':
             body = json.dumps({'message': secret}).encode()
             self.request.sendall(b'HTTP/1.1 500 Internal Server Error\r\nContent-Length: ' + str(len(body)).encode() + b'\r\nConnection: close\r\n\r\n' + body)
@@ -192,6 +197,30 @@ try:
         mode = 'healthy'
         check('runtime error path', failed['status'] == 502, failed)
         request(base, method='DELETE', auth=True)
+        evicted_sandbox = request('/v1/sandboxes', method='POST', payload={}, auth=True)
+        evicted_id = json.loads(evicted_sandbox['body'])['id']
+        evicted_base = '/v1/sandboxes/' + evicted_id
+        running = request(evicted_base + '/executions', method='POST', auth=True,
+                          headers=[('X-Request-ID', 'eviction-correlation')],
+                          payload={'command': ['sleep', '30']})
+        evicted_execution = json.loads(running['body'])['id']
+        owned = subprocess.check_output(['docker', 'ps', '-aq', '--filter', 'label=tiny-sandbox.owner=' + owner], text=True).split()
+        check('only owned eviction target', len(owned) == 1)
+        mode = 'delay-inspect'
+        subprocess.run(['docker', 'rm', '-f', *owned], check=True, capture_output=True)
+        check('runner blocked before finalization', inspect_blocked.wait(timeout=5))
+        terminal = None
+        for _ in range(100):
+            terminal = json.loads(request(evicted_base + '/executions/' + evicted_execution, auth=True)['body'])
+            if terminal['state'] == 'completed':
+                break
+            time.sleep(.05)
+        check('eviction completes while runner blocked', terminal['state'] == 'completed' and terminal['termination_reason'] == 'evicted', terminal)
+        before_release = [json.loads(line) for line in (out / 'sandboxd.jsonl').read_text().splitlines()]
+        check('eviction completion logged immediately', sum(entry['msg'] == 'execution completed' and entry.get('execution_id') == evicted_execution for entry in before_release) == 1)
+        mode = 'healthy'
+        release_inspect.set()
+        time.sleep(2.5)
         proxy.shutdown()
         proxy.server_close()
         proxy = None
@@ -206,12 +235,15 @@ try:
         access = [entry for entry in logs if entry['msg'] == 'http request']
         check('structured access fields', all({'request_id', 'method', 'route', 'status', 'duration_ms', 'bytes'} <= entry.keys() for entry in access))
         lifecycle = [entry for entry in logs if entry['msg'] in ('execution started', 'execution completed')]
-        check('execution lifecycle correlated', len(lifecycle) == 2 and all(entry['request_id'] == 'execution-correlation' and entry['execution_id'] == execution_id for entry in lifecycle))
+        check('execution lifecycle correlated', len([entry for entry in lifecycle if entry['execution_id'] == execution_id]) == 2 and all(entry['request_id'] == 'execution-correlation' for entry in lifecycle if entry['execution_id'] == execution_id))
+        eviction_records = [entry for entry in lifecycle if entry['execution_id'] == evicted_execution and entry['msg'] == 'execution completed']
+        check('eviction completion once with stored outcome', len(eviction_records) == 1 and eviction_records[0]['request_id'] == 'eviction-correlation' and eviction_records[0]['reason'] == terminal['termination_reason'] and eviction_records[0]['exit_code'] == terminal.get('exit_code'))
         check('runtime error correlated', any(entry['msg'] == 'request failed' and entry['request_id'] == 'failure-correlation' and entry['code'] == 'backend_error' for entry in logs))
         check('unknown route redacted', any(entry.get('route') == 'unmatched' for entry in access))
         check('stream access recorded', any(entry.get('request_id') == 'stream-correlation' and entry['status'] == 200 and entry['bytes'] > 0 for entry in access))
         check('shutdown recorded', any(entry['msg'] == 'shutdown completed' for entry in logs))
 finally:
+    release_inspect.set()
     if server is not None and server.poll() is None:
         server.terminate()
         try:

@@ -134,8 +134,8 @@ a separate 8 MiB limit; command metadata remains limited to 1 MiB. Set input on 
 request to `StartExecution`, then stream the returned execution. This is not interactive
 input. The server does not return stdin in execution metadata, but a command can print
 it to output. See the [input contract](api.md#one-shot-stdin) for image requirements and
-cleanup behavior. Use compatible client and server revisions; older servers can ignore
-unsupported request fields.
+cleanup behavior. Older servers silently ignore `Stdin`, so the command gets EOF;
+require a server that implements the input contract before sending input.
 
 ### Concurrent executions
 

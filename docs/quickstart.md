@@ -125,7 +125,10 @@ cd tiny-sandbox
 make build
 export DOCKER_HOST="${DOCKER_HOST:-$(docker context inspect --format '{{.Endpoints.docker.Host}}')}"
 cd bin
-./sandboxd
+case "$DOCKER_HOST" in
+  unix://*) ./sandboxd ;;
+  *) echo "A local Docker Unix socket is required; current endpoint: $DOCKER_HOST" >&2 ;;
+esac
 ```
 
 Continue with the commands in quick start step 3 in another terminal. Use the

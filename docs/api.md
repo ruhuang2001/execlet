@@ -314,7 +314,7 @@ Server-sent events; see below.
 
 Raw bytes in the body; creates parent directories; replaces existing files. `204`. Idempotent.
 
-### Directory listing
+<a id="directory-listing"></a>
 
 ### `GET /v1/sandboxes/{sandbox_id}/files/list`
 
@@ -337,7 +337,7 @@ or trees can therefore return 413 even when immediate children are few;
 this API is not a constant-time filesystem index. Runtime deadline failures
 are 502. No archive is extracted on the host.
 
-### Tar transfer
+<a id="tar-transfer"></a>
 
 ### `GET /v1/sandboxes/{sandbox_id}/files/archive?path=/abs/path`
 

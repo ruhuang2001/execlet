@@ -15,8 +15,8 @@ all processes; starting or canceling in a paused sandbox still resumes it first.
 
 ## State, locking and retention
 
-`sandbox.running` is an execution-ID map. The sandbox mutex is the
-admission boundary across validation, backend start, and map insertion. Failed
+`sandbox.running` is an execution-ID map. Request validation happens before
+locking. The sandbox mutex covers state/capacity checks, backend start, and map insertion. Failed
 backend starts consume no slot. Finish, map removal, activity update, and history
 pruning happen atomically under the same mutex before exposing completion.
 Lock order remains sandbox then execution; no execution lock crosses acquisition
@@ -81,7 +81,7 @@ Real Docker E2E scenarios cover:
 - Go, Python and TypeScript each demonstrate overlapping executions, isolated
   cancellation and unknown-outcome handling via public SDK entry points.
 - Race-enabled existing suite (including TestExecutionHistoryIsPruned), vet,
-  lint and all CI E2E gates pass. No new isolated unit tests after implementation.
+  lint and all CI E2E gates pass.
 
 Artifacts include probe commands, IDs, state/outcome snapshots, logs, and cleanup
 checks. Each runner starts its own daemon on an isolated port and cleans only its

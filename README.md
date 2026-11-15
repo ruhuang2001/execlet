@@ -13,7 +13,8 @@ a command-line client, and HTTP API.
 - **Files:** binary reads/writes, paginated directory listings, and validated tar
   upload/download.
 - **Concurrency:** 1–8 execution slots per sandbox; default 1. Pause freezes all
-  processes. Concurrent sandboxes report ambiguous exit 137 as `unknown`.
+  processes. Sandboxes configured for multiple execution slots report
+  ambiguous exit 137 as `unknown`.
 - **Operations:** structured logs, request IDs, process liveness at `/healthz`,
   and Docker readiness at `/readyz`.
 

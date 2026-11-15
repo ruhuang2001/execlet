@@ -134,21 +134,26 @@ func TestClassificationPrecedence(t *testing.T) {
 	})
 
 	t.Run("evicted when the container is stopped", func(t *testing.T) {
+		// The sandbox must already read as killed when the client sees the
+		// execution complete; otherwise the client may start the next command
+		// against a container that is gone. Repeated, because that is a race.
 		h := newHarness(t)
 		h.be.Programs["block"] = memBlock
-		sb := h.create(daemon.CreateRequest{})
-		ex, _, err := h.s.StartExecution(ctx, sb.ID, daemon.ExecuteRequest{Command: []string{"block"}})
-		wantNoError(t, err)
-		h.be.Kill(h.containerOf(sb.ID))
+		for range 1000 {
+			sb := h.create(daemon.CreateRequest{})
+			ex, _, err := h.s.StartExecution(ctx, sb.ID, daemon.ExecuteRequest{Command: []string{"block"}})
+			wantNoError(t, err)
+			h.be.Kill(h.containerOf(sb.ID))
 
-		done := h.waitCompleted(sb.ID, ex.ID)
-		if *done.TerminationReason != daemon.ReasonEvicted {
-			t.Fatalf("reason = %s, want evicted", *done.TerminationReason)
-		}
-		sandbox, err := h.s.Get(sb.ID)
-		wantNoError(t, err)
-		if sandbox.State != daemon.StateKilled || sandbox.KillReason == nil || *sandbox.KillReason != daemon.KillEvicted {
-			t.Fatalf("sandbox = %+v, want killed/evicted", sandbox)
+			done := h.spinCompleted(sb.ID, ex.ID)
+			if *done.TerminationReason != daemon.ReasonEvicted {
+				t.Fatalf("reason = %s, want evicted", *done.TerminationReason)
+			}
+			sandbox, err := h.s.Get(sb.ID)
+			wantNoError(t, err)
+			if sandbox.State != daemon.StateKilled || sandbox.KillReason == nil || *sandbox.KillReason != daemon.KillEvicted {
+				t.Fatalf("sandbox = %+v, want killed/evicted", sandbox)
+			}
 		}
 	})
 

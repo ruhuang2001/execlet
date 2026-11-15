@@ -132,13 +132,7 @@ func TestExecutions(t *testing.T) {
 			if err != nil {
 				t.Fatalf("start %d right after the previous completion: %v", i, err)
 			}
-			for {
-				got, err := h.s.GetExecution(sb.ID, ex.ID)
-				wantNoError(t, err)
-				if got.State == daemon.ExecCompleted {
-					break
-				}
-			}
+			h.spinCompleted(sb.ID, ex.ID)
 		}
 	})
 

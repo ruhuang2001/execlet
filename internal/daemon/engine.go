@@ -340,9 +340,12 @@ func (s *Sandboxes) run(sb *sandbox, ex *execution) {
 
 	// Completion and the sandbox's release happen under one sandbox lock.
 	// finish makes the execution visible as completed, and a client that
-	// sees that may start the next command at once; if running were cleared
-	// only afterwards, that start would find the sandbox busy. The lock order
-	// (sandbox, then execution) allows finish to run inside it.
+	// sees that may act at once: start the next command, or read the
+	// sandbox. If running were cleared only afterwards, that start would find
+	// the sandbox busy; if a lost sandbox were marked killed only afterwards,
+	// the client would see it running and start a command against a
+	// container that is gone. The lock order (sandbox, then execution) allows
+	// finish to run inside it.
 	now := s.now()
 	sb.mu.Lock()
 	if ex.finish(now, exitCode, outcome) {
@@ -351,13 +354,10 @@ func (s *Sandboxes) run(sb *sandbox, ex *execution) {
 		}
 		sb.lastActivity = now
 	}
-	sb.mu.Unlock()
-
 	if outcome.SandboxLost {
-		sb.mu.Lock()
 		s.terminateLocked(context.WithoutCancel(context.Background()), sb, KillEvicted)
-		sb.mu.Unlock()
 	}
+	sb.mu.Unlock()
 }
 
 // pump copies r into the event log in chunks no larger than the per-event

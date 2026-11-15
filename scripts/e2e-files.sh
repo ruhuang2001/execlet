@@ -5,11 +5,14 @@ OUT=${1:-$ROOT/artifacts/files-e2e}
 mkdir -p "$OUT"
 OUT=$(cd "$OUT" && pwd)
 cd "$ROOT"
+rm -f "$OUT/PASS" "$OUT/results.json" "$OUT/archive-results.json" "$OUT/memory-results.json"
 PORT=${E2E_FILES_PORT:-$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')}
 OWNER="files-e2e-$PORT-$$"
 SERVER_PID=''
+COMPLETED=0
 cleanup() {
  local code=$?
+ if [ "$code" -eq 0 ] && [ "$COMPLETED" -ne 1 ]; then code=1; fi
  trap - EXIT
  if [ -n "$SERVER_PID" ]; then kill "$SERVER_PID" 2>/dev/null || true; wait "$SERVER_PID" 2>/dev/null || true; fi
  docker ps -aq --filter "label=tiny-sandbox.owner=$OWNER" >"$OUT/containers-before-cleanup.txt"
@@ -35,11 +38,14 @@ if [ "${E2E_COVERAGE:-0}" = "1" ]; then
  BUILD_FLAGS+=(-cover -covermode=atomic -coverpkg=./...)
 fi
 {
- go build "${BUILD_FLAGS[@]}" -o "$OUT/sandboxd" ./cmd/sandboxd
- go build "${BUILD_FLAGS[@]}" -o "$OUT/sandboxctl" ./cmd/sandboxctl
- go build "${BUILD_FLAGS[@]}" -o "$OUT/go-files" ./scripts/file-e2e
+ go build "${BUILD_FLAGS[@]}" -o "$OUT/sandboxd" ./cmd/sandboxd &&
+ go build "${BUILD_FLAGS[@]}" -o "$OUT/sandboxctl" ./cmd/sandboxctl &&
+ go build "${BUILD_FLAGS[@]}" -o "$OUT/go-files" ./scripts/file-e2e &&
  go build "${BUILD_FLAGS[@]}" -o "$OUT/memory-files" ./scripts/file-e2e/memory
-} >"$OUT/build.log" 2>&1
+} >"$OUT/build.log" 2>&1 || { cat "$OUT/build.log" >&2; exit 1; }
+for binary in sandboxd sandboxctl go-files memory-files; do
+ if [ ! -x "$OUT/$binary" ]; then echo "missing executable $OUT/$binary" >&2; exit 1; fi
+done
 (cd sandbox-ts && npm ci && npm run build && npm run check) >"$OUT/typescript-build.log" 2>&1
 "$OUT/sandboxd" -addr "127.0.0.1:$PORT" -owner "$OWNER" >"$OUT/sandboxd.log" 2>&1 &
 SERVER_PID=$!
@@ -55,3 +61,17 @@ if [ "$READY" -ne 1 ]; then cat "$OUT/sandboxd.log" >&2; exit 1; fi
 git rev-parse HEAD >"$OUT/source-revision.txt"
 git show -m --format=fuller --binary HEAD >"$OUT/source.patch"
 git diff >"$OUT/worktree.patch"
+
+"${PYTHON:-python3}" - "$OUT" <<'PYVERIFY'
+import json,pathlib,sys
+out=pathlib.Path(sys.argv[1])
+for name in ('results.json','archive-results.json','memory-results.json'):
+    result=json.loads((out/name).read_text())
+    if result.get('status')!='passed': raise SystemExit(f'{name} did not pass: {result}')
+archive=json.loads((out/'archive-results.json').read_text())
+if archive.get('upload_http_cases',0)<31: raise SystemExit(f'incomplete archive scenarios: {archive}')
+memory=json.loads((out/'memory-results.json').read_text())
+if memory.get('metadata_iterations')!=1000: raise SystemExit(f'incomplete memory scenarios: {memory}')
+PYVERIFY
+printf 'PASS: file API scenarios and memory HTTP regressions completed\n' | tee "$OUT/PASS"
+COMPLETED=1

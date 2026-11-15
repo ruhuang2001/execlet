@@ -135,8 +135,11 @@ func TestCwdIsEchoedAndEnvIsNot(t *testing.T) {
 
 	list, err := h.s.ListExecutions(sb.ID)
 	wantNoError(t, err)
-	if len(list) != 1 || list[0].Cwd == nil || *list[0].Cwd != "/work" {
-		t.Errorf("summary cwd = %+v, want /work", list)
+	if len(list) != 1 {
+		t.Fatalf("history holds %d executions, want 1", len(list))
+	}
+	if list[0].Cwd == nil || *list[0].Cwd != "/work" {
+		t.Errorf("summary cwd = %v, want /work", list[0].Cwd)
 	}
 
 	// The wire form is what a client or a log sees, so check it rather than

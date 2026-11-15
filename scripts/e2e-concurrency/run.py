@@ -116,10 +116,17 @@ def deadlines():
     finish(sb, b, "timeout")
     assert get(sb, sibling)["state"] == "running"
     cancel(sb, sibling)
-    a = start(sb, timeout_seconds=1)
-    b = start(sb, timeout_seconds=1)
+    command = ["sh", "-c", "echo ready; sleep 30"]
+    a = start(sb, command, timeout_seconds=3)
+    b = start(sb, command, timeout_seconds=3)
+    # Docker's attached start acknowledges before the process necessarily runs.
+    # Observe both commands before pausing, or pause can race runtime startup.
+    ready_deadline = time.monotonic() + 2
+    while "ready" not in get(sb, a)["stdout"] or "ready" not in get(sb, b)["stdout"]:
+        assert time.monotonic() < ready_deadline, "commands did not start before pause"
+        time.sleep(.02)
     call("POST", "/v1/sandboxes/" + sb + "/pause")
-    time.sleep(1.2)
+    time.sleep(3.2)
     assert get(sb, a)["state"] == get(sb, b)["state"] == "running"
     call("POST", "/v1/sandboxes/" + sb + "/resume")
     finish(sb, a, "timeout")

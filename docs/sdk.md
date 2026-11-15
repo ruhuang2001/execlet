@@ -129,6 +129,7 @@ var (
     ErrNonZeroExit       // termination_reason "exited" with a nonzero exit code
     ErrTimeout           // termination_reason "timeout": the sandbox lifetime, or the execution's own deadline
     ErrCanceled          // canceled outcome or an accepted SDK cancellation response; inspect execution state
+    ErrUnknown           // termination_reason "unknown"
     ErrOOM               // termination_reason "oom"
     ErrEvicted           // termination_reason "evicted"
     ErrCancelUnconfirmed // the caller's context ended but the SDK could not confirm the server stopped the work
@@ -249,3 +250,15 @@ are supported; the HTTP contract specifies validation and concurrent-writer requ
 Archive upload callers must quiesce in-container filesystem writers and inspect
 remote state after any failed or ambiguous upload, because extraction can be partial.
 The aggregate path/link text limit is 1 MiB, in addition to the byte/member limits.
+
+## Concurrent executions
+
+Set max_concurrent_executions when creating a sandbox (1–8, default 1).
+Go uses CreateSandboxRequest.MaxConcurrentExecutions; Python and TypeScript use
+max_concurrent_executions; the CLI uses --max-concurrent-executions. Sandbox views
+return the limit. Start executions separately and stream each ID; cancellation
+normally affects only its selected execution. Pause/resume applies to all work.
+Container-removal fallback affects siblings, as described in the HTTP contract.
+Above one configured slot, unexplained exit 137 has termination_reason unknown,
+which is never a successful SDK outcome (Go ErrUnknown; Python error code unknown;
+TypeScript reason unknown with terminationReason unknown).

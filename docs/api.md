@@ -29,7 +29,7 @@ unknown paths or unsupported methods may use plain text:
 | 401 | `unauthorized` | missing or wrong API key | no |
 | 404 | `not_found` | sandbox, execution, or file does not exist | no |
 | 409 | `invalid_state` | operation not allowed in the sandbox's current state (see transition table) | no |
-| 409 | `busy` | the sandbox already has a running execution | no |
+| 409 | `busy` | the sandbox execution slots are full | no |
 | 409 | `idempotency_conflict` | idempotency key reused with a different `command`, `cwd`, `env`, or `stdin` | no |
 | 413 | `payload_too_large` | JSON request body, file upload, directory scan, or tar transfer exceeds a limit | no |
 | 429 | `rate_limited` | a create would exceed the live-sandbox limit; see [limits](#limits) | yes |
@@ -241,7 +241,7 @@ No body. `200` Sandbox. Idempotent per the transition table.
 - State validation precedes idempotency lookup: a killed or pending sandbox rejects the start, including a replay; a paused sandbox resumes first.
 - Same key and the same invocation as an existing execution: `200` with that execution, in whatever state it is now. No new process starts; a different `timeout_seconds` on the replay does not change its deadline. The comparison covers `command`, `cwd`, `env`, and `stdin`, so a replay cannot silently return an execution that ran with a different environment.
 - Same key with a different command, `cwd`, `env`, or `stdin`: `409 idempotency_conflict`.
-- Another execution is running: `409 busy`. One running execution per sandbox keeps container-wide OOM evidence attributable to a single execution.
+- Execution slots are full: `409 busy`. The immutable create-time max_concurrent_executions accepts 1–8 and defaults to 1. Identical keyed replays do not consume slots.
 
 ### `GET /v1/sandboxes/{sandbox_id}/executions`
 
@@ -454,3 +454,19 @@ cancellation can leave partial extraction; there is no filesystem transaction.
 SDKs therefore send archive PUT exactly once, unlike ordinary file PUT.
 No uploaded data is extracted on the daemon host. The directory/archive path
 and query validation rules are the same as directory listing.
+
+## Concurrent execution policy
+
+Create accepts max_concurrent_executions (integer 1–8, default 1); Sandbox views
+return it. Pause freezes every execution and resume resumes every execution.
+Cancel and execution deadlines normally affect only their selected process group.
+If escalation must remove the container, siblings also end as canceled or timeout
+respectively, unless an earlier recorded intent applies. Delete cancels every
+active execution; external eviction completes every active execution as evicted.
+All active records are protected from retention pruning. Idle starts only after
+all executions and streams finish.
+
+When configured above one slot, container-wide OOM counters cannot attribute an
+individual process: no execution is labeled oom from those counters. After explicit
+intent and container-loss checks, exit 137 is unknown; other exits are exited.
+Unknown is a non-success SDK outcome. The default one-slot policy is unchanged.

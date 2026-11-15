@@ -24,7 +24,7 @@ Status: normative. Contract for `sandboxctl`. It is a thin layer over the [Go SD
 | `version` | print the build version (injected with `-ldflags`) |
 | `help` | usage |
 
-`run` flags: `--sandbox ID`, `--image`, `--memory MB`, `--pids-limit N`, `--nano-cpus N`, `--network bridge|none`, `--timeout S`, `--timeout-action kill|pause`, `--idle-timeout S`, `--idle-action kill|pause`, `--exec-timeout S`, `--env NAME=VALUE`, `--cwd DIR`, `--stdin-file FILE`, `--rm` (request cleanup of a sandbox created by this invocation). Creation flags together with `--sandbox` are an error. `--rm` does not remove a sandbox supplied through `--sandbox`. Cleanup errors are currently ignored; verify remote state when cleanup must be confirmed.
+`run` flags: `--sandbox ID`, `--image`, `--memory MB`, `--max-concurrent-executions N`, `--pids-limit N`, `--nano-cpus N`, `--network bridge|none`, `--timeout S`, `--timeout-action kill|pause`, `--idle-timeout S`, `--idle-action kill|pause`, `--exec-timeout S`, `--env NAME=VALUE`, `--cwd DIR`, `--stdin-file FILE`, `--rm` (request cleanup of a sandbox created by this invocation). --max-concurrent-executions is a creation-only flag (1–8, default 1). Creation flags together with `--sandbox` are an error. `--rm` does not remove a sandbox supplied through `--sandbox`. Cleanup errors are currently ignored; verify remote state when cleanup must be confirmed.
 
 `--env` and `--cwd` apply to the execution, not to the sandbox, so they are
 valid together with `--sandbox`. Repeat `--env` to set more than one variable;
@@ -141,3 +141,15 @@ leave an existing destination intact;
 the CLI never extracts the tar on the host. Upload accepts only regular local
 files and is attempted once. Quiesce destination writers before upload and
 inspect remote state after failure; runtime errors can leave partial extraction.
+
+## Concurrent executions
+
+Set max_concurrent_executions when creating a sandbox (1–8, default 1).
+Go uses CreateSandboxRequest.MaxConcurrentExecutions; Python and TypeScript use
+max_concurrent_executions; the CLI uses --max-concurrent-executions. Sandbox views
+return the limit. Start executions separately and stream each ID; cancellation
+normally affects only its selected execution. Pause/resume applies to all work.
+Container-removal fallback affects siblings, as described in the HTTP contract.
+Above one configured slot, unexplained exit 137 has termination_reason unknown,
+which is never a successful SDK outcome (Go ErrUnknown; Python error code unknown;
+TypeScript reason unknown with terminationReason unknown).

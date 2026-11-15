@@ -45,24 +45,26 @@ const (
 	ReasonOOM      Reason = "oom"
 	ReasonEvicted  Reason = "evicted"
 	ReasonExited   Reason = "exited"
+	ReasonUnknown  Reason = "unknown"
 )
 
 // Sandbox is the contract view of a sandbox.
 type Sandbox struct {
-	ID                 string      `json:"id"`
-	State              State       `json:"state"`
-	Image              string      `json:"image"`
-	MemoryMB           int         `json:"memory_mb"`
-	PidsLimit          int         `json:"pids_limit"`
-	NanoCPUs           int64       `json:"nano_cpus"`
-	Network            string      `json:"network"`
-	TimeoutSeconds     int         `json:"timeout_seconds"`
-	TimeoutAction      Action      `json:"timeout_action"`
-	IdleTimeoutSeconds int         `json:"idle_timeout_seconds"`
-	IdleTimeoutAction  Action      `json:"idle_timeout_action"`
-	CreatedAt          Time        `json:"created_at"`
-	ExpiresAt          *Time       `json:"expires_at"`
-	KillReason         *KillReason `json:"kill_reason"`
+	MaxConcurrentExecutions int         `json:"max_concurrent_executions"`
+	ID                      string      `json:"id"`
+	State                   State       `json:"state"`
+	Image                   string      `json:"image"`
+	MemoryMB                int         `json:"memory_mb"`
+	PidsLimit               int         `json:"pids_limit"`
+	NanoCPUs                int64       `json:"nano_cpus"`
+	Network                 string      `json:"network"`
+	TimeoutSeconds          int         `json:"timeout_seconds"`
+	TimeoutAction           Action      `json:"timeout_action"`
+	IdleTimeoutSeconds      int         `json:"idle_timeout_seconds"`
+	IdleTimeoutAction       Action      `json:"idle_timeout_action"`
+	CreatedAt               Time        `json:"created_at"`
+	ExpiresAt               *Time       `json:"expires_at"`
+	KillReason              *KillReason `json:"kill_reason"`
 }
 
 // Execution is one command run in a sandbox.
@@ -93,15 +95,16 @@ const (
 // CreateSandboxRequest is the body of POST /v1/sandboxes. Every field is
 // optional; a nil pointer takes the server default.
 type CreateSandboxRequest struct {
-	Image              *string `json:"image,omitempty"`
-	MemoryMB           *int    `json:"memory_mb,omitempty"`
-	PidsLimit          *int    `json:"pids_limit,omitempty"`
-	NanoCPUs           *int64  `json:"nano_cpus,omitempty"`
-	Network            *string `json:"network,omitempty"`
-	TimeoutSeconds     *int    `json:"timeout_seconds,omitempty"`
-	TimeoutAction      *Action `json:"timeout_action,omitempty"`
-	IdleTimeoutSeconds *int    `json:"idle_timeout_seconds,omitempty"`
-	IdleTimeoutAction  *Action `json:"idle_timeout_action,omitempty"`
+	MaxConcurrentExecutions *int    `json:"max_concurrent_executions,omitempty"`
+	Image                   *string `json:"image,omitempty"`
+	MemoryMB                *int    `json:"memory_mb,omitempty"`
+	PidsLimit               *int    `json:"pids_limit,omitempty"`
+	NanoCPUs                *int64  `json:"nano_cpus,omitempty"`
+	Network                 *string `json:"network,omitempty"`
+	TimeoutSeconds          *int    `json:"timeout_seconds,omitempty"`
+	TimeoutAction           *Action `json:"timeout_action,omitempty"`
+	IdleTimeoutSeconds      *int    `json:"idle_timeout_seconds,omitempty"`
+	IdleTimeoutAction       *Action `json:"idle_timeout_action,omitempty"`
 }
 
 // ExecuteRequest is the body of POST .../executions.

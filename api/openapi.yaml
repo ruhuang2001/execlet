@@ -242,9 +242,10 @@ paths:
       operationId: startExecution
       summary: Start an execution
       description: >-
-        Runs argv without a shell. One execution runs per sandbox; an
-        overlapping start returns 409 busy, which keeps container-wide OOM
-        evidence attributable to a single execution. Starting in a paused
+        Runs argv without a shell. The configured execution slot limit defaults
+        to one and accepts up to eight; a start at capacity returns 409 busy.
+        Above one slot, unexplained exit 137 is unknown because container-wide
+        OOM counters cannot attribute one process. Starting in a paused
         sandbox resumes it first. Reusing an idempotency key with the same
         command returns the retained execution instead of starting it again;
         the same command without a retained key starts a new execution.
@@ -692,8 +693,7 @@ components:
     Conflict:
       description: >-
         409, one of invalid_state (the operation is not allowed in the
-        sandbox's current state), busy (the sandbox already has a running
-        execution), or idempotency_conflict (the key was reused with a
+        sandbox's current state), busy (the sandbox's execution slots are full), or idempotency_conflict (the key was reused with a
         different command, cwd, env, or stdin).
       content:
         application/json:
@@ -799,6 +799,12 @@ components:
           type: integer
           minimum: 16
           default: 512
+        max_concurrent_executions:
+          type: integer
+          minimum: 1
+          maximum: 8
+          default: 1
+          description: Immutable execution slot limit. Above one, unexplained exit 137 is unknown because container OOM counters cannot identify one process.
         pids_limit:
           type: integer
           minimum: 64
@@ -845,6 +851,7 @@ components:
         - state
         - image
         - memory_mb
+        - max_concurrent_executions
         - pids_limit
         - nano_cpus
         - network
@@ -867,6 +874,12 @@ components:
         memory_mb:
           type: integer
           minimum: 16
+        max_concurrent_executions:
+          type: integer
+          minimum: 1
+          maximum: 8
+          default: 1
+          description: Immutable execution slot limit. Above one, unexplained exit 137 is unknown because container OOM counters cannot identify one process.
         pids_limit:
           type: integer
           minimum: 64
@@ -1023,12 +1036,15 @@ components:
             Null while running, or when the runtime could not report one.
         termination_reason:
           type: [string, 'null']
-          enum: [canceled, timeout, oom, evicted, exited, null]
+          enum: [canceled, timeout, oom, evicted, exited, unknown, null]
           description: >-
             Null while running. The classifier uses the first recorded intent
             (canceled or timeout), then OOM evidence, container liveness, and exit
             status. The eviction sweep can also finalize an execution directly
-            as evicted. Exit code 137 alone never implies oom.
+            as evicted, preserving a previously recorded intent. Above one configured
+            execution slot, OOM counters are not attributed to an execution and
+            an otherwise unexplained exit 137 is unknown. Exit code 137 alone
+            never implies oom.
         output_truncated:
           type: boolean
           description: >-

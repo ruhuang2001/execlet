@@ -18,11 +18,20 @@ The module is `github.com/ruhuang2001/tiny-sandbox`; `sandbox-go` is the package
 
 This project answers those questions with working code and tests rather than prose. The API semantics follow the public documentation of PPIO Sandbox and E2B where they agree; it does not claim wire compatibility with either.
 
+## Execution and file capabilities
+
+- Per-execution environment overrides and working directory.
+- Bounded directory listing with cursor pagination.
+- Structured request/completion logs and Docker readiness checks.
+- Bounded one-shot stdin, followed by EOF.
+- Bounded tar upload/download for directory transfer.
+- Opt-in concurrent executions (1–8 slots; default 1), with independent cancellation.
+
 ## Goals
 
 1. **Lifecycle**: create, pause, resume, and kill sandboxes; a lifetime timeout and an idle timeout, each able to kill or pause.
 2. **Execution and streaming**: executions as resources with IDs, output over SSE, lossless reconnect with `Last-Event-ID`, and command-level cancellation.
-3. **Errors and retries**: five typed termination reasons and a retry policy that never replays a command.
+3. **Errors and retries**: typed termination reasons and a retry policy that never replays a command.
 4. **Developer experience**: a CLI that gets a new user from zero to a first command and helps debug a failing one.
 
 ## Non-goals
@@ -129,7 +138,7 @@ the `none` network mode.
 ### Executions and streaming
 
 - An execution is a resource under a sandbox: `/v1/sandboxes/{id}/executions/{execution_id}`. Its ID is what makes replay and cancellation possible.
-- A sandbox runs one execution at a time; an overlapping start returns `409 busy`. This keeps container-wide OOM evidence attributable to a single execution.
+- A sandbox defaults to one execution slot and accepts up to eight at creation. Full admission returns `409 busy`. See [concurrency](concurrency.md) for locking, retention and OOM attribution.
 - An execution may carry its own `timeout_seconds`. It normally ends the command
   and keeps the sandbox: a runaway command should cost one result, not the
   working directory. The deadline is fixed at start and counts wall time, so a
@@ -271,8 +280,9 @@ Implementation: [start recovery](../sandbox-go/exec.go),
 | `canceled` | an explicit cancel request |
 | `oom` | the kernel OOM killer stopped the command |
 | `evicted` | the container disappeared or was stopped externally |
+| `unknown` | unexplained exit 137 when configured for multiple execution slots |
 
-The execution classifier checks the first recorded intent (`canceled` or `timeout`), then a positive delta in the cgroup `oom_kill` counter, container liveness, and the exit code. The periodic eviction sweep can also finalize an execution directly. Exit 137 alone never means OOM: an explicit `kill -9`, an eviction, and a runtime stop all produce 137.
+With multiple configured slots, OOM counters are not attributed to individual executions; unexplained exit 137 is unknown. The execution classifier checks the first recorded intent (`canceled` or `timeout`), then a positive delta in the cgroup `oom_kill` counter, container liveness, and the exit code. The periodic eviction sweep can also finalize an execution directly. Exit 137 alone never means OOM: an explicit `kill -9`, an eviction, and a runtime stop all produce 137.
 
 Docker container records can briefly be missing or still report running after
 an external stop. For exit 137 with no recorded intent or OOM delta, the

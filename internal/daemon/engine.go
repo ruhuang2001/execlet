@@ -92,6 +92,9 @@ func (ex *execution) finish(at time.Time, exitCode int, outcome ExecOutcome) boo
 		ex.exitCode = nil
 	}
 	reason := outcome.Reason
+	if ex.intent != nil {
+		reason = ex.intent.reason
+	}
 	ex.reason = &reason
 
 	// The terminal record is stored without output: the log's events are the
@@ -246,10 +249,9 @@ func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req Ex
 		}
 	}
 
-	if sb.running != nil {
-		runningID := sb.running.id
+	if len(sb.running) >= sb.opts.maxConcurrentExecutions {
 		sb.mu.Unlock()
-		return Execution{}, false, errorf(CodeBusy, "sandbox %s is already running execution %s", sandboxID, runningID)
+		return Execution{}, false, errorf(CodeBusy, "sandbox %s has reached its execution limit", sandboxID)
 	}
 
 	// The counter read happens while the request is still alive, so the
@@ -262,7 +264,10 @@ func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req Ex
 	// the read is retried once. A second failure is rare and is reported in
 	// the log, because OOM detection is the one thing a 137 cannot recover
 	// from afterwards.
-	baseline, oomErr := s.readOOMBaseline(ctx, sb.container)
+	baseline, oomErr := int64(-1), error(nil)
+	if sb.opts.maxConcurrentExecutions == 1 {
+		baseline, oomErr = s.readOOMBaseline(ctx, sb.container)
+	}
 	if oomErr != nil {
 		contextLogger(ctx).WarnContext(ctx, "oom baseline unavailable", "sandbox_id", sandboxID)
 	}
@@ -307,7 +312,7 @@ func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req Ex
 		ex.deadline = &deadline
 	}
 	sb.executions = append(sb.executions, ex)
-	sb.running = ex
+	sb.running[ex.id] = ex
 	if ex.key != "" {
 		sb.idempotency[ex.key] = ex
 	}
@@ -344,7 +349,7 @@ func (s *Sandboxes) readOOMBaseline(ctx context.Context, containerID string) (in
 }
 
 // run pumps output, waits for the process, classifies the exit, and finishes
-// the execution. It is the only writer of the terminal state.
+// the execution. Eviction may finish it first; finish admits one terminal writer.
 func (s *Sandboxes) run(ctx context.Context, sb *sandbox, ex *execution) {
 	var pumps sync.WaitGroup
 	pumps.Go(func() {
@@ -362,7 +367,12 @@ func (s *Sandboxes) run(ctx context.Context, sb *sandbox, ex *execution) {
 	baseline := ex.oomBaseline
 	ex.mu.Unlock()
 
-	outcome := classify(context.WithoutCancel(context.Background()), s.backend, sb.container, baseline, exitCode, intent, s.sleep)
+	var outcome ExecOutcome
+	if sb.opts.maxConcurrentExecutions == 1 {
+		outcome = classify(context.WithoutCancel(context.Background()), s.backend, sb.container, baseline, exitCode, intent, s.sleep)
+	} else {
+		outcome = classifyWithAttribution(context.WithoutCancel(context.Background()), s.backend, sb.container, baseline, exitCode, intent, s.sleep, false)
+	}
 	if len(outcome.sampled) > 0 {
 		// One line per ambiguous 137: the observed liveness sequence and how
 		// long it took to settle. This is the evidence a machine we cannot
@@ -386,14 +396,13 @@ func (s *Sandboxes) run(ctx context.Context, sb *sandbox, ex *execution) {
 	now := s.now()
 	sb.mu.Lock()
 	if ex.finish(now, exitCode, outcome) {
-		if sb.running == ex {
-			sb.running = nil
-		}
+		delete(sb.running, ex.id)
 		sb.lastActivity = now
 	}
 	if outcome.SandboxLost {
 		s.terminateLocked(context.WithoutCancel(context.Background()), sb, KillEvicted)
 	}
+	sb.pruneExecutionsLocked()
 	sb.mu.Unlock()
 }
 
@@ -460,8 +469,9 @@ func (s *Sandboxes) CancelExecution(ctx context.Context, sandboxID, executionID 
 	sb.mu.Lock()
 	if sb.state == StatePaused {
 		if err := s.backend.Unpause(ctx, sb.container); err != nil {
+			failure := s.backendFailure(ctx, sb, err)
 			sb.mu.Unlock()
-			return Execution{}, s.backendFailure(ctx, sb, err)
+			return Execution{}, failure
 		}
 		sb.state = StateRunning
 		sb.armLifetimeLocked(s.now())

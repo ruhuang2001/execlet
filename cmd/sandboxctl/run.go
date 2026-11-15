@@ -22,21 +22,22 @@ import (
 // -1 must be a usage error rather than "not given". Presence is therefore
 // tracked separately, from fs.Visit.
 type runFlags struct {
-	sandboxID     string
-	image         string
-	memoryMB      int
-	pidsLimit     int
-	nanoCPUs      int64
-	network       string
-	timeout       int
-	timeoutAction string
-	idleTimeout   int
-	idleAction    string
-	execTimeout   int
-	cwd           string
-	stdinFile     string
-	env           envFlags
-	remove        bool
+	sandboxID               string
+	image                   string
+	memoryMB                int
+	pidsLimit               int
+	nanoCPUs                int64
+	network                 string
+	timeout                 int
+	timeoutAction           string
+	idleTimeout             int
+	idleAction              string
+	execTimeout             int
+	cwd                     string
+	stdinFile               string
+	env                     envFlags
+	remove                  bool
+	maxConcurrentExecutions int
 
 	given map[string]bool
 }
@@ -69,6 +70,7 @@ func (in *invocation) runCommand(args []string) int {
 	fs.StringVar(&rf.sandboxID, "sandbox", "", "use an existing sandbox")
 	fs.StringVar(&rf.image, "image", "", "image for a new sandbox")
 	fs.IntVar(&rf.memoryMB, "memory", 0, "memory limit in MB")
+	fs.IntVar(&rf.maxConcurrentExecutions, "max-concurrent-executions", 1, "maximum simultaneous executions (1-8)")
 	fs.IntVar(&rf.pidsLimit, "pids-limit", 0, "task limit in the sandbox")
 	fs.Int64Var(&rf.nanoCPUs, "nano-cpus", 0, "CPU limit in units of 1e-9 CPUs (0 is unlimited)")
 	fs.StringVar(&rf.network, "network", "", "bridge or none")
@@ -103,6 +105,10 @@ func (in *invocation) runCommand(args []string) int {
 	}
 	if rf.set("exec-timeout") && rf.execTimeout < 0 {
 		_, _ = fmt.Fprintln(in.stderr, "sandboxctl: --exec-timeout must not be negative; use 0 to disable")
+		return 2
+	}
+	if rf.set("max-concurrent-executions") && (rf.maxConcurrentExecutions < 1 || rf.maxConcurrentExecutions > 8) {
+		_, _ = fmt.Fprintln(in.stderr, "sandboxctl: --max-concurrent-executions must be between 1 and 8")
 		return 2
 	}
 	if rf.set("pids-limit") && rf.pidsLimit <= 0 {
@@ -283,6 +289,9 @@ func (rf *runFlags) createRequest() sandbox.CreateSandboxRequest {
 	if rf.set("memory") {
 		req.MemoryMB = &rf.memoryMB
 	}
+	if rf.set("max-concurrent-executions") {
+		req.MaxConcurrentExecutions = &rf.maxConcurrentExecutions
+	}
 	if rf.set("pids-limit") {
 		req.PidsLimit = &rf.pidsLimit
 	}
@@ -318,6 +327,9 @@ func checkNoCreationFlags(rf *runFlags) error {
 	}
 	if rf.set("memory") {
 		used = append(used, "--memory")
+	}
+	if rf.set("max-concurrent-executions") {
+		used = append(used, "--max-concurrent-executions")
 	}
 	if rf.set("pids-limit") {
 		used = append(used, "--pids-limit")

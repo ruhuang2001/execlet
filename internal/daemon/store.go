@@ -204,7 +204,7 @@ type sandbox struct {
 	lastActivity time.Time
 
 	executions  []*execution // in start order; newest last
-	running     *execution
+	running     map[string]*execution
 	idempotency map[string]*execution
 
 	streams int
@@ -220,23 +220,11 @@ type sandbox struct {
 // command and still leaves the memory question open. The contract documents the
 // window. The running execution is never dropped.
 func (sb *sandbox) pruneExecutionsLocked() {
-	if len(sb.executions) <= MaxExecutionsPerSandbox {
-		return
-	}
-	drop := 0
-	for drop < len(sb.executions) && len(sb.executions)-drop > MaxExecutionsPerSandbox {
-		ex := sb.executions[drop]
-		if ex == sb.running || !ex.completed() {
-			// Stop at the first execution that must stay: dropping a later
-			// one would leave a hole in the history and in event replay.
+	for len(sb.executions) > MaxExecutionsPerSandbox {
+		if _, ok := sb.dropOldestLocked(); !ok {
 			return
 		}
-		if ex.key != "" && sb.idempotency[ex.key] == ex {
-			delete(sb.idempotency, ex.key)
-		}
-		drop++
 	}
-	sb.executions = append([]*execution(nil), sb.executions[drop:]...)
 }
 
 // ---------------------------------------------------------------- creation
@@ -260,6 +248,7 @@ func (s *Sandboxes) Create(ctx context.Context, req CreateRequest) (Sandbox, err
 		state:        StatePending,
 		lastActivity: now,
 		idempotency:  make(map[string]*execution),
+		running:      make(map[string]*execution),
 	}
 
 	s.mu.Lock()
@@ -515,22 +504,24 @@ func (s *Sandboxes) killLocked(sb *sandbox, reason KillReason) {
 		s.release()
 	}
 
-	ex := sb.running
-	if ex == nil {
-		return
+	for id, ex := range sb.running {
+		switch reason {
+		case KillRequested:
+			ex.setIntent(ReasonCanceled)
+		case KillTimeout, KillIdleTimeout:
+			ex.setIntent(ReasonTimeout)
+		case KillEvicted:
+			outcome := ExecOutcome{Reason: ReasonEvicted, ExitCode: -1, SandboxLost: true}
+			ex.mu.Lock()
+			if ex.intent != nil {
+				outcome.Reason = ex.intent.reason
+			}
+			ex.mu.Unlock()
+			ex.finish(s.now(), -1, outcome)
+			delete(sb.running, id)
+		}
 	}
-	switch reason {
-	case KillRequested:
-		ex.setIntent(ReasonCanceled)
-	case KillTimeout, KillIdleTimeout:
-		ex.setIntent(ReasonTimeout)
-	case KillEvicted:
-		// The container is already gone; nothing to wait for. Complete the
-		// execution right away so streams see the terminal event within the
-		// five-second detection budget.
-		sb.running = nil
-		ex.finish(s.now(), -1, ExecOutcome{Reason: ReasonEvicted, ExitCode: -1, SandboxLost: true})
-	}
+	sb.pruneExecutionsLocked()
 }
 
 // terminateLocked kills the sandbox and removes its container. Removal is
@@ -653,7 +644,7 @@ func (sb *sandbox) deadlined(now time.Time) bool {
 // idleFor returns how long the sandbox has been idle at now, or a negative
 // duration when it is not idle by definition.
 func (sb *sandbox) idleFor(now time.Time) time.Duration {
-	if sb.state != StateRunning || sb.running != nil || sb.streams > 0 ||
+	if sb.state != StateRunning || len(sb.running) != 0 || sb.streams > 0 ||
 		sb.opts.idleTimeoutSeconds <= 0 {
 		return -1
 	}
@@ -667,19 +658,20 @@ func (sb *sandbox) invalidState() error {
 // snapshot returns the contract view. Callers hold sb.mu.
 func (sb *sandbox) snapshot() Sandbox {
 	return Sandbox{
-		ID:                 sb.id,
-		State:              sb.state,
-		Image:              sb.opts.image,
-		MemoryMB:           sb.opts.memoryMB,
-		PidsLimit:          sb.opts.pidsLimit,
-		NanoCPUs:           sb.opts.nanoCPUs,
-		Network:            sb.opts.network,
-		TimeoutSeconds:     sb.opts.timeoutSeconds,
-		TimeoutAction:      sb.opts.timeoutAction,
-		IdleTimeoutSeconds: sb.opts.idleTimeoutSeconds,
-		IdleTimeoutAction:  sb.opts.idleTimeoutAction,
-		CreatedAt:          sb.createdAt,
-		ExpiresAt:          cloneTime(sb.expiresAt),
-		KillReason:         cloneReason(sb.killReason),
+		MaxConcurrentExecutions: sb.opts.maxConcurrentExecutions,
+		ID:                      sb.id,
+		State:                   sb.state,
+		Image:                   sb.opts.image,
+		MemoryMB:                sb.opts.memoryMB,
+		PidsLimit:               sb.opts.pidsLimit,
+		NanoCPUs:                sb.opts.nanoCPUs,
+		Network:                 sb.opts.network,
+		TimeoutSeconds:          sb.opts.timeoutSeconds,
+		TimeoutAction:           sb.opts.timeoutAction,
+		IdleTimeoutSeconds:      sb.opts.idleTimeoutSeconds,
+		IdleTimeoutAction:       sb.opts.idleTimeoutAction,
+		CreatedAt:               sb.createdAt,
+		ExpiresAt:               cloneTime(sb.expiresAt),
+		KillReason:              cloneReason(sb.killReason),
 	}
 }

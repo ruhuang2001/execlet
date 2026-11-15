@@ -3,7 +3,7 @@
 // the HTTP handler tests and the contract tests share it so all three exercise
 // the same semantics without Docker.
 //
-// It models one container per sandbox, a single running process per container,
+// It models one container per sandbox, concurrent running processes per container,
 // a monotonically increasing oom_kill counter, and a file map. Tests drive it
 // through methods such as Kill (simulate an external stop), SetOOMKills
 // (simulate the kernel OOM killer), and Program (decide what a command does).
@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"sync"
 
@@ -64,7 +65,7 @@ type container struct {
 	oom            int64
 	files          map[string][]byte
 	archiveHeaders map[string]tar.Header
-	proc           *process
+	procs          []*process
 }
 
 type process struct {
@@ -136,11 +137,13 @@ func (b *Backend) Remove(_ context.Context, id string) error {
 	if c != nil {
 		c.state = daemon.LivenessMissing
 	}
+	if c != nil {
+		c.stopProcess()
+	}
 	b.mu.Unlock()
 	if c == nil {
 		return fmt.Errorf("membackend: container %s: %w", id, daemon.ErrNotFound)
 	}
-	c.stopProcess()
 	return nil
 }
 
@@ -202,9 +205,7 @@ func (b *Backend) Exec(ctx context.Context, id string, spec daemon.ExecSpec) (da
 	if c.state != daemon.LivenessRunning {
 		return nil, fmt.Errorf("membackend: container %s is %s", id, c.state)
 	}
-	if c.proc != nil && !c.proc.finished() {
-		return nil, errors.New("membackend: container already has a running process")
-	}
+
 	if len(command) == 0 {
 		return nil, errors.New("membackend: empty command")
 	}
@@ -220,7 +221,8 @@ func (b *Backend) Exec(ctx context.Context, id string, spec daemon.ExecSpec) (da
 		errW:      errW,
 		done:      make(chan struct{}),
 	}
-	c.proc = p
+	c.procs = slices.DeleteFunc(c.procs, func(existing *process) bool { return existing.finished() })
+	c.procs = append(c.procs, p)
 
 	if streamer, ok := b.Streamers[command[0]]; ok {
 		go p.runStreamer(context.WithoutCancel(ctx), streamer)
@@ -306,10 +308,10 @@ func (b *Backend) Kill(id string) {
 	if c != nil {
 		c.state = daemon.LivenessStopped
 	}
-	b.mu.Unlock()
 	if c != nil {
 		c.stopProcess()
 	}
+	b.mu.Unlock()
 }
 
 // Disappear removes the container record without stopping anything, modelling
@@ -321,10 +323,10 @@ func (b *Backend) Disappear(id string) {
 	if c != nil {
 		c.state = daemon.LivenessMissing
 	}
-	b.mu.Unlock()
 	if c != nil {
 		c.stopProcess()
 	}
+	b.mu.Unlock()
 }
 
 // IgnoreTerm makes the container's process ignore SIGTERM, so a cancel falls
@@ -342,11 +344,13 @@ func (b *Backend) IgnoreSignals(id string) {
 func (b *Backend) setIgnore(id string, term, kill bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if c := b.containers[id]; c != nil && c.proc != nil {
-		c.proc.mu.Lock()
-		c.proc.ignoreTerm = term
-		c.proc.ignoreKill = kill
-		c.proc.mu.Unlock()
+	if c := b.containers[id]; c != nil {
+		for _, p := range c.procs {
+			p.mu.Lock()
+			p.ignoreTerm = term
+			p.ignoreKill = kill
+			p.mu.Unlock()
+		}
 	}
 }
 
@@ -372,15 +376,30 @@ func (b *Backend) SetOOMKills(id string, n int64) {
 	}
 }
 
-// Process returns a container's process, for assertions.
+// Process returns the latest process for compatibility with single-process assertions.
 func (b *Backend) Process(id string) *Process {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	c := b.containers[id]
-	if c == nil || c.proc == nil {
+	if c == nil || len(c.procs) == 0 {
 		return nil
 	}
-	return &Process{proc: c.proc}
+	return &Process{proc: c.procs[len(c.procs)-1]}
+}
+
+// Processes returns every currently retained process in start order for assertions.
+func (b *Backend) Processes(id string) []*Process {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	c := b.containers[id]
+	if c == nil {
+		return nil
+	}
+	out := make([]*Process, 0, len(c.procs))
+	for _, p := range c.procs {
+		out = append(out, &Process{proc: p})
+	}
+	return out
 }
 
 // Process is a read-only view of a container's process.
@@ -499,6 +518,9 @@ func (p *process) runStreamer(ctx context.Context, streamer Streamer) {
 	ctx, cancel := context.WithCancel(ctx)
 	p.mu.Lock()
 	p.cancel = cancel
+	if p.dead {
+		cancel()
+	}
 	p.mu.Unlock()
 	defer cancel()
 
@@ -527,6 +549,9 @@ func (p *process) run(ctx context.Context, program Program, args []string) {
 	ctx, cancel := context.WithCancel(ctx)
 	p.mu.Lock()
 	p.cancel = cancel
+	if p.dead {
+		cancel()
+	}
 	p.mu.Unlock()
 	defer cancel()
 
@@ -555,10 +580,15 @@ func (p *process) finish(code int, waitErr error) {
 
 // stopProcess ends a container's process, as removing or killing it would.
 func (c *container) stopProcess() {
-	if c.proc == nil {
-		return
+	for _, p := range c.procs {
+		p.mu.Lock()
+		cancel := p.cancel
+		p.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		p.finish(137, nil)
 	}
-	c.proc.finish(137, nil)
 }
 
 // ---------------------------------------------------------------- helpers

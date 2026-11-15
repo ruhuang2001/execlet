@@ -190,6 +190,20 @@ class Suite:
             error_from(lambda: self.client.start_execution(sb.id, ExecuteRequest(command=["true"], stdin="x" * ((1 << 20) + 1))), "payload_too_large")
             return {"input_bytes": len(text.encode()), "replayed": done.id}
 
+    def concurrency(self, name):
+        with self.sandbox(max_concurrent_executions=2) as sb:
+            require(sb.max_concurrent_executions == 2, "concurrency not decoded")
+            a = self.client.start_execution(sb.id, ExecuteRequest(command=["sleep", "30"]))
+            b = self.client.start_execution(sb.id, ExecuteRequest(command=["sleep", "30"]))
+            require(self.client.get_execution(sb.id, a.id).state == self.client.get_execution(sb.id, b.id).state == "running", "no overlap")
+            error_from(lambda: self.client.start_execution(sb.id, ExecuteRequest(command=["true"])), "busy")
+            self.client.cancel_execution(sb.id, a.id)
+            require(self.client.get_execution(sb.id, b.id).state == "running", "cancel killed sibling")
+            outcome = error_from(lambda: self.client.exec(sb.id, ["sh", "-c", "exit 137"]), "unknown")
+            require(outcome.execution.exit_code == 137, "unknown lost evidence")
+            self.client.cancel_execution(sb.id, b.id)
+            return {"first": a.id, "sibling": b.id, "unknown": snapshot(outcome.execution)}
+
     def env_cwd(self, name):
         with self.sandbox() as sb:
             def finish(request):
@@ -679,7 +693,7 @@ class Suite:
     def run(self):
         try:
             self.start()
-            scenarios = [("installed-distribution", self.distribution), ("entry-replay-confirmed-cancel", self.entry), ("lifecycle-files-resources", self.lifecycle), ("env-cwd", self.env_cwd), ("stdin-once", self.stdin_once),
+            scenarios = [("installed-distribution", self.distribution), ("entry-replay-confirmed-cancel", self.entry), ("lifecycle-files-resources", self.lifecycle), ("env-cwd", self.env_cwd), ("stdin-once", self.stdin_once), ("concurrency", self.concurrency),
                          ("retry-status-matrix", self.retry_statuses), ("retry-after", self.retry_after),
                          ("retry-configuration-and-cancel", self.retry_configuration), ("redirect-credential-boundary", self.credential_redirect),
                          ("tls-predispatch-cancellation", self.tls_predispatch_cancel),

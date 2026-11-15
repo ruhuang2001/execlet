@@ -35,17 +35,18 @@ func (sb *sandbox) dueTimeout(now time.Time) (reason KillReason, ok bool) {
 // after the deadline therefore times the execution out on the first beat after
 // the resume, which is the same rule the lifetime timeout uses for a kill.
 func (sb *sandbox) dueExecutionTimeout(now time.Time) (*execution, bool) {
-	ex := sb.running
-	if ex == nil {
-		return nil, false
+	for _, ex := range sb.running {
+		ex.mu.Lock()
+		due := ex.state == ExecRunning && ex.deadline != nil && !ex.timedOut && !now.Before(*ex.deadline)
+		if due {
+			ex.timedOut = true
+		}
+		ex.mu.Unlock()
+		if due {
+			return ex, true
+		}
 	}
-	ex.mu.Lock()
-	defer ex.mu.Unlock()
-	if ex.state != ExecRunning || ex.deadline == nil || ex.timedOut || now.Before(*ex.deadline) {
-		return nil, false
-	}
-	ex.timedOut = true
-	return ex, true
+	return nil, false
 }
 
 // Reap applies every due timeout once. It is the only thing that turns a
@@ -84,7 +85,11 @@ func (s *Sandboxes) reapOne(ctx context.Context, sb *sandbox, now time.Time) {
 		// visiting every sandbox, and the SIGTERM grace alone is longer than
 		// a beat.
 		if sb.state == StateRunning {
-			if ex, ok := sb.dueExecutionTimeout(now); ok {
+			for {
+				ex, ok := sb.dueExecutionTimeout(now)
+				if !ok {
+					break
+				}
 				// Record the intent before acting, as cancel does: it
 				// explains whatever exit code the signal produces.
 				ex.setIntent(ReasonTimeout)

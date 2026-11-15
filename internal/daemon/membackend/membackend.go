@@ -186,6 +186,7 @@ func (b *Backend) Exec(ctx context.Context, id string, spec daemon.ExecSpec) (da
 		Command: append([]string(nil), spec.Command...),
 		Env:     append([]string(nil), spec.Env...),
 		Dir:     spec.Dir,
+		Stdin:   spec.Stdin,
 	}
 	if b.ExecErr != nil {
 		err := b.ExecErr
@@ -394,6 +395,7 @@ func (b *Backend) LastExecSpec() daemon.ExecSpec {
 		Command: append([]string(nil), b.lastExec.Command...),
 		Env:     append([]string(nil), b.lastExec.Env...),
 		Dir:     b.lastExec.Dir,
+		Stdin:   b.lastExec.Stdin,
 	}
 }
 

@@ -18,6 +18,34 @@ env:
   GOTOOLCHAIN: local
 
 jobs:
+  stdin-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - env:
+          HISTORICAL_REF: ${{ inputs.ref }}
+        run: |
+          if test -f scripts/e2e-stdin.sh; then
+            bash scripts/e2e-stdin.sh artifacts/stdin-e2e
+          elif [ -n "$HISTORICAL_REF" ]; then
+            echo 'No stdin E2E suite in this historical revision.'
+          else
+            echo 'Missing required stdin E2E suite.' >&2
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stdin-e2e-artifacts
+          path: artifacts/stdin-e2e/
+          retention-days: 7
+
   files-e2e:
     runs-on: ubuntu-latest
     steps:

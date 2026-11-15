@@ -172,6 +172,24 @@ class Suite:
         finally:
             self.direct.kill_sandbox(sb.id)
 
+    def stdin_once(self, name):
+        with self.sandbox() as sb:
+            text = "input 世界\n\x00$HOME; literal"
+            request = ExecuteRequest(command=["cat"], stdin=text, idempotency_key="stdin-python")
+            started = self.client.start_execution(sb.id, request)
+            done = self.client.stream_execution(sb.id, started.id)
+            require(done.stdout == text, "stdin bytes changed")
+            require(self.client.start_execution(sb.id, request).id == done.id, "stdin replay duplicated execution")
+            error_from(lambda: self.client.start_execution(sb.id, ExecuteRequest(command=["cat"], stdin="changed", idempotency_key="stdin-python")), "idempotency_conflict")
+            for label, request in [("omitted", ExecuteRequest(command=["cat"], timeout_seconds=2)),
+                                   ("empty", ExecuteRequest(command=["cat"], stdin="", timeout_seconds=2))]:
+                empty_started = self.client.start_execution(sb.id, request)
+                empty = self.client.stream_execution(sb.id, empty_started.id, cancel=CancellationToken(timeout=8))
+                require(empty.stdout == "" and empty.termination_reason == "exited" and empty.exit_code == 0,
+                        label + " stdin did not complete with EOF and exited/0")
+            error_from(lambda: self.client.start_execution(sb.id, ExecuteRequest(command=["true"], stdin="x" * ((1 << 20) + 1))), "payload_too_large")
+            return {"input_bytes": len(text.encode()), "replayed": done.id}
+
     def env_cwd(self, name):
         with self.sandbox() as sb:
             def finish(request):
@@ -661,7 +679,7 @@ class Suite:
     def run(self):
         try:
             self.start()
-            scenarios = [("installed-distribution", self.distribution), ("entry-replay-confirmed-cancel", self.entry), ("lifecycle-files-resources", self.lifecycle), ("env-cwd", self.env_cwd),
+            scenarios = [("installed-distribution", self.distribution), ("entry-replay-confirmed-cancel", self.entry), ("lifecycle-files-resources", self.lifecycle), ("env-cwd", self.env_cwd), ("stdin-once", self.stdin_once),
                          ("retry-status-matrix", self.retry_statuses), ("retry-after", self.retry_after),
                          ("retry-configuration-and-cancel", self.retry_configuration), ("redirect-credential-boundary", self.credential_redirect),
                          ("tls-predispatch-cancellation", self.tls_predispatch_cancel),

@@ -127,6 +127,31 @@ async function run(name, operation) {
 }
 
 try {
+  await run('one-shot stdin and keyed replay', async () => {
+    const sb = await create();
+    const text = 'input 世界\n\0$HOME; literal';
+    const request = { command: ['cat'], stdin: text, idempotency_key: 'stdin-ts' };
+    const started = await client.startExecution(sb.id, request);
+    const events = await collect(sb.id, started.id);
+    const done = events.at(-1).execution;
+    assert.equal(done.stdout, text);
+    assert.equal((await client.startExecution(sb.id, request)).id, done.id);
+    await rejected(client.startExecution(sb.id, { ...request, stdin: 'changed' }), 'idempotency_conflict');
+    for (const [label, request] of [['omitted', { command: ['cat'], timeout_seconds: 2 }],
+                                     ['empty', { command: ['cat'], stdin: '', timeout_seconds: 2 }]]) {
+      const emptyStarted = await client.startExecution(sb.id, request, { signal: AbortSignal.timeout(8000) });
+      const events = [];
+      for await (const event of client.streamExecution(sb.id, emptyStarted.id, { signal: AbortSignal.timeout(8000) })) {
+        events.push(event); evidence(event);
+      }
+      const empty = events.at(-1).execution;
+      assert.equal(empty.stdout, '', label + ' stdin output');
+      assert.equal(empty.termination_reason, 'exited', label + ' stdin reason');
+      assert.equal(empty.exit_code, 0, label + ' stdin exit');
+    }
+    await rejected(client.startExecution(sb.id, { command: ['true'], stdin: 'x'.repeat((1 << 20) + 1) }), 'payload_too_large');
+    return { inputBytes: Buffer.byteLength(text), replayed: done.id };
+  });
   await run('authenticated lifecycle and exact binary files', async () => {
     const unauthorized = await rejected(new Client({ domain: proxy.domain, apiKey: 'wrong' }).listSandboxes(), 'unauthorized');
     assert.equal(unauthorized.statusCode, 401);

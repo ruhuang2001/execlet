@@ -24,7 +24,7 @@ Status: normative. Contract for `sandboxctl`. It is a thin layer over the [Go SD
 | `version` | print the build version (injected with `-ldflags`) |
 | `help` | usage |
 
-`run` flags: `--sandbox ID`, `--image`, `--memory MB`, `--pids-limit N`, `--nano-cpus N`, `--network bridge|none`, `--timeout S`, `--timeout-action kill|pause`, `--idle-timeout S`, `--idle-action kill|pause`, `--exec-timeout S`, `--env NAME=VALUE`, `--cwd DIR`, `--rm` (request cleanup of a sandbox created by this invocation). Creation flags together with `--sandbox` are an error. `--rm` does not remove a sandbox supplied through `--sandbox`. Cleanup errors are currently ignored; verify remote state when cleanup must be confirmed.
+`run` flags: `--sandbox ID`, `--image`, `--memory MB`, `--pids-limit N`, `--nano-cpus N`, `--network bridge|none`, `--timeout S`, `--timeout-action kill|pause`, `--idle-timeout S`, `--idle-action kill|pause`, `--exec-timeout S`, `--env NAME=VALUE`, `--cwd DIR`, `--stdin-file FILE`, `--rm` (request cleanup of a sandbox created by this invocation). Creation flags together with `--sandbox` are an error. `--rm` does not remove a sandbox supplied through `--sandbox`. Cleanup errors are currently ignored; verify remote state when cleanup must be confirmed.
 
 `--env` and `--cwd` apply to the execution, not to the sandbox, so they are
 valid together with `--sandbox`. Repeat `--env` to set more than one variable;
@@ -123,3 +123,9 @@ JSON page to stdout, including entry metadata and next_cursor when more
 entries exist. Flags follow the two positional arguments. Limit is 1–1000.
 Use the cursor with the same path; ordering is bytewise and not a snapshot.
 Failures use normal CLI error reporting and exit status.
+
+## One-shot input
+
+Use --stdin-file PATH to send a local UTF-8 file, or --stdin-file - to read
+standard input once. Both enforce a 1 MiB limit before creating a sandbox.
+For example: printf hello | sandboxctl run --rm --stdin-file - -- cat

@@ -230,7 +230,20 @@ func (b *Backend) Exec(ctx context.Context, containerID string, spec daemon.Exec
 		return nil, errors.New("dockerbackend: empty command")
 	}
 	pidPath := b.nextPidPath()
+	stdinDir, err := b.stageStdin(ctx, containerID, spec.Stdin)
+	if err != nil {
+		return nil, err
+	}
+	started := false
+	defer func() {
+		if !started {
+			b.cleanupStdin(containerID, stdinDir)
+		}
+	}()
 	wrapped := wrapCommand(pidPath, spec.Dir, spec.Env, spec.Command)
+	if stdinDir != "" {
+		wrapped = withStdin(wrapped, stdinDir)
+	}
 
 	execID, err := b.api.ExecCreate(ctx, containerID, dockerapi.ExecConfig{
 		Cmd: wrapped,
@@ -251,6 +264,7 @@ func (b *Backend) Exec(ctx context.Context, containerID string, spec daemon.Exec
 		containerID: containerID,
 		execID:      execID,
 		pidPath:     pidPath,
+		stdinDir:    stdinDir,
 		stdout:      outW,
 		stderr:      errW,
 		done:        make(chan struct{}),
@@ -265,6 +279,7 @@ func (b *Backend) Exec(ctx context.Context, containerID string, spec daemon.Exec
 		p.demuxErr = err
 		p.mu.Unlock()
 	}()
+	started = true
 	return p, nil
 }
 

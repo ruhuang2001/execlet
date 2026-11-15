@@ -83,13 +83,13 @@ execute_request = ExecuteRequest(
 )
 ```
 
-`ExecuteRequest(command=..., idempotency_key="", timeout_seconds=None, env=None, cwd=None)` describes
+`ExecuteRequest(command=..., idempotency_key="", timeout_seconds=None, env=None, cwd=None, stdin=None)` describes
 a start. An empty key causes the SDK to generate 128 random bits encoded as
 hex, reused for every retry or recovery of that start. Keys are scoped to a
 sandbox and only remembered while the execution is retained. Replaying a
-retained key with the same command, `env`, and `cwd` returns that execution;
+retained key with the same command, `env`, `cwd`, and `stdin` returns that execution;
 changing the timeout does not update its deadline. A different command, `env`,
-or `cwd` produces `idempotency_conflict`.
+`cwd`, or `stdin` produces `idempotency_conflict`.
 
 `env` is a `dict[str, str]` added to the image's environment for this execution
 only, and `cwd` is an absolute working directory; `None` omits either. The
@@ -341,3 +341,29 @@ Pass each nonempty next_cursor to retrieve the next page. Limits are 1–1000;
 names sort bytewise without snapshot consistency. cancel follows the normal
 request cancellation contract. Invalid requests and bounded scan failures
 raise Error with the server code.
+
+## One-shot stdin
+
+The ExecuteRequest stdin field sends UTF-8 text once, followed by EOF. At most
+1 MiB of decoded bytes (including NULs) is accepted; omitted and empty mean
+EOF. Oversized input is 413 payload_too_large. Execution-start JSON bodies are separately
+bounded at 8 MiB to accommodate escaping. This is not interactive input.
+Set stdin on ExecuteRequest and pass it to start_execution, then stream the
+returned execution. Older servers ignore this field; require a server that
+implements the input contract.
+
+A keyed replay must match command, env, cwd and stdin. Input is staged in a
+private temporary directory, opened and unlinked before the command runs,
+with a bounded best-effort cleanup after startup failure or completion. If the
+runtime is unreachable, paused, or cannot start a cleanup process, container
+removal is the final cleanup boundary. Execution history retains only an input
+fingerprint. List responses never contain input or output. Get and complete-SSE
+snapshots only contain input when the command prints it. Runtime administrators can inspect live input; this is not a secret vault.
+
+Non-empty stdin requires writable /tmp and /bin/mkdir, /bin/rm and /bin/rmdir
+in the image. Missing staging tools cause backend_error before user execution.
+
+Command metadata remains limited to 1 MiB total UTF-8 bytes, counting one
+separator byte per argv element. Larger commands return 413 payload_too_large;
+this keeps complete SSE events within the SDK framing limits even when stdin
+uses the larger execution-request JSON budget.

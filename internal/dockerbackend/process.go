@@ -17,6 +17,7 @@ type process struct {
 	containerID string
 	execID      string
 	pidPath     string
+	stdinDir    string
 
 	stdout *bufferedStream
 	stderr *bufferedStream
@@ -44,6 +45,7 @@ func (p *process) Stderr() io.Reader { return p.stderr }
 // recording the exit code.
 func (p *process) Wait() (int, error) {
 	<-p.done
+	defer p.b.cleanupStdin(p.containerID, p.stdinDir)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

@@ -460,7 +460,11 @@ func renderEvent(ev Event) ([]byte, error) {
 // decodeJSON reads a bounded JSON body into v. A malformed or oversized body
 // has already been answered when it returns false.
 func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
-	body := http.MaxBytesReader(w, r.Body, MaxRequestBodyBytes)
+	limit := int64(MaxRequestBodyBytes)
+	if _, execution := v.(*ExecuteRequest); execution {
+		limit = MaxExecutionRequestBodyBytes
+	}
+	body := http.MaxBytesReader(w, r.Body, limit)
 	dec := json.NewDecoder(body)
 	if err := dec.Decode(v); err != nil {
 		if errors.Is(err, io.EOF) {
@@ -471,7 +475,7 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
 			writeError(w, http.StatusRequestEntityTooLarge, string(CodePayloadTooLarge),
-				fmt.Sprintf("request body exceeds %d bytes", MaxRequestBodyBytes))
+				fmt.Sprintf("request body exceeds %d bytes", limit))
 			return false
 		}
 		writeError(w, http.StatusBadRequest, string(CodeInvalidRequest), "malformed JSON body")

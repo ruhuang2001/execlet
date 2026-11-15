@@ -28,10 +28,11 @@ type execution struct {
 	sandboxID string
 	command   []string
 	// Env identity retains no raw names or values. Cwd remains diagnostic data.
-	envDigest [32]byte
-	envCount  int
-	cwd       string
-	key       string
+	envDigest   [32]byte
+	envCount    int
+	cwd         string
+	key         string
+	stdinDigest [32]byte
 
 	startedAt time.Time
 	finished  *time.Time
@@ -184,11 +185,21 @@ func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req Ex
 	if len(req.Command) == 0 {
 		return Execution{}, false, errorf(CodeInvalidRequest, "command must not be empty")
 	}
+	commandBytes := 0
+	for _, arg := range req.Command {
+		if len(arg) >= MaxCommandBytes-commandBytes {
+			return Execution{}, false, errorf(CodePayloadTooLarge, "command exceeds %d bytes including argv separators", MaxCommandBytes)
+		}
+		commandBytes += len(arg) + 1
+	}
 	if req.IdempotencyKey != "" && len(req.IdempotencyKey) > MaxIdempotencyKey {
 		return Execution{}, false, errorf(CodeInvalidRequest, "idempotency_key exceeds %d characters", MaxIdempotencyKey)
 	}
 	if req.TimeoutSeconds != nil && *req.TimeoutSeconds < 0 {
 		return Execution{}, false, errorf(CodeInvalidRequest, "timeout_seconds must not be negative")
+	}
+	if len(req.Stdin) > MaxStdinBytes {
+		return Execution{}, false, errorf(CodePayloadTooLarge, "stdin exceeds %d bytes", MaxStdinBytes)
 	}
 	if err := validateExecEnv(req.Env); err != nil {
 		return Execution{}, false, err
@@ -227,7 +238,7 @@ func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req Ex
 			if !same {
 				sb.mu.Unlock()
 				return Execution{}, false, errorf(CodeIdempotencyConflict,
-					"idempotency key was used for a different command, cwd, or environment")
+					"idempotency key was used for a different command, cwd, environment, or stdin")
 			}
 			out := prior.snapshot()
 			sb.mu.Unlock()
@@ -266,6 +277,7 @@ func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req Ex
 		Command: req.Command,
 		Env:     req.envPairs(),
 		Dir:     req.Cwd,
+		Stdin:   req.Stdin,
 	})
 	cancel()
 	if err != nil {
@@ -281,6 +293,7 @@ func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req Ex
 		envCount:    len(req.Env),
 		cwd:         req.Cwd,
 		key:         req.IdempotencyKey,
+		stdinDigest: invocationFingerprint([]string{req.Stdin}),
 		startedAt:   s.now(),
 		state:       ExecRunning,
 		log:         newEventLog(),
@@ -796,13 +809,14 @@ func validateCwd(cwd string) error {
 
 // sameInvocation reports whether an existing execution was started with this
 // request. It is the idempotency comparison: a key identifies one invocation,
-// and a replay with a different environment would otherwise return an
+// and a replay with different environment or stdin would otherwise return an
 // execution that ran with the old one.
 func sameInvocation(ex *execution, req ExecuteRequest) bool {
 	return equalStrings(ex.command, req.Command) &&
 		ex.envCount == len(req.Env) &&
 		ex.envDigest == envFingerprint(req) &&
-		ex.cwd == req.Cwd
+		ex.cwd == req.Cwd &&
+		ex.stdinDigest == invocationFingerprint([]string{req.Stdin})
 }
 
 // ---------------------------------------------------------------- small helpers

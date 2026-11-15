@@ -8,6 +8,9 @@ import time
 import urllib.error
 import urllib.request
 
+if not __debug__:
+    raise RuntimeError("concurrency E2E requires enabled assertions")
+
 base, artifact = sys.argv[1:]
 report = {"checks": [], "owned": [], "cleanup": []}
 owned = []
@@ -138,7 +141,10 @@ def pause_and_eviction():
     sb = create()
     command = ["sh", "-c", "while :; do echo progress; sleep .1; done"]
     a, b = start(sb, command), start(sb, command)
-    time.sleep(.3)
+    ready_deadline = time.monotonic() + 5
+    while "progress" not in get(sb, a)["stdout"] or "progress" not in get(sb, b)["stdout"]:
+        assert time.monotonic() < ready_deadline, "commands did not start before pause"
+        time.sleep(.02)
     call("POST", "/v1/sandboxes/" + sb + "/pause")
     time.sleep(.2)
     before = [get(sb, ex)["stdout"] for ex in (a, b)]

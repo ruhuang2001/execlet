@@ -109,7 +109,7 @@ check "env-contract" "bounds, replay identity, secrecy and isolation; see $OUT/e
 (cd "$ROOT" && go test -race -tags live ./sandbox-go -run '^TestLiveEnvRecoverySnapshotsInvocation$' -count=1 -v) >"$OUT/go-env-recovery.log" 2>&1
 check "go-env-recovery" "caller mutation preserves accepted invocation; see $OUT/go-env-recovery.log" "$?" "0"
 contains "go-env-recovery ran" "test ran without skipping" "$OUT/go-env-recovery.log" "--- PASS: TestLiveEnvRecoverySnapshotsInvocation"
-python3 "$ROOT/scripts/e2e-concurrency/run.py" "$SANDBOX_DOMAIN" "$OUT/concurrency.json" >"$OUT/concurrency.log" 2>&1
+python3 -E "$ROOT/scripts/e2e-concurrency/run.py" "$SANDBOX_DOMAIN" "$OUT/concurrency.json" >"$OUT/concurrency.log" 2>&1
 check "concurrency" "admission, lifecycle, retention and outcomes; see $OUT/concurrency.log" "$?" "0"
 
 (cd "$ROOT" && go test -race -tags live ./sandbox-go -run '^TestLiveConcurrency$' -count=1 -v) >"$OUT/go-concurrency.log" 2>&1

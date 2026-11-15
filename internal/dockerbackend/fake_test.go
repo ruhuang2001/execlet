@@ -526,23 +526,32 @@ func writeError(w http.ResponseWriter, status int, message string) {
 
 // unwrap recovers the PID path, the directory, the environment entries the
 // wrapper re-applies, and the real argv from a wrapped exec. The wrapper argv
-// is: shell, -c, script, pidPath, dir, envCount, env..., [separator,] command...
-// The separator only appears when there is an environment to end.
+// is: shell, -c, script, pidPath, dir, envCount, separatorFlag, env...,
+// [separator,] command...
+//
+// The flag, not the command's shape, decides whether the separator is there: a
+// legitimate command could start with the same four arguments, and sniffing for
+// them would strip a command nobody ran.
 func unwrap(cmd []string) (pidPath, dir string, env, actual []string, ok bool) {
-	if len(cmd) < 6 || cmd[0] != "/bin/sh" || cmd[1] != "-c" || cmd[2] != execWrapper {
+	if len(cmd) < 7 || cmd[0] != "/bin/sh" || cmd[1] != "-c" || cmd[2] != execWrapper {
 		return "", "", nil, nil, false
 	}
 	n, err := strconv.Atoi(cmd[5])
-	if err != nil || n < 0 || len(cmd) < 6+n {
+	if err != nil || n < 0 || len(cmd) < 7+n {
 		return "", "", nil, nil, false
 	}
-	rest := cmd[6+n:]
-	// The separator only appears when the command would otherwise be read as
-	// another assignment.
-	if len(rest) >= len(commandSeparator) && slices.Equal(rest[:len(commandSeparator)], commandSeparator) {
+	rest := cmd[7+n:]
+	switch cmd[6] {
+	case "1":
+		if len(rest) < len(commandSeparator) || !slices.Equal(rest[:len(commandSeparator)], commandSeparator) {
+			return "", "", nil, nil, false
+		}
 		rest = rest[len(commandSeparator):]
+	case "0":
+	default:
+		return "", "", nil, nil, false
 	}
-	return cmd[3], cmd[4], cmd[6 : 6+n], rest, true
+	return cmd[3], cmd[4], cmd[7 : 7+n], rest, true
 }
 
 // file returns a container's stored file.

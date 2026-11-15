@@ -138,8 +138,11 @@ func checkDocker() error {
 	// it as-is.
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
+	// A probe that succeeded is never a timeout, even if the deadline expired
+	// in the instant between the process exiting and the context check: the
+	// question is why it exited, and a nil error answers that.
 	switch err := cmd.Run(); {
-	case ctx.Err() != nil:
+	case err != nil && ctx.Err() != nil:
 		return fmt.Errorf("docker info timed out after %s", dockerInfoTimeout)
 	case errors.Is(err, exec.ErrNotFound):
 		return fmt.Errorf("docker CLI is not installed")

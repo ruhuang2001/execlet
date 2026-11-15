@@ -376,8 +376,9 @@ func (b *Backend) waitInspect(ctx context.Context, execID string) (dockerapi.Exe
 
 // execWrapper records the process group leader's PID, changes directory, and
 // then becomes the command, without a shell around the command itself: $0 is
-// the PID file, $1 the directory, $2 the number of environment entries, and
-// "$@" after the shift the entries followed by the argv. No argument is ever
+// the PID file, $1 the directory, $2 the number of environment entries, $3
+// whether a command separator follows them, and "$@" after the shift the
+// entries, that separator when present, and the argv. No argument is ever
 // parsed as shell syntax.
 //
 // The PID is written first. Signal kills the process group through this file,
@@ -403,11 +404,15 @@ func (b *Backend) waitInspect(ctx context.Context, execID string) (dockerapi.Exe
 // Nothing here assigns a shell variable. An assignment to a name the image
 // already exports replaces the value the image set, so a wrapper-local "n" or
 // "e" would silently rewrite the image's own n and e. The count is read from
-// $2 before the shift and env is probed by path, which needs no variable.
+// $2 and the separator flag from $3 before the shift, and env is probed by
+// path, so no variable is needed.
+//
+// $3 is not read by this script: it describes the argument layout, so a reader
+// of the argv does not have to infer whether a separator was inserted.
 const execWrapper = `printf %s $$ > "$0" || exit 125
 if [ -n "$1" ]; then cd -P -- "$1" 2>/dev/null || { printf 'sandbox: cwd is not a usable directory: %s\n' "$1" >&2; exit 126; }; fi
-if [ "$2" -eq 0 ]; then shift 2; exec "$@"; fi
-shift 2
+if [ "$2" -eq 0 ]; then shift 3; exec "$@"; fi
+shift 3
 if [ -x /usr/bin/env ]; then exec /usr/bin/env -- "$@"; fi
 if [ -x /bin/env ]; then exec /bin/env -- "$@"; fi
 printf 'sandbox: this image has no env utility, so the requested environment cannot be applied\n' >&2
@@ -441,10 +446,18 @@ func needsCommandSeparator(command []string) bool {
 // matters: the PID of the shell equals the PID of the process group that
 // Docker created for the exec, and the exec keeps that PID and group.
 func wrapCommand(pidPath, dir string, env, command []string) []string {
-	argv := make([]string, 0, 6+len(commandSeparator)+len(env)+len(command))
-	argv = append(argv, "/bin/sh", "-c", execWrapper, pidPath, dir, strconv.Itoa(len(env)))
+	// $3 records whether the separator follows, so the layout is readable from
+	// the argv instead of being inferred from the command.
+	separated := len(env) > 0 && needsCommandSeparator(command)
+	flag := "0"
+	if separated {
+		flag = "1"
+	}
+
+	argv := make([]string, 0, 7+len(commandSeparator)+len(env)+len(command))
+	argv = append(argv, "/bin/sh", "-c", execWrapper, pidPath, dir, strconv.Itoa(len(env)), flag)
 	argv = append(argv, env...)
-	if len(env) > 0 && needsCommandSeparator(command) {
+	if separated {
 		argv = append(argv, commandSeparator...)
 	}
 	return append(argv, command...)

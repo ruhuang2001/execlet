@@ -194,3 +194,58 @@ func TestExecWithNoCwdKeepsTheArgumentShape(t *testing.T) {
 		t.Errorf("real command = %v, want pwd", actual)
 	}
 }
+
+// TestUnwrapDoesNotMisreadALegitimateCommand pins how the fake daemon splits a
+// wrapped argv.
+//
+// The separator appears only when the command's own path contains "=". Sniffing
+// for its four arguments instead of applying that rule would strip them off a
+// legitimate command that happens to start with the same words, and every
+// assertion built on the fake would then be about a command nobody ran.
+func TestUnwrapDoesNotMisreadALegitimateCommand(t *testing.T) {
+	command := append(slices.Clone(commandSeparator), "echo", "hi")
+	// The flag says no separator follows, so the command's own leading words
+	// must be left alone.
+	cmd := append([]string{"/bin/sh", "-c", execWrapper, "/run/pid", "/work", "1", "0", "A=1"}, command...)
+
+	_, dir, env, actual, ok := unwrap(cmd)
+	if !ok {
+		t.Fatalf("a wrapped command was not recognized: %v", cmd)
+	}
+	if dir != "/work" || !slices.Equal(env, []string{"A=1"}) {
+		t.Errorf("dir = %q env = %v", dir, env)
+	}
+	if !slices.Equal(actual, command) {
+		t.Errorf("command = %v, want %v: its own arguments were mistaken for "+
+			"the injected separator", actual, command)
+	}
+}
+
+// TestWrapCommandAddsTheSeparatorOnlyWhenNeeded pins the condition. A separator
+// on every call would put a second shell in the path of every execution, and
+// that shell resets IFS and SHLVL, so the requested values would stop arriving.
+func TestWrapCommandAddsTheSeparatorOnlyWhenNeeded(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		command []string
+		wantSep bool
+	}{
+		{"plain path", []string{"/usr/bin/env"}, false},
+		{"path with equals", []string{"/tmp/tool=v1"}, true},
+		{"argument with equals", []string{"env", "A=1"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			argv := wrapCommand("/run/pid", "", []string{"A=1"}, tc.command)
+			_, _, _, actual, ok := unwrap(argv)
+			if !ok {
+				t.Fatalf("wrapped argv was not recognized: %v", argv)
+			}
+			if !slices.Equal(actual, tc.command) {
+				t.Errorf("command = %v, want %v", actual, tc.command)
+			}
+			if gotSep := argv[6] == "1"; gotSep != tc.wantSep {
+				t.Errorf("separator present = %v, want %v for %v", gotSep, tc.wantSep, tc.command)
+			}
+		})
+	}
+}

@@ -46,7 +46,10 @@ try:
     entries = {e['name']:e for e in listing['entries']}
     assert entries['a space']['size'] == 3 and entries['a space']['mode'] == 0o640
     assert entries['empty']['is_dir'] and entries['nested']['is_dir']
-    assert not entries['link']['is_dir']
+    assert not entries['link']['is_dir'] and entries['link']['size']==len('nested')
+    assert client.exec(sb.id,['sh','-c','mkdir -p /hardlinks/0nested; printf nonempty >/hardlinks/0nested/original; ln /hardlinks/0nested/original /hardlinks/zcopy; ln /hardlinks/0nested/original /hardlinks/acopy']).exit_code==0
+    linked=raw(sb.id,'path=/hardlinks&limit=100')['entries']
+    assert {e['name']:e['size'] for e in linked}=={'0nested':0,'acopy':8,'zcopy':8},linked
     assert all(e['mtime'].endswith('Z') for e in entries.values())
     assert raw(sb.id, urlencode({'path':'/listing/empty'})) == {'entries':[]}
     for params,status in [({'path':'/absent'},404),({'path':'/listing/z'},400),({'path':'relative'},400),({'path':'/listing/../listing'},400),({'path':'/listing\0'},400),({'path':'/'+'x'*4097},400)]:

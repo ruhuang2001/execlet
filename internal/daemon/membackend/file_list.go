@@ -23,13 +23,15 @@ func (b *Backend) ListFiles(_ context.Context, id, p, after string, limit int) (
 	entries := make([]daemon.FileEntry, 0, limit+1)
 	seen := make(map[string]bool)
 	exists := p == "/"
-	if len(c.files) > daemon.MaxFileScanEntries {
-		return nil, &daemon.Error{Code: daemon.CodePayloadTooLarge, Message: "directory exceeds scan entry limit"}
-	}
+	scanned := 0
 	for name, data := range c.files {
-		rest, ok := strings.CutPrefix(name, prefix)
+		rest, ok := strings.CutPrefix(path.Clean(name), prefix)
 		if !ok {
 			continue
+		}
+		scanned++
+		if scanned > daemon.MaxFileScanEntries {
+			return nil, &daemon.Error{Code: daemon.CodePayloadTooLarge, Message: "directory exceeds scan entry limit"}
 		}
 		exists = true
 		child, _, directory := strings.Cut(rest, "/")

@@ -20,7 +20,9 @@ cleanup() {
  exit "$code"
 }
 trap cleanup EXIT
-export DOCKER_HOST=${DOCKER_HOST:-$(docker context inspect --format '{{.Endpoints.docker.Host}}')}
+DOCKER_ENDPOINT=${DOCKER_HOST:-$(docker context inspect --format '{{.Endpoints.docker.Host}}')}
+if [[ "$DOCKER_ENDPOINT" != unix://* ]]; then echo "files-e2e requires a unix Docker endpoint" >&2; exit 1; fi
+export DOCKER_HOST="$DOCKER_ENDPOINT"
 export SANDBOX_DOMAIN="http://127.0.0.1:$PORT" SANDBOX_API_KEY="file-e2e-$OWNER" E2E_ARTIFACT_DIR="$OUT"
 export PYTHONPATH="$ROOT/sandbox-python/src${PYTHONPATH:+:$PYTHONPATH}"
 docker info >"$OUT/docker-info.txt" 2>&1
@@ -28,7 +30,14 @@ docker info >"$OUT/docker-info.txt" 2>&1
 (cd sandbox-ts && npm ci && npm run build && npm run check) >"$OUT/typescript-build.log" 2>&1
 "$OUT/sandboxd" -addr "127.0.0.1:$PORT" -owner "$OWNER" >"$OUT/sandboxd.log" 2>&1 &
 SERVER_PID=$!
-for _ in $(seq 1 100); do curl -fsS "$SANDBOX_DOMAIN/healthz" >"$OUT/healthz.json" 2>/dev/null && break; sleep 0.1; done
+READY=0
+for _ in $(seq 1 100); do
+ if curl -fsS "$SANDBOX_DOMAIN/healthz" >"$OUT/healthz.json" 2>/dev/null; then READY=1; break; fi
+ kill -0 "$SERVER_PID" 2>/dev/null || break
+ sleep 0.1
+done
+if [ "$READY" -ne 1 ]; then cat "$OUT/sandboxd.log" >&2; exit 1; fi
 "${PYTHON:-python3}" scripts/file-e2e/run.py 2>&1 | tee "$OUT/runner.log"
 git rev-parse HEAD >"$OUT/source-revision.txt"
-git diff >"$OUT/source.patch"
+git show -m --format=fuller --binary HEAD >"$OUT/source.patch"
+git diff >"$OUT/worktree.patch"

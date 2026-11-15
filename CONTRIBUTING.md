@@ -100,7 +100,7 @@ JSON/JSONL/log evidence plus container cleanup results. It does not add a
 fake-only unit suite. Write failure scenarios before implementation and keep
 the [SDK contract](docs/sdk-typescript.md) aligned with behavior.
 
-File operation changes run the three-SDK and CLI real-Docker gate:
+File operation changes require Node 22+, Python 3.10+, and run the three-SDK and CLI real-Docker gate:
 
 ~~~sh
 PYTHON=python3.15 bash scripts/e2e-files.sh artifacts/files-e2e

@@ -332,3 +332,12 @@ pre-implementation [failure model](../sandbox-python/e2e/FAILURES.md). CI runs
 the installed package against real Docker on Python 3.10 and 3.15 and uploads
 evidence even on failure. The wheel and source distribution are verification
 artifacts, not publication to a package index.
+
+## Directory listing
+
+client.list_files(sandbox_id, "/work", limit=100, cursor="") returns FileList
+with entries (FileEntry: name, size, mode, mtime, is_dir) and next_cursor.
+Pass each nonempty next_cursor to retrieve the next page. Limits are 1–1000;
+names sort bytewise without snapshot consistency. cancel follows the normal
+request cancellation contract. Invalid requests and bounded scan failures
+raise Error with the server code.

@@ -96,3 +96,8 @@ export interface ClientConfig {
   /** Fetch-compatible transport; it must honor AbortSignal and stream bodies. */
   fetch?: typeof globalThis.fetch;
 }
+
+/** Metadata of an immediate child; POSIX permission bits and UTC RFC3339 mtime. */
+export interface FileEntry { name: string; size: number; mode: number; mtime: string; is_dir: boolean }
+export interface FileList { entries: FileEntry[]; next_cursor?: string }
+export interface ListFilesOptions extends RequestOptions { limit?: number; cursor?: string }

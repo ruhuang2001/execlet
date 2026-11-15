@@ -388,3 +388,13 @@ Recorded because earlier builds hit them, not as hypotheticals:
 - [SDK comparison](competitors.md): version-specific interfaces and tradeoffs.
 - [Future directions](future.md): capabilities outside the current scope.
 - [Contributing](../CONTRIBUTING.md): checks and evidence collection.
+
+### Directory listing
+
+The listing route shares file lifecycle rules and uses bounded recursive
+Docker archive reads. It retains only limit+1 immediate-child metadata records
+and emits a path-bound name cursor. Each request caps scanned archive bytes
+(64 MiB), headers (10000), and elapsed runtime work (30 seconds). This avoids
+unbounded host memory/work, but large nested file contents can prevent even
+a small page from succeeding. Pagination is deterministic without snapshot
+consistency; concurrent mutations can change later pages. See the API contract.

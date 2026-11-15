@@ -202,3 +202,11 @@ Standard library only. Minimum Go version is the `go` directive in `go.mod`.
 - [Execution start and recovery](../sandbox-go/exec.go).
 - [SSE reconnects and context cancellation](../sandbox-go/stream.go).
 - [Error matching and outcomes](../sandbox-go/errors.go).
+
+## Directory listing
+
+Use client.ListFiles(ctx, sandboxID, "/work", sandbox.ListFilesOptions{Limit: 100})
+for one FileList page. Entries expose Name, Size, Mode, Mtime and IsDir. Pass
+NextCursor into the next call's Cursor until it is empty. Limit zero omits
+the query parameter and uses the server default. Names sort bytewise; changes
+between pages are not a snapshot. Server scan limits can return 413.

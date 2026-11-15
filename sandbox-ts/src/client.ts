@@ -2,7 +2,7 @@ import { checkSignal, SandboxError } from './errors.js';
 import { Transport } from './http.js';
 import { consume, streamEvents } from './stream.js';
 import type {
-  ClientConfig, CompletedExecution, CreateSandboxRequest, Event, EventHandler,
+  FileList, ListFilesOptions, ClientConfig, CompletedExecution, CreateSandboxRequest, Event, EventHandler,
   ExecuteRequest, Execution, ExecutionOutcome, RequestOptions, Sandbox,
 } from './types.js';
 
@@ -125,6 +125,13 @@ export class Client {
     options: RequestOptions = {}): Promise<ExecutionOutcome> {
     const started = await this.startExecution(sandboxID, { command }, options);
     return executionOutcome(await this.streamExecution(sandboxID, started.id, onEvent, options));
+  }
+
+  listFiles(sandboxID: string, path: string, options: ListFilesOptions = {}): Promise<FileList> {
+    const query = new URLSearchParams({ path });
+    if (options.limit !== undefined) query.set('limit', String(options.limit));
+    if (options.cursor !== undefined) query.set('cursor', options.cursor);
+    return this.transport.json('GET', sandboxPath(sandboxID) + '/files/list?' + query, true, options.signal);
   }
 
   readFile(sandboxID: string, path: string, options: RequestOptions = {}): Promise<Uint8Array> {

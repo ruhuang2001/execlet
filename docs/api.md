@@ -337,3 +337,24 @@ cleanup with the same owner label is the fallback.
 - [Execution engine](../internal/daemon/engine.go): idempotency, cancellation, and file access.
 - [Reaper](../internal/daemon/reaper.go): timeout and eviction checks.
 - [Server entry point](../cmd/sandboxd/main.go): startup cleanup and HTTP shutdown.
+
+## Directory listing
+
+### `GET /v1/sandboxes/{sandbox_id}/files/list`
+
+Query path=/work&limit=100&cursor=TOKEN returns
+entries with name, size (bytes), mode (POSIX permission bits), mtime (UTC
+RFC3339), and is_dir, plus next_cursor when another page exists. Only immediate
+children appear; child symlinks are not followed. Results sort by UTF-8 name
+bytes. Limits are 1–1000 (default 100); reuse the opaque cursor with the same
+path. Concurrent mutations do not provide snapshot consistency. Empty
+directories return entries: []; missing paths are 404 and files are 400.
+
+Paths must be absolute UTF-8, at most 4096 bytes, without NUL or parent
+traversal. Repeated/unknown parameters, invalid limits, and malformed or
+path-mismatched cursors return 400. Paused sandboxes resume first. Each page
+scans Docker's recursive tar stream, capped at 64 MiB, 10000 entries and
+30 seconds, retaining at most limit+1 metadata records. Large nested files
+or trees can therefore return 413 even when immediate children are few;
+this API is not a constant-time filesystem index. Runtime deadline failures
+are 502. No archive is extracted on the host.

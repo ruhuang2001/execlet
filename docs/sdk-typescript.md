@@ -240,3 +240,11 @@ through the same origin or use a trusted CORS/preflight proxy allowing
 Authorization, Content-Type, Last-Event-ID and the used methods. Expose
 Retry-After for browser retries. Never ship privileged bearer keys to untrusted
 browser users. The SDK does not change daemon CORS behavior.
+
+## Directory listing
+
+client.listFiles(id, '/work', {limit: 100, cursor, signal}) returns FileList
+with entries (FileEntry: name, size, mode, mtime, is_dir) and optional
+next_cursor. Continue until next_cursor is absent. Limits are 1–1000, default
+100. Names sort bytewise without snapshot consistency; scan bounds can fail
+with 413. The normal typed errors, retries and AbortSignal rules apply.

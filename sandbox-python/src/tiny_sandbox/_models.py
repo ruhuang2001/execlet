@@ -123,3 +123,18 @@ class ExecuteRequest(_Request):
     timeout_seconds: int | None = None
     env: dict[str, str] | None = None
     cwd: str | None = None
+
+
+@dataclass(kw_only=True)
+class FileEntry(_Model):
+    name: str
+    size: int
+    mode: int
+    mtime: str
+    is_dir: bool
+
+
+@dataclass(kw_only=True)
+class FileList(_Model):
+    entries: list[FileEntry]
+    next_cursor: str = ""

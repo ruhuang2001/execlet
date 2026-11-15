@@ -18,6 +18,30 @@ env:
   GOTOOLCHAIN: local
 
 jobs:
+  files-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.15'
+      - name: Three SDKs and CLI file scenarios against real Docker
+        run: bash scripts/e2e-files.sh artifacts/files-e2e
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: files-e2e-artifacts
+          path: artifacts/files-e2e/
+          retention-days: 7
+
   typescript:
     runs-on: ubuntu-latest
     steps:

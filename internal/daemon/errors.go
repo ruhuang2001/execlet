@@ -62,6 +62,9 @@ var ErrNotFound = errors.New("daemon: not found")
 // backendError wraps a container-runtime failure. A backend that reports
 // ErrNotFound keeps the not_found code so file reads do not become 502s.
 func backendError(err error) error {
+	if e, ok := errors.AsType[*Error](err); ok {
+		return e
+	}
 	if errors.Is(err, ErrNotFound) {
 		return &Error{Code: CodeNotFound, Message: err.Error(), Err: err}
 	}

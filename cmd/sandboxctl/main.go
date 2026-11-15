@@ -33,6 +33,7 @@ commands:
   logs SANDBOX EXECUTION                 print retained output
   inspect SANDBOX                        print one sandbox
   list                                   list sandboxes
+  files list SANDBOX PATH [flags]         list directory entries as JSON
   pause SANDBOX                          pause a sandbox
   resume SANDBOX                         resume a sandbox
   kill SANDBOX                           kill a sandbox
@@ -108,6 +109,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return in.logs(rest)
 	case "inspect":
 		return in.inspect(rest)
+	case "files":
+		return in.files(rest)
 	case "list":
 		return in.list(rest)
 	case "pause", "resume", "kill":

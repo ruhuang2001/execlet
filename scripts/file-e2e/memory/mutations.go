@@ -16,6 +16,11 @@ func verifyMemoryMutations(ctx context.Context, c *sandbox.Client) {
 	initial := memoryTar([]tar.Header{{Name: "target", Typeflag: tar.TypeReg, Size: 3}, {Name: "link", Typeflag: tar.TypeLink, Linkname: "target"}, {Name: "outer/inner", Typeflag: tar.TypeDir}}, map[string][]byte{"target": []byte("old")})
 	must(c.WriteArchive(ctx, sb.ID, "/", initial))
 	must(c.WriteArchive(ctx, sb.ID, "/", memoryTar([]tar.Header{{Name: "target", Typeflag: tar.TypeReg, Size: 3}}, map[string][]byte{"target": []byte("new")})))
+	target, err := c.ReadFile(ctx, sb.ID, "/target")
+	must(err)
+	if !bytes.Equal(target, []byte("new")) {
+		panic("target replacement not applied")
+	}
 	must(c.WriteArchive(ctx, sb.ID, "/outer", memoryTar([]tar.Header{{Name: "child", Typeflag: tar.TypeReg, Size: 2}}, map[string][]byte{"child": []byte("ok")})))
 	data, err := c.ReadFile(ctx, sb.ID, "/link")
 	must(err)

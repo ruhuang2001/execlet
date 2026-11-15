@@ -38,6 +38,7 @@ for _ in $(seq 1 100); do
 done
 if [ "$READY" -ne 1 ]; then cat "$OUT/sandboxd.log" >&2; exit 1; fi
 "${PYTHON:-python3}" scripts/file-e2e/run.py 2>&1 | tee "$OUT/runner.log"
+go run ./scripts/file-e2e/memory "$OUT" >"$OUT/memory-results.json"
 git rev-parse HEAD >"$OUT/source-revision.txt"
 git show -m --format=fuller --binary HEAD >"$OUT/source.patch"
 git diff >"$OUT/worktree.patch"

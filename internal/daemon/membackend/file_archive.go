@@ -53,9 +53,15 @@ func (b *Backend) ReadArchive(_ context.Context, id, p string) ([]byte, error) {
 				h.Name = path.Join(base, strings.TrimPrefix(name, prefix))
 			}
 			if h.Typeflag == tar.TypeLink {
-				h.Typeflag = tar.TypeReg
-				h.Linkname = ""
-				h.Size = int64(len(c.files[name]))
+				target := h.Linkname
+				if target == p || strings.HasPrefix(target, prefix) {
+					h.Linkname = path.Join(base, strings.TrimPrefix(target, prefix))
+					h.Size = 0
+				} else {
+					h.Typeflag = tar.TypeReg
+					h.Linkname = ""
+					h.Size = int64(len(c.files[name]))
+				}
 			}
 			headers[name] = h
 			if len(headers) > filearchive.MaxEntries {
@@ -83,7 +89,16 @@ func (b *Backend) ReadArchive(_ context.Context, id, p string) ([]byte, error) {
 	for name := range headers {
 		names = append(names, name)
 	}
-	slices.Sort(names)
+	slices.SortFunc(names, func(a, b string) int {
+		al, bl := headers[a].Typeflag == tar.TypeLink, headers[b].Typeflag == tar.TypeLink
+		if al != bl {
+			if al {
+				return 1
+			}
+			return -1
+		}
+		return strings.Compare(a, b)
+	})
 	var buf bytes.Buffer
 	w := tar.NewWriter(&buf)
 	for _, name := range names {
@@ -152,7 +167,11 @@ func (b *Backend) WriteArchive(_ context.Context, id, p string, archive *filearc
 	for _, entry := range archive.Entries {
 		h := entry.Header
 		name := path.Join(p, h.Name)
-		c.archiveHeaders[name] = h
+		stored := h
+		if h.Typeflag == tar.TypeLink {
+			stored.Linkname = path.Join(p, h.Linkname)
+		}
+		c.archiveHeaders[name] = stored
 		switch h.Typeflag {
 		case tar.TypeReg:
 			c.files[name] = bytes.Clone(entry.Data)

@@ -25,3 +25,12 @@ Failure model written before archive implementation on its preceding branch.
 - Check all three SDKs plus CLI upload/download; verify safe links and hardlink inode equivalence inside Docker. Preserve tar fixtures, response JSON and scoped cleanup evidence.
 
 - CLI local save failure must preserve an existing archive; simulate a file-size limit during an actual Docker download and verify no temporary file remains.
+
+## In-memory HTTP regression scenarios
+
+These failure cases precede the repair implementation and exercise real HTTP plus the Go SDK against the in-memory backend, separately from Docker evidence:
+
+- A 9 MiB regular member plus hardlink must upload/download within the 16 MiB payload limit, retain one regular payload and one remapped link, and support a lexically earlier link name.
+- Downloading only a hardlink whose target lies outside the selected path must materialize its bytes.
+- Listing an explicit mode-0700 directory with a distinct mtime 1000 times must never replace its metadata with a descendant-derived default.
+- Retain the downloaded tar and JSON summary for repeatable verification; no new unit tests.

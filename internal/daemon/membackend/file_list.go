@@ -46,6 +46,12 @@ func (b *Backend) ListFiles(_ context.Context, id, p, after string, limit int) (
 		if seen[child] {
 			continue
 		}
+		if nested {
+			if explicit, ok := c.archiveHeaders[path.Join(p, child)]; ok {
+				h = explicit
+				nested = false
+			}
+		}
 		seen[child] = true
 		size := h.Size
 		if h.Typeflag == tar.TypeLink {

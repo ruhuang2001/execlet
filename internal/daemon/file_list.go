@@ -119,20 +119,20 @@ func (s *Sandboxes) ListFiles(ctx context.Context, id, p string, limit int, curs
 func (h *Handler) listFiles(w http.ResponseWriter, r *http.Request) {
 	q, err := strictFileQuery(r, "path", "limit", "cursor")
 	if err != nil {
-		writeDaemonError(w, err)
+		writeDaemonError(r.Context(), w, err)
 		return
 	}
 	limit := 100
 	if raw, ok := q["limit"]; ok {
 		limit, err = strconv.Atoi(raw)
 		if err != nil {
-			writeDaemonError(w, errorf(CodeInvalidRequest, "limit must be an integer"))
+			writeDaemonError(r.Context(), w, errorf(CodeInvalidRequest, "limit must be an integer"))
 			return
 		}
 	}
 	result, err := h.store.ListFiles(r.Context(), r.PathValue("sandbox_id"), q["path"], limit, q["cursor"])
 	if err != nil {
-		writeDaemonError(w, err)
+		writeDaemonError(r.Context(), w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, result)

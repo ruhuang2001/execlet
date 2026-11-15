@@ -28,7 +28,7 @@ paths:
       operationId: getHealth
       summary: Liveness probe and build version
       description: >-
-        Reports whether the server is up and which version it runs. This is the
+        Reports whether the server is up and which version it runs. This
         liveness endpoint never requires authentication.
       security: []
       responses:
@@ -393,9 +393,10 @@ paths:
         newest event is 400 invalid_request. The server sends a ping comment
         every 15 seconds while open and closes the stream after complete.
         Closing a stream never affects the execution, and an open stream counts
-        as activity for the idle timeout. A sandbox retains its 200 most recent
-        executions; older completed ones are dropped together with their
-        idempotency keys.
+        as activity for the idle timeout. Execution history is bounded to 200
+        records, protecting all active executions and the most recently completed
+        one. Eligible records and their idempotency keys can be removed by history
+        or aggregate-output pruning; no fixed replay window is guaranteed.
       responses:
         '200':
           description: An event stream.
@@ -508,7 +509,9 @@ paths:
         must be UTF-8, absolute, at most 4096 bytes, without NUL or parent traversal.
         Docker recursively scans at most 64 MiB and 10000 archive entries per
         page within 30 seconds; large nested content can cause 413 even for a
-        small page. Child symlinks are not followed. Duplicate query values fail.
+        small page. Child symlinks are not followed. Unknown or repeated query
+        parameters, malformed or path-mismatched cursors return 400. Runtime
+        deadlines return 502.
       parameters:
         - in: query
           name: limit
@@ -567,7 +570,11 @@ paths:
         relative symlinks without parent traversal components (even normalized-safe
         parent traversal is rejected) and earlier-member hardlinks. Root entry is the
         selected basename. Unsupported selected content intentionally returns 400,
-        including a symlink selected without its target member; limits return 413.
+        including a symlink selected without its target member. Size/count
+        limits return 413; a name longer than 4096 bytes is invalid_request.
+        Aggregate member/link path text is limited to 1 MiB. Paths follow
+        directory-listing validation; only path is accepted as a query parameter.
+        Paused sandboxes resume first; runtime operations have a 30-second deadline.
       responses:
         '200':
           description: Validated uncompressed tar bytes.
@@ -597,6 +604,13 @@ paths:
         32 MiB encoded, 16 MiB regular bytes, 4096 members, 4096-byte names, 1 MiB aggregate member/link path text.
         Extraction is not atomic against runtime failure or concurrent writes.
         Upload is not automatically retried by SDKs. No host extraction occurs.
+        Paths follow directory-listing validation; only path is accepted as a
+        query parameter. Paused sandboxes resume after validation; runtime
+        operations have a 30-second deadline. Missing destinations are 404 and
+        nondirectories are 400. Quiesce destination writers before upload.
+        Symlinks must target an archive regular-file or directory member without
+        parent traversal; hardlinks target an earlier regular member. Owners
+        and special mode bits are not imported.
       requestBody:
         required: true
         content:
@@ -707,7 +721,7 @@ components:
             busy:
               value:
                 code: busy
-                message: sandbox sbx_123 is already running execution exe_456
+                message: sandbox sbx_123 has reached its execution limit
             idempotency_conflict:
               value:
                 code: idempotency_conflict
@@ -968,11 +982,13 @@ components:
             Optional. Environment variables for this execution only. A name
             here overrides a variable of the same name that the container
             already has, and every other container variable stays visible.
-            Values are never echoed. Execution records retain only the entry count
+            Environment fields are never echoed; commands may print them.
+            Execution records retain only the entry count
             and a process-keyed HMAC-SHA256 fingerprint, not raw env.
             Omitted or empty leaves the container's environment unchanged.
             At most 64 entries, 64 bytes per name, 8192 bytes per value, and
-            32768 bytes in total; exceeding a bound is an invalid_request.
+            32768 bytes in total, counting each name, one equals-sign byte, and
+            its value; exceeding a bound is an invalid_request.
             A name must be non-empty and must not contain "=", a NUL byte, or a
             newline. A value must not contain a NUL byte.
         cwd:

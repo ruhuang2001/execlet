@@ -1,14 +1,14 @@
 # TypeScript SDK
 
 Status: normative for the ESM package in [sandbox-ts](../sandbox-ts). It speaks
-the existing [HTTP contract](api.md); Go and daemon interfaces are unchanged.
+the [HTTP contract](api.md).
 There are no runtime dependencies or Node built-in imports. Node 22+ and modern
 browsers must supply fetch, ReadableStream, TextDecoder, AbortController and
 Web Crypto. Declarations support TypeScript 5.9+ with DOM types.
 
 ## Install from this repository
 
-This change prepares a package; it does not publish to npm. Build a tarball,
+Build a local package from the repository,
 then install its actual local path in your application:
 
 ~~~sh
@@ -57,7 +57,8 @@ No global timeout is imposed. Redirects are rejected instead of changing
 request semantics. Methods use camelCase, request/response fields use the HTTP
 snake_case names. Dates remain RFC3339 strings, binary files are Uint8Array.
 Optional fields use undefined; explicit zero is transmitted unchanged.
-RequestOptions contains an optional signal and is always the last argument.
+`RequestOptions` contains an optional `signal`; options are the final argument.
+`ListFilesOptions` also accepts `limit` and `cursor`.
 
 ~~~ts
 createSandbox(request?: CreateSandboxRequest, options?: RequestOptions): Promise<Sandbox>
@@ -77,6 +78,9 @@ streamExecution(sandboxID, executionID, onEvent: EventHandler, options?): Promis
 exec(sandboxID, command: readonly string[], options?): Promise<ExecutionOutcome>
 execStream(sandboxID, command: readonly string[], onEvent: EventHandler, options?): Promise<ExecutionOutcome>
 
+listFiles(sandboxID, path, options?: ListFilesOptions): Promise<FileList>
+readArchive(sandboxID, path, options?): Promise<Uint8Array>
+writeArchive(sandboxID, path, bytes: Uint8Array, options?): Promise<void>
 readFile(sandboxID, path, options?): Promise<Uint8Array>
 writeFile(sandboxID, path, bytes: Uint8Array, options?): Promise<void>
 ~~~
@@ -86,11 +90,20 @@ Execution stdout/stderr are optional because lists omit them. All request and
 response interfaces, Event, ExecutionOutcome, SandboxError and executionOutcome
 are exported from the package root. Deep imports are not supported.
 
-ExecuteRequest also takes `env` (string record, added to the image's
-environment for this execution only) and `cwd` (absolute working directory).
+`CreateSandboxRequest` accepts optional `image`, `memory_mb`,
+`max_concurrent_executions`, `pids_limit`, `nano_cpus`, `network`,
+`timeout_seconds`, `timeout_action`, `idle_timeout_seconds`, and
+`idle_timeout_action`. See the [resource contract](api.md#sandbox) for defaults
+and accepted values. `ExecuteRequest` requires `command` and optionally takes
+`idempotency_key`, `timeout_seconds`, `env`, `cwd`, and `stdin`. Omitted or zero
+execution timeout means no separate execution deadline; sandbox lifetime
+policies still apply.
+
+`env` adds variables to the image's environment for this execution only;
+`cwd` is an absolute working directory.
 The [shared SDK contract](sdk.md) lists their limits and behavior, including
 exit code 126 for a cwd that is not a usable directory. Idempotency compares
-command, env and cwd, and the server never echoes env. Execution.cwd repeats
+command, env, cwd and stdin, and the server never echoes env. Execution.cwd repeats
 the requested directory, is null when the request set none, and is absent on a
 server older than this contract, which ignores both fields without an error;
 nothing reveals an ignored env. Such a server also leaves them out of the
@@ -105,6 +118,44 @@ const started = await client.startExecution(sandbox.id, {
 });
 const done = await client.streamExecution(sandbox.id, started.id, () => {});
 ~~~
+
+### One-shot stdin
+
+`ExecuteRequest.stdin` sends UTF-8 text once, followed by EOF; omitted or empty input
+means EOF. The limit is 1 MiB of decoded bytes, including NULs. Execution-start JSON has
+a separate 8 MiB limit; command metadata remains limited to 1 MiB. Set input on the
+request to `startExecution`, then stream the returned execution. This is not interactive
+input. The server does not return stdin in execution metadata, but a command can print
+it to output. See the [input contract](api.md#one-shot-stdin) for image requirements and
+cleanup behavior. Use compatible client and server revisions; older servers can ignore
+unsupported request fields.
+
+### Concurrent executions
+
+Set `CreateSandboxRequest.max_concurrent_executions` when creating a sandbox: the
+default is 1 and the accepted range is 1–8. Start each execution separately and stream
+its ID. A full sandbox returns `busy`. Cancellation normally affects one execution;
+pause/resume applies to all work, and container-removal fallback can terminate siblings.
+With a configured limit above one, an unexplained exit 137 is `unknown`: `exec` returns
+`reason: "unknown"` and `terminationReason: "unknown"`. See the [concurrency policy](api.md#concurrent-execution-policy).
+
+## Files
+
+`client.listFiles(sandboxID, path, { limit: 100, cursor, signal })` returns a `FileList`
+page with `entries` and optional `next_cursor`. Pass `next_cursor` as the next call’s
+`cursor`. Entries describe immediate children with name, size, mode, modification time,
+and directory status. Follow the returned cursor until it is empty or absent. Pages are
+name-ordered, not a filesystem snapshot. The default page size is 100, with a maximum of
+1000; bounded scans can fail with HTTP 413. See [directory listing](api.md#directory-listing) for cursor and metadata semantics.
+
+`readArchive(sandboxID, path, { signal })` returns tar `Uint8Array` bytes;
+`writeArchive(sandboxID, destination, bytes, { signal })` uploads them. Downloads are
+rooted at the selected path's basename; uploads extract beneath an existing directory.
+Archive downloads retry normally. Uploads make one attempt because extraction can be
+partial: stop in-container filesystem writers and inspect remote state after a failed or
+ambiguous upload. Only relative link targets without `..` are accepted; hard links must
+target an earlier regular member. See the [tar contract](api.md#tar-transfer) for
+validation and transfer limits.
 
 ## Outcomes and errors
 
@@ -169,7 +220,7 @@ stop when their signal aborts.
 
 startExecution copies the request, including its command array and env
 record, and, absent a supplied key, generates 128 random bits as a 32-digit
-hex idempotency key. Retries reuse key, command, env and cwd.
+hex idempotency key. Retries reuse the key and the complete invocation, including stdin.
 A signal already aborted before starting sends no request.
 
 An aborted in-flight start triggers a fresh five-second deadline: repeat the
@@ -189,7 +240,33 @@ cancelExecution itself returns the raw snapshot, which may still be running
 during removal fallback; it does not use the recovery wrapper. Aborting ordinary
 get/list/file requests only aborts those requests.
 
-## Worked failure scenario and evidence
+## Compatibility and Go parity
+
+Use client and server builds from compatible revisions. New request fields
+can be ignored by older servers; success does not prove enforcement. There is
+no capability negotiation. Future wire termination reasons map to the explicit
+`unknown` outcome so consumer switches remain exhaustive.
+
+Unknown response fields are retained and response enum strings remain open.
+Additive resource fields can be absent; the client does not substitute defaults
+as evidence that unsupported controls were enforced.
+
+| Guarantee | Go and TypeScript |
+| --- | --- |
+| Auth, lifecycle, files, keyed starts | Same HTTP behavior |
+| Replay cursor, de-duplication, total budget, jitter | Same guarantees; TypeScript uses fetch for Node and browsers |
+| Callback failures | TypeScript always wraps and never retries; Go has a documented typed-error caveat |
+| Completed outcomes | Go Exec returns outcome errors; TypeScript resolves a discriminated union |
+| Abort/context cleanup | Both use fresh five-second recovery; TypeScript also requires a terminal snapshot |
+| Stream consumption | Go callback; TypeScript async iterator plus async callback overload |
+
+Browser-safe packaging does not enable cross-origin access on sandboxd. Serve
+through the same origin or use a trusted CORS/preflight proxy allowing
+Authorization, Content-Type, Last-Event-ID and the used methods. Expose
+Retry-After for browser retries. Never ship privileged bearer keys to untrusted
+browser users. The SDK does not change daemon CORS behavior.
+
+## End-to-end verification
 
 ~~~sh
 bash scripts/e2e-typescript.sh artifacts/typescript-e2e
@@ -208,94 +285,3 @@ logs and scoped container cleanup. The [failure matrix](../sandbox-ts/e2e/FAILUR
 precedes implementation. Faults wrap real server responses; there is no fake-only
 unit suite. Package validation installs the tarball, compiles a strict consumer
 and exercises a browser bundle without Node globals against the real daemon.
-
-## Compatibility and Go parity
-
-Existing HTTP paths, Go public types and Go error behavior are unchanged. The
-TypeScript package has its own semver version. Preserve constructor defaults,
-signatures, exported types, codes, outcome discriminants, units and iterator
-cleanup semantics in compatible releases. Optional additions are preferred;
-changing zero-retry behavior or throwing completed outcomes would break clients.
-Keep the explicit unknown outcome for new wire reasons instead of adding a
-closed union member in a patch/minor version.
-
-Unknown response fields are retained and response enum strings remain open.
-Additive resource fields can be absent. Unsupported controls are not filled in
-as if they were enforced. Server v0.0.1 supports pids_limit, nano_cpus, network
-and execution timeout_seconds; older development servers may silently ignore
-them. Use a known compatible server when those controls matter. No capability
-negotiation or client-side per-execution timer is invented.
-
-| Guarantee | Go and TypeScript |
-| --- | --- |
-| Auth, lifecycle, files, keyed starts | Same HTTP behavior |
-| Replay cursor, de-duplication, total budget, jitter | Same guarantees; TypeScript uses fetch for Node and browsers |
-| Callback failures | TypeScript always wraps and never retries; Go has a documented typed-error caveat |
-| Completed outcomes | Go Exec returns outcome errors; TypeScript resolves a discriminated union |
-| Abort/context cleanup | Both use fresh five-second recovery; TypeScript also requires a terminal snapshot |
-| Stream consumption | Go callback; TypeScript async iterator plus async callback overload |
-
-Browser-safe packaging does not enable cross-origin access on sandboxd. Serve
-through the same origin or use a trusted CORS/preflight proxy allowing
-Authorization, Content-Type, Last-Event-ID and the used methods. Expose
-Retry-After for browser retries. Never ship privileged bearer keys to untrusted
-browser users. The SDK does not change daemon CORS behavior.
-
-## Directory listing
-
-client.listFiles(id, '/work', {limit: 100, cursor, signal}) returns FileList
-with entries (FileEntry: name, size, mode, mtime, is_dir) and optional
-next_cursor. Continue until next_cursor is absent. Limits are 1–1000, default
-100. Names sort bytewise without snapshot consistency; scan bounds can fail
-with 413. The normal typed errors, retries and AbortSignal rules apply.
-
-## One-shot stdin
-
-The ExecuteRequest stdin field sends UTF-8 text once, followed by EOF. At most
-1 MiB of decoded bytes (including NULs) is accepted; omitted and empty mean
-EOF. Oversized input is 413 payload_too_large. Execution-start JSON bodies are separately
-bounded at 8 MiB to accommodate escaping. This is not interactive input.
-Set stdin on ExecuteRequest and pass it to startExecution, then stream the
-returned execution. Older servers ignore this field; require a server that
-implements the input contract.
-
-A keyed replay must match command, env, cwd and stdin. Input is staged in a
-private temporary directory, opened and unlinked before the command runs,
-with a bounded best-effort cleanup after startup failure or completion. If the
-runtime is unreachable, paused, or cannot start a cleanup process, container
-removal is the final cleanup boundary. Execution history retains only an input
-fingerprint. List responses never contain input or output. Get and complete-SSE
-snapshots only contain input when the command prints it. Runtime administrators can inspect live input; this is not a secret vault.
-
-Non-empty stdin requires writable /tmp and /bin/mkdir, /bin/rm and /bin/rmdir
-in the image. Missing staging tools cause backend_error before user execution.
-
-Command metadata remains limited to 1 MiB total UTF-8 bytes, counting one
-separator byte per argv element. Larger commands return 413 payload_too_large;
-this keeps complete SSE events within the SDK framing limits even when stdin
-uses the larger execution-request JSON budget.
-
-## Tar transfer
-
-client.readArchive(id, path, {signal}) returns Uint8Array tar bytes rooted at
-path's basename. client.writeArchive(id, destination, bytes, {signal}) uploads
-to an existing directory. Read retries normally; upload sends one attempt
-because extraction can be partial after runtime failure. Server limits are
-32 MiB encoded, 16 MiB payload and 4096 members. Validation and concurrency
-boundaries are documented in the HTTP contract.
-
-Archive upload callers must quiesce in-container filesystem writers and inspect
-remote state after any failed or ambiguous upload, because extraction can be partial.
-The aggregate path/link text limit is 1 MiB, in addition to the byte/member limits.
-
-## Concurrent executions
-
-Set max_concurrent_executions when creating a sandbox (1–8, default 1).
-Go uses CreateSandboxRequest.MaxConcurrentExecutions; Python and TypeScript use
-max_concurrent_executions; the CLI uses --max-concurrent-executions. Sandbox views
-return the limit. Start executions separately and stream each ID; cancellation
-normally affects only its selected execution. Pause/resume applies to all work.
-Container-removal fallback affects siblings, as described in the HTTP contract.
-Above one configured slot, unexplained exit 137 has termination_reason unknown,
-which is never a successful SDK outcome (Go ErrUnknown; Python error code unknown;
-TypeScript reason unknown with terminationReason unknown).

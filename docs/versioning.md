@@ -5,6 +5,12 @@ CI builds GoReleaser snapshots as workflow artifacts. The separate Release
 workflow validates a release tag through the same CI before building and
 publishing versioned binaries.
 
+The documentation and OpenAPI on `main` describe that checkout, including
+unreleased additions. The installer and Go's `@latest` version selection use
+published releases; they do not promise the current `main` feature set. Read
+the documentation from the selected tag, or use matching source revisions for
+the daemon, CLI and SDK. `info.version` alone is not feature negotiation.
+
 Supported release targets are Linux and macOS (`linux` and `darwin`), each on
 amd64 and arm64. Each of the four `.tar.gz` archives contains `sandboxd` and
 `sandboxctl`. Windows is not supported; Windows binaries and ZIP archives are
@@ -58,12 +64,17 @@ Its execution conveniences surface unknown termination reasons as errors.
 The Python distribution is named `tiny-sandbox` and imported as `tiny_sandbox`.
 Its package version is declared in `sandbox-python/pyproject.toml`. Keep it
 aligned with the project release when preparing a release; the minimum
-supported interpreter is Python 3.10. This change adds local wheel/source
-distribution builds and CI verification only. It does not publish to PyPI or
+supported interpreter is Python 3.10. CI builds and verifies wheel/source
+distributions. It does not publish to PyPI or
 add Python assets to the binary release workflow. Install from the checkout
 with `python3 -m pip install ./sandbox-python`.
 
 ## Release checklist
+
+Requires Go 1.27+, Docker CLI/Unix socket, curl, Node 22+, Python 3.10+,
+golangci-lint, and GoReleaser. Ensure `python3` is a supported interpreter on
+`PATH`; `PYTHON` selects the interpreter for the Python and file SDK runners.
+Use fresh artifact directories.
 
 ```sh
 go build ./...
@@ -75,6 +86,8 @@ bash scripts/e2e-typescript.sh artifacts/typescript-e2e
 goreleaser check
 goreleaser release --snapshot --clean
 E2E_COVERAGE=1 bash scripts/e2e.sh artifacts/e2e
+bash scripts/e2e-stdin.sh artifacts/stdin-e2e
+bash scripts/e2e-observability.sh artifacts/observability-e2e
 mkdir -p artifacts/cov-unit
 go test -race -covermode=atomic -coverpkg=./... ./... \
   -args -test.gocoverdir="$PWD/artifacts/cov-unit"
@@ -84,10 +97,11 @@ make python-build
 make python-e2e
 ```
 
-The coverage steps follow CI: `coverage.sh` merges both profiles and enforces
-the 70% gate. Use fresh artifact directories for each run. The E2E suite needs
-a reachable Docker daemon, the Docker CLI and curl; missing container
-images also require registry access. The script starts its own server on port
+The coverage steps follow CI: the primary E2E run includes file/archive
+scenarios, and `coverage.sh` merges both profiles for the 70% profile-block
+coverage gate. This differs from statement-weighted coverage; see
+[contributing](../CONTRIBUTING.md#coverage-and-ci). Missing container images
+require registry access. The script starts its own server on port
 18081 by default; set `E2E_PORT` if that port is occupied.
 
 Inspect the four platform archives in `dist/` and verify `checksums.txt`
@@ -97,8 +111,9 @@ Publishing a release is a separate action from this verification checklist.
 
 ## Publish through GitHub Actions
 
-After preparing the intended release commit on `main`, update OpenAPI's
-`info.version`, create a stable `vMAJOR.MINOR.PATCH` tag, and push it. Tags
+Prepare and merge the intended release commit on `main`, including OpenAPI's
+`info.version` and applicable package versions, then create a stable
+`vMAJOR.MINOR.PATCH` tag at that commit and push it. Tags
 containing the Release workflow trigger publication automatically:
 
 ```sh

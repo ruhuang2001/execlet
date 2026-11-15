@@ -1,131 +1,108 @@
 # Contributing
 
-Requires macOS or Linux, Go 1.27 or newer, and a reachable Docker Unix socket.
-Windows and WSL2 are not supported. Build the server and
-CLI with `make build`; see the [quick start](README.md#quick-start) for usage.
+## Prerequisites
 
-## Local checks
+- macOS or Linux, Go 1.27+, and Make. Windows and WSL2 are not supported.
+- For runtime checks: Docker CLI, a reachable Docker Unix socket, and curl.
+- For SDK and full coverage checks: Node 22+ and Python 3.10+. CI uses Python
+  3.10 and 3.15; select a suitable local interpreter with `PYTHON`. Scripts
+  that call `python3` directly also require that executable on `PATH`.
+- Install golangci-lint for `make lint` and GoReleaser for release verification.
 
-```sh
-make test     # unit tests
-make race     # race detector
-make vet      # go vet
-make lint     # golangci-lint
-```
+Build the daemon and CLI with `make build`. See the [quick start](docs/quickstart.md)
+for Docker socket selection and running the service.
 
-```sh
-E2E_COVERAGE=1 bash scripts/e2e.sh artifacts/e2e
-mkdir -p artifacts/cov-unit
-go test -race -covermode=atomic -coverpkg=./... ./... \
-  -args -test.gocoverdir="$PWD/artifacts/cov-unit"
-bash scripts/coverage.sh artifacts/cov-unit artifacts/e2e/coverage 70
-goreleaser release --snapshot --clean       # four archives plus checksums
-```
+## Checks
 
-CI runs these jobs: `lint`, `test` (race plus coverage), `build` (every command,
-`goreleaser check`, a snapshot, checksum verification), `e2e` (real Docker,
-merged coverage at or above 70%, and an assertion that no containers remain),
-`python-sdk` (Python 3.10 and 3.15, package builds and real-Docker E2E), and
-`typescript` (strict consumer types, real-Docker fault-injection E2E,
-browser-safe bundle, and an installed npm tarball).
-See [versioning and release checks](docs/versioning.md) for release preparation.
+Run commands from the repository root. Use fresh artifact directories. New
+behavior should have real Docker/HTTP E2E evidence; write the failure model
+before implementation when testing an isolated system. Do not add unit tests
+after writing implementation code. Existing checks remain gates:
 
-The Python SDK requires Python 3.10+ and has no runtime dependencies. Its
-behavioral gate uses real Docker and an HTTP fault proxy, with repeatable
-evidence retained even on failure:
+~~~sh
+make race
+make vet
+make lint
+make typescript
+~~~
 
-```sh
+| Area | Command | Evidence |
+|---|---|---|
+| Lifecycle, execution, env, concurrency, CLI | `bash scripts/e2e.sh artifacts/e2e` | Responses, logs, replay/cancellation outcomes and cleanup |
+| Files, archives, three SDKs and CLI | `PYTHON=python3.15 bash scripts/e2e-files.sh artifacts/files-e2e` | Metadata, archive validation, SDK outputs, source and cleanup |
+| One-shot stdin | `bash scripts/e2e-stdin.sh artifacts/stdin-e2e` | Go/raw HTTP/CLI limits, exact bytes, privacy and cleanup |
+| Request IDs and readiness | `bash scripts/e2e-observability.sh artifacts/observability-e2e` | Real Docker fault-proxy responses, logs and SSE |
+| Python SDK | `PYTHON=python3.15 bash scripts/e2e-python.sh artifacts/python-e2e` | Installed wheel and real Docker fault scenarios |
+| TypeScript SDK | `bash scripts/e2e-typescript.sh artifacts/typescript-e2e` | Types, browser bundle, installed tarball and Docker scenarios |
+
+`PYTHON=python3.15` is an example; use an installed Python 3.10+ interpreter.
+The Python runner builds and installs a wheel in an isolated virtual environment.
+Set `SDK_INSTALLED=1` only when testing a wheel already installed in that
+interpreter. To build distributions separately:
+
+~~~sh
 python3 -m pip install build
 make python-build
-make python-e2e
-```
+~~~
 
-`python-e2e` creates a virtual environment and installs a wheel. To exercise an
-already installed wheel, set `SDK_INSTALLED=1` and select its interpreter with
-`PYTHON`. Write the failure model before implementation when testing an isolated
-system. Prefer end-to-end coverage for new behavior; do not add unit tests after
-writing the implementation. See the [Python SDK contract](docs/sdk-python.md)
-and [failure model](sandbox-python/e2e/FAILURES.md).
+The primary E2E server uses port 18081 by default; set `E2E_PORT` if needed.
+Other runners choose their own ports and owner labels. Their cleanup targets
+only their own containers. Do not use global Docker cleanup while other work runs.
+The file runner prepares its pinned image before scenarios, retaining pull and
+inspect diagnostics; setup retries do not retry scenario requests.
 
-The observability gate uses a private Unix-socket proxy around real Docker to
-verify readiness failures, bounded probes, request IDs, structured log privacy,
-and SSE flushing. It retains JSON reports, responses, logs, and cleanup evidence:
+### Coverage and CI
 
-    bash scripts/e2e-observability.sh artifacts/observability-e2e
+~~~sh
+PYTHON=python3.15 E2E_COVERAGE=1 bash scripts/e2e.sh artifacts/e2e
+mkdir -p artifacts/cov-unit
+go test -race -covermode=atomic -coverpkg=./... ./... -args -test.gocoverdir="$PWD/artifacts/cov-unit"
+bash scripts/coverage.sh artifacts/cov-unit artifacts/e2e/coverage 70
+~~~
 
-Its failure model is in scripts/observability-FAILURES.md. CI runs this gate in
-the e2e job; faults affect only the private proxy and teardown uses a unique owner.
+With coverage enabled, the primary E2E script also runs instrumented file,
+archive and memory-HTTP probes into the same covdata directory. The current
+70% gate counts covered profile blocks; it is not the statement-weighted
+percentage shown by `go tool cover -func`. Do not compare those metrics as if
+they were interchangeable.
 
-The Docker-backed Go tests are opt-in:
+The [CI workflow](.github/workflows/ci.yml) defines `lint`, `test`, `build`,
+`e2e`, `files-e2e`, `stdin-e2e`, `typescript`, and the two-version `python-sdk`
+matrix. It builds release snapshots, enforces coverage, uploads E2E evidence,
+and checks container cleanup. [Versioning](docs/versioning.md) covers releases.
 
-```sh
+Optional backend checks require real Docker:
+
+~~~sh
 go test -tags docker ./internal/dockerbackend/ -run TestReal
-```
+~~~
+
+## Contracts and review
+
+Use the [design](docs/design.md) for architecture and the [HTTP API](docs/api.md),
+[OpenAPI](api/openapi.yaml), [CLI](docs/cli.md), [Go](docs/sdk.md),
+[Python](docs/sdk-python.md), and [TypeScript](docs/sdk-typescript.md) references
+for public behavior. Update all affected surfaces together. Keep shared limits
+and lifecycle semantics in the HTTP contract; SDK guides should explain their
+own signatures, return values and recovery differences.
+
+Document implemented behavior, including failure and compatibility limits.
+Keep unimplemented ideas in [future directions](docs/future.md). Validate examples
+and links, and report only checks that actually ran. Before merging, test against
+the current base branch: separately passing changes can still conflict through
+shared handler signatures, schema inventories or SDK request models.
 
 ## Commits
 
-Subjects follow `type(scope): summary`; the scope is required.
+Subjects use `type(scope): summary`, at most 72 characters. Scope is required,
+lowercase kebab-case; the summary starts lowercase. Supported types are `feat`,
+`fix`, `style`, `docs`, `refactor`, `test`, `chore`, `build`, and `ci`. Use `!`
+before the colon for breaking changes.
 
-- Types: `feat`, `fix`, `style`, `docs`, `refactor`, `test`, `chore`, `build`, `ci`
-- Scope: lowercase kebab-case, for example `sdk`, `cli`, `daemon`, `docker`, `contracts`
-- Summary: starts lowercase; the entire subject is at most 72 characters
-- `!` before the colon marks a breaking change
-
-```text
+~~~text
 feat(sdk): resume streams from the last event id
-fix(daemon): classify external stop as evicted, not exited
-```
-
-A tracked `commit-msg` hook rejects anything else once per clone:
-
-```sh
-make install-hooks   # point git at .githooks
-make check-commit    # validate the latest commit
-```
-
-## Architecture and contracts
-
-Read the [design](docs/design.md) before changing execution or lifecycle
-behavior. The [HTTP API](docs/api.md), [Go SDK](docs/sdk.md),
-[Python SDK](docs/sdk-python.md), and
-[CLI](docs/cli.md) documents define the public contracts; update them with
-any behavior changes.
-
-For changes to execution, cancellation, streaming, or container lifecycle,
-prefer end-to-end scenarios against real Docker. Keep repeatable evidence in
-`artifacts/`, including commands, responses, logs, and cleanup results.
-Only report checks that actually ran.
-
-For TypeScript SDK changes, use Node 22+ and run:
-
-~~~sh
-make typescript
-bash scripts/e2e-typescript.sh artifacts/typescript-e2e
+docs(api): clarify concurrent execution outcomes
 ~~~
 
-The E2E runner starts an isolated authenticated daemon, injects faults through
-a proxy around real responses, verifies the package, and retains repeatable
-JSON/JSONL/log evidence plus container cleanup results. It does not add a
-fake-only unit suite. Write failure scenarios before implementation and keep
-the [SDK contract](docs/sdk-typescript.md) aligned with behavior.
-
-File operation changes require Node 22+, Python 3.10+, and run the three-SDK and CLI real-Docker gate:
-
-~~~sh
-PYTHON=python3.15 bash scripts/e2e-files.sh artifacts/files-e2e
-~~~
-
-The files-e2e CI job runs this same command and uploads requests, SDK outputs,
-server logs, the source diff, and owner-scoped container cleanup evidence.
-
-With E2E_COVERAGE=1, scripts/e2e.sh also runs the real file scenarios with
-instrumented daemon, CLI, Go client probe and memory HTTP probe binaries.
-All counters feed the same coverage directory and unchanged 70% merged gate.
-For a standalone instrumented file run, set E2E_COVERAGE=1 and optionally
-FILES_COVER_DIR to an existing covdata directory. Node 22+ and Python 3.10+
-are required for the coverage E2E command as well.
-
-The file runner verifies its pinned alpine:3.21 fixture before starting the
-daemon, with at most three 120-second Docker pull setup attempts. Image inspect
-and pull diagnostics are retained; scenario requests themselves are not retried
-by this setup step.
+Run `make install-hooks` once to enable the tracked commit-message hook.
+`make check-commit` validates the latest commit.

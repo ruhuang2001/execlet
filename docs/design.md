@@ -18,15 +18,6 @@ The module is `github.com/ruhuang2001/tiny-sandbox`; `sandbox-go` is the package
 
 This project answers those questions with working code and tests rather than prose. The API semantics follow the public documentation of PPIO Sandbox and E2B where they agree; it does not claim wire compatibility with either.
 
-## Execution and file capabilities
-
-- Per-execution environment overrides and working directory.
-- Bounded directory listing with cursor pagination.
-- Structured request/completion logs and Docker readiness checks.
-- Bounded one-shot stdin, followed by EOF.
-- Bounded tar upload/download for directory transfer.
-- Opt-in concurrent executions (1–8 slots; default 1), with independent cancellation.
-
 ## Goals
 
 1. **Lifecycle**: create, pause, resume, and kill sandboxes; a lifetime timeout and an idle timeout, each able to kill or pause.
@@ -309,7 +300,7 @@ cleanup behavior when the runtime fails.
 - The SDK reads `SANDBOX_DOMAIN` and `SANDBOX_API_KEY`; the HTTP transport is injectable.
 - Errors are a single `*Error` type carrying status, code, the full `Execution` where one exists, and an idempotency key where recovery failed. `errors.Is` works against sentinel values for every termination reason.
 - Time fields carry their unit in the name (`timeout_seconds`), because SDKs in different languages disagree on units.
-- The CLI writes command output to stdout and its own status to stderr, mirrors the command's exit code, returns 130 on Ctrl+C, and attaches a suggested fix to common errors.
+- The CLI writes command output to stdout and its own status to stderr. It passes through command exit codes 1–125 and returns 130 for confirmed cancellation; see [CLI exit codes](cli.md#exit-codes).
 - `sandboxctl doctor` checks configuration, server health, authentication, and Docker, then creates a sandbox, runs a command, and removes it.
 
 ### Operational visibility
@@ -338,7 +329,7 @@ State lives in memory, and it is bounded on four axes so a long-running agent ca
 
 The event log is the only copy of an execution's output; `stdout` and `stderr` are assembled from it when a client asks, which keeps one execution near one retained byte per byte of output instead of three.
 
-On startup, the server attempts to remove containers carrying its own owner label (`tiny-sandbox.owner=<owner>`, the `-owner` flag, defaulting to the listen address). An ordinary stop closes open streams, drains the HTTP server, and then removes every container the process created, so containers do not outlive a clean shutdown; startup cleanup covers a crash. Pin `-owner` when the listen address can change, or a restart on a different port will not see the previous process's containers. The end-to-end harness performs its own container cleanup. Durable state and runtime reconciliation are described in [future directions](future.md).
+On startup, the server attempts to remove containers carrying its own owner label (`tiny-sandbox.owner=<owner>`, the `-owner` flag, defaulting to the listen address). An ordinary stop closes streams, drains HTTP requests for up to ten seconds, then attempts container removal within a separate ten-second budget. Removal is best effort; startup cleanup covers crashes and failed removals. Pin `-owner` when the listen address can change. The end-to-end harness performs its own container cleanup. Durable state and runtime reconciliation remain [future directions](future.md).
 
 ## Verification
 
@@ -401,11 +392,9 @@ Recorded because earlier builds hit them, not as hypotheticals:
 6. **Cleanup must not inherit the caller's deadline.** The cancel escalation and container removal run on `context.WithoutCancel` with their own bounds. A client that gives up on the request would otherwise skip SIGTERM's grace and destroy the sandbox.
 7. **A background reader must be joined.** The SSE ping goroutine writes to the response writer; the handler waits for it before returning, because net/http reuses that writer for the next request on the connection.
 8. **A backend call must not be unbounded under a lock.** The reaper skips a sandbox whose lock is held, so a runtime call that never returns under `sb.mu` would disable that sandbox's timeouts permanently. Start-execution calls and the OOM baseline read are bounded by `BackendCallTimeout`; the process still outlives them.
-9. **Shutdown needs to tell streams.** `http.Server.Shutdown` waits for handlers but does not cancel their contexts, so an open SSE stream would hold the shutdown until its deadline and the container would outlive the process. The handler ends streams when the shutdown signal closes, and the store then removes every container it created.
+9. **Shutdown needs to tell streams.** `http.Server.Shutdown` waits for handlers but does not cancel their contexts, so an open SSE stream would hold the shutdown until its deadline and the container would outlive the process. The handler ends streams when the shutdown signal closes, and the store then attempts bounded, best-effort removal of its containers.
 10. **Pause must be measured, not asserted.** Prove it with a counter that advances across pause and resume, not with the state field.
-11. **A working directory must not go through Docker's exec `WorkingDir`.** The runtime applies it before the wrapper shell runs, so an unusable directory produces a startup failure rather than a command. Measured against a real daemon, for `cwd: /does-not-exist`: Docker's field gives exit `127` and the runtime message on **stdout**, where it reads like the program's own output and collides with a missing command; chdir inside the wrapper gives exit `126` with a marker on **stderr**. Only the second is a usable contract. A missing directory did *not* make a later cancel escalate to removing the container, so cancellation is not the reason for the wrapper; the reason is the exit code and the stream. The wrapper still writes the PID before the chdir, and a test pins that order, because everything after the PID write fails somewhere cancel still works.
-12. **A shell in the path must not interpret the request.** Two measured cases, both reproduced on Alpine's BusyBox `sh` and Debian's dash. First, `cd` without `-P` simplifies `..` lexically before touching the filesystem, so `cwd: /work/link/..` with `link -> /data` runs in `/work`, and `/nope/..` succeeds instead of failing; the wrapper uses `cd -P`. Second, a shell imports only the environment names it accepts, so dash silently drops `MY-VAR` and `CONFIG.KEY` and both shells rewrite `IFS`, `PWD` and `SHLVL`; the wrapper re-applies the request's entries through `env --` at the last step, by absolute path because a request may replace `PATH`. That makes `env` an image dependency, which the HTTP contract states; the alternative was dropping names the contract accepts. Two more details followed from review: `env --` ends option parsing, not assignment parsing, so a command path containing `=` would be applied as a variable and its environment printed to stdout as output — a fixed `sh -c 'exec "$@"'` trampoline ends the assignments where the environment does. And the wrapper assigns no shell variable at all, because assigning to a name the image already exported rewrites it.
-13. **Documentation bloat.** Evidence goes in `artifacts/`; prose stays readable.
+11. **Execution context must survive the wrapper.** Change directories inside the wrapper so unusable paths return exit 126 on stderr; use physical path resolution. Apply environment overrides through the image env utility after shell startup. See the [execution request contract](api.md#post-v1sandboxessandbox_idexecutions) for limits, image requirements, and the command-path exception.
 
 ### Directory listing
 

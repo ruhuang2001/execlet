@@ -1,8 +1,7 @@
 # Python SDK
 
 Status: normative. Contract for `sandbox-python`, the `tiny-sandbox` Python
-distribution imported as `tiny_sandbox`. The SDK speaks the existing [HTTP
-contract](api.md); it changes neither the Go SDK nor the server API.
+distribution imported as `tiny_sandbox`. The SDK speaks the [HTTP contract](api.md).
 
 ## Installation and quick start
 
@@ -135,10 +134,11 @@ keyword-only `cancel=token`; omitting it means no caller deadline.
 | Executions | `start_execution(sandbox_id, request)`, `get_execution(sandbox_id, execution_id)`, `list_executions(sandbox_id)`, `cancel_execution(sandbox_id, execution_id)` |
 | Streaming | `stream_execution(sandbox_id, execution_id, *, on_event=None, on_stdout=None, on_stderr=None)` |
 | Conveniences | `exec(sandbox_id, command)`, `exec_stream(sandbox_id, command, *, on_event=None, on_stdout=None, on_stderr=None)` |
-| Files | `read_file(sandbox_id, path) -> bytes`, `write_file(sandbox_id, path, data)`, `list_files(sandbox_id, path)`, `read_archive(sandbox_id, path) -> bytes`, `write_archive(sandbox_id, path, data)` |
+| Files | `read_file(sandbox_id, path) -> bytes`, `write_file(sandbox_id, path, data)`, `list_files(sandbox_id, path, *, limit=100, cursor="", cancel=None) -> FileList`, `read_archive(sandbox_id, path) -> bytes`, `write_archive(sandbox_id, path, data)` |
 
-Files preserve raw bytes; paths must be absolute. List methods return lists of
-typed resources. Execution lists omit retained output at the HTTP layer; get
+Files preserve raw bytes; paths must be absolute. Sandbox and execution lists return lists of
+typed resources; directory listing returns a `FileList` page. Execution lists
+omit retained output at the HTTP layer; get
 or stream an execution to retrieve its output.
 
 `exec` and `exec_stream` start an execution and wait for completion. They return
@@ -192,33 +192,70 @@ completion can race cancellation. Plain `cancel_execution` returns the server's
 latest snapshot, which may still be running; it does not add this confirmation
 loop.
 
+### One-shot stdin
+
+`ExecuteRequest.stdin` sends UTF-8 text once, followed by EOF; omitted or empty input
+means EOF. The limit is 1 MiB of decoded bytes, including NULs. Execution-start JSON has
+a separate 8 MiB limit; command metadata remains limited to 1 MiB. Set input on the
+request to `start_execution`, then stream the returned execution. This is not
+interactive input. The server does not return stdin in execution metadata, but a command
+can print it to output. See the [input contract](api.md#one-shot-stdin) for image
+requirements and cleanup behavior. Use compatible client and server revisions; older
+servers can ignore unsupported request fields.
+
+### Concurrent executions
+
+Set `CreateSandboxRequest.max_concurrent_executions` when creating a sandbox: the
+default is 1 and the accepted range is 1–8. Start each execution separately and stream
+its ID. A full sandbox returns `busy`. Cancellation normally affects one execution;
+pause/resume applies to all work, and container-removal fallback can terminate siblings.
+With a configured limit above one, an unexplained exit 137 is `unknown`: `exec` raises
+`Error(code="unknown")`. See the [concurrency policy](api.md#concurrent-execution-policy).
+
 ## Streaming and callbacks
 
-`on_event(event)` receives typed events; `on_stdout(chunk)` and
-`on_stderr(chunk)` receive strings. Callbacks run synchronously in the reading
-thread, so keep them short. `on_event` includes `stdout`, `stderr`, `truncated`,
-and `complete`. If using both general and output callbacks, avoid rendering the
-same chunk twice.
+`on_event(event)` receives typed events; `on_stdout(chunk)` and `on_stderr(chunk)`
+receive strings. Callbacks run synchronously in the reading thread, so keep them short.
+`on_event` includes `stdout`, `stderr`, `truncated`, and `complete`. If using both
+general and output callbacks, avoid rendering the same chunk twice.
 
-On disconnect, the SDK reconnects with `Last-Event-ID` set to the last fully
-delivered event ID and ignores replayed IDs already delivered. Partial frames
-do not advance that cursor. Reconnects share one `max_retries` budget for the
-entire stream; receiving output does not replenish it. SSE reconnects use
-backoff but do not apply `Retry-After`. A successful `complete` event supplies
-the final execution.
+On disconnect, the SDK reconnects with `Last-Event-ID` set to the last fully delivered
+event ID and ignores replayed IDs already delivered. Partial frames do not advance that
+cursor. Reconnects share one `max_retries` budget for the entire stream; receiving
+output does not replenish it. SSE reconnects use backoff but do not apply `Retry-After`.
+A successful `complete` event supplies the final execution.
 
-An exception from any callback becomes `Error(code="callback")`, chained to
-that exception, even if the callback raised another SDK `Error`. The stream
-closes without retrying or canceling the remote execution. Explicitly call
-`cancel_execution` if remote work should stop. Other stream failures also leave
-remote work running; only caller cancellation invokes automatic cancellation.
+An exception from any callback becomes `Error(code="callback")`, chained to that
+exception, even if the callback raised another SDK `Error`. The stream closes without
+retrying or canceling the remote execution. Explicitly call `cancel_execution` if remote
+work should stop. Other stream failures also leave remote work running; only caller
+cancellation invokes automatic cancellation.
 
 Replay covers retained output, not unlimited output. A `truncated` event or
-`execution.output_truncated` indicates data was discarded; reconnecting cannot
-recover it. Output follows the server's UTF-8 text contract, including U+FFFD
-replacement of invalid bytes. Encode binary stdout before sending it. SSE lines
-and complete event frames are bounded to 16 MiB, covering the largest valid
-server event. Go bounds individual lines to the same size.
+`execution.output_truncated` indicates data was discarded; reconnecting cannot recover
+it. Output follows the server's UTF-8 text contract, including U+FFFD replacement of
+invalid bytes. Encode binary stdout before sending it. SSE lines and complete event
+frames are bounded to 16 MiB, covering the largest valid server event. Go bounds
+individual lines to the same size.
+
+## Files
+
+`client.list_files(sandbox_id, path, limit=100, cursor="")` returns a `FileList` with
+`entries` and `next_cursor`. Pass `next_cursor` as the next call’s `cursor`. An optional
+`cancel=token` follows the normal request cancellation contract. Entries describe
+immediate children with name, size, mode, modification time, and directory status.
+Follow the returned cursor until it is empty or absent. Pages are name-ordered, not a
+filesystem snapshot. The default page size is 100, with a maximum of 1000; bounded scans
+can fail with HTTP 413. See [directory listing](api.md#directory-listing) for cursor and
+metadata semantics.
+
+`read_archive(sandbox_id, path)` returns tar `bytes`; `write_archive(sandbox_id, path, data)` uploads them. Both accept keyword-only `cancel=token`. Downloads are rooted at
+the selected path's basename; uploads extract beneath an existing directory. Archive
+downloads retry normally. Uploads make one attempt because extraction can be partial:
+stop in-container filesystem writers and inspect remote state after a failed or
+ambiguous upload. Only relative link targets without `..` are accepted; hard links must
+target an earlier regular member. See the [tar contract](api.md#tar-transfer) for
+validation and transfer limits.
 
 ## Errors
 
@@ -226,7 +263,7 @@ Operational SDK failures use `Error`. Its stable fields are `code`, `status_code
 (0 for client-side failures), `execution`, `idempotency_key`, and `cause`.
 Python exception chaining preserves the underlying exception where available.
 Prefer checking `error.code` for exact classification. `error.matches(code)`
-also supports Go-style sentinel matching: status 404 matches `not_found`,
+also supports status and exit-code matching: status 404 matches `not_found`,
 status 401 matches `unauthorized`, and a retained nonzero exit code matches
 `nonzero_exit` even if the termination reason is different. There is no
 exception subclass per API code. The package exports the string constants
@@ -246,8 +283,8 @@ except Error as error:
         raise
 ```
 
-Outcome codes include `nonzero_exit`, `timeout`, `canceled`, `oom`, and
-`evicted`. `cancel_unconfirmed` means stopping remote work was not confirmed;
+Outcome codes include `nonzero_exit`, `timeout`, `canceled`, `oom`,
+`evicted`, and `unknown`. `cancel_unconfirmed` means stopping remote work was not confirmed;
 `callback` means application callback code failed. API failures retain codes
 such as `not_found`, `unauthorized`, `busy`, and `invalid_state`, along with
 HTTP status. Unknown future termination reasons remain observable as errors in
@@ -275,14 +312,14 @@ The policy matches Go except for configuring zero retries:
 ## Compatibility and differences from Go
 
 The wire API, idempotency rules, safe retry set, retry status set, jitter,
-constant reconnect budget, retained-output replay, files, and outcome mapping
+constant reconnect budget, retained-output replay, and file operations
 match the Go contract. Additive response fields and unknown string values are
 accepted. A newer request field may be ignored by an older server; successful
 HTTP status does not prove an optional capability was enforced. Consult the
 server's matching API specification before depending on execution deadlines or
 resource controls.
 
-Three differences are deliberate:
+Important differences:
 
 1. Python's `max_retries=0` disables retries; Go's zero uses its default.
 2. Python automatic cancellation requires a terminal snapshot before returning
@@ -291,26 +328,14 @@ Three differences are deliberate:
 3. Python always wraps callback exceptions as `callback`, without retrying.
    Go currently passes through callback errors already typed as its SDK error,
    which can make a retryable callback error reconnect.
+4. Python's `matches("nonzero_exit")` also matches retained nonzero exit codes
+   from timeout, OOM, or other reasons. Go requires an `exited` reason for this
+   fallback. Check Python's exact `error.code` to distinguish these outcomes.
 
 Python uses synchronous callbacks, dataclasses, one exception type, and context
 managers instead of Go contexts, pointer options, and `errors.Is`.
 
-### Contract clarifications discovered during the port
-
-Issue #2 predates execution deadlines. The current HTTP/OpenAPI contract already
-supports `timeout_seconds`; this SDK sends that server field and distinguishes
-it from local caller cancellation. No server timeout feature is invented here.
-
-The HTTP cancellation endpoint can return a running snapshot; a `200` alone
-cannot prove termination. Automatic cancellation therefore needs the explicit
-confirmation rule and one shared five-second recovery budget. Callback
-exceptions need an unconditional wrapper to prevent an SDK-shaped exception
-from accidentally entering the transport retry path. Forward compatibility also
-requires preserving unknown strings and absent additive fields, beyond merely
-ignoring extra JSON keys. These are SDK contract clarifications; existing Go
-and HTTP behavior is preserved.
-
-## Reproduce the entry gate
+## End-to-end verification
 
 The end-to-end suite uses a real `sandboxd` and Docker, with an HTTP fault proxy
 for dropped connections and replay. The central scenario runs a long command,
@@ -332,63 +357,3 @@ pre-implementation [failure model](../sandbox-python/e2e/FAILURES.md). CI runs
 the installed package against real Docker on Python 3.10 and 3.15 and uploads
 evidence even on failure. The wheel and source distribution are verification
 artifacts, not publication to a package index.
-
-## Directory listing
-
-client.list_files(sandbox_id, "/work", limit=100, cursor="") returns FileList
-with entries (FileEntry: name, size, mode, mtime, is_dir) and next_cursor.
-Pass each nonempty next_cursor to retrieve the next page. Limits are 1–1000;
-names sort bytewise without snapshot consistency. cancel follows the normal
-request cancellation contract. Invalid requests and bounded scan failures
-raise Error with the server code.
-
-## One-shot stdin
-
-The ExecuteRequest stdin field sends UTF-8 text once, followed by EOF. At most
-1 MiB of decoded bytes (including NULs) is accepted; omitted and empty mean
-EOF. Oversized input is 413 payload_too_large. Execution-start JSON bodies are separately
-bounded at 8 MiB to accommodate escaping. This is not interactive input.
-Set stdin on ExecuteRequest and pass it to start_execution, then stream the
-returned execution. Older servers ignore this field; require a server that
-implements the input contract.
-
-A keyed replay must match command, env, cwd and stdin. Input is staged in a
-private temporary directory, opened and unlinked before the command runs,
-with a bounded best-effort cleanup after startup failure or completion. If the
-runtime is unreachable, paused, or cannot start a cleanup process, container
-removal is the final cleanup boundary. Execution history retains only an input
-fingerprint. List responses never contain input or output. Get and complete-SSE
-snapshots only contain input when the command prints it. Runtime administrators can inspect live input; this is not a secret vault.
-
-Non-empty stdin requires writable /tmp and /bin/mkdir, /bin/rm and /bin/rmdir
-in the image. Missing staging tools cause backend_error before user execution.
-
-Command metadata remains limited to 1 MiB total UTF-8 bytes, counting one
-separator byte per argv element. Larger commands return 413 payload_too_large;
-this keeps complete SSE events within the SDK framing limits even when stdin
-uses the larger execution-request JSON budget.
-
-## Tar transfer
-
-client.read_archive(sandbox_id, path, cancel=...) returns tar bytes rooted at path's
-basename. client.write_archive(sandbox_id, path, data, cancel=...) extracts
-under an existing directory. Read retries follow normal policy; upload uses
-one attempt because runtime failure can leave partial extraction. Server
-limits are 32 MiB encoded, 16 MiB payload and 4096 entries. Invalid tar raises
-Error(invalid_request); exceeded limits raise Error(payload_too_large).
-
-Archive upload callers must quiesce in-container filesystem writers and inspect
-remote state after any failed or ambiguous upload, because extraction can be partial.
-The aggregate path/link text limit is 1 MiB, in addition to the byte/member limits.
-
-## Concurrent executions
-
-Set max_concurrent_executions when creating a sandbox (1–8, default 1).
-Go uses CreateSandboxRequest.MaxConcurrentExecutions; Python and TypeScript use
-max_concurrent_executions; the CLI uses --max-concurrent-executions. Sandbox views
-return the limit. Start executions separately and stream each ID; cancellation
-normally affects only its selected execution. Pause/resume applies to all work.
-Container-removal fallback affects siblings, as described in the HTTP contract.
-Above one configured slot, unexplained exit 137 has termination_reason unknown,
-which is never a successful SDK outcome (Go ErrUnknown; Python error code unknown;
-TypeScript reason unknown with terminationReason unknown).

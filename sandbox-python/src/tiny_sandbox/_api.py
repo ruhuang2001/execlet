@@ -115,8 +115,14 @@ class SandboxAPI(Transport, ABC):
         cancel: CancellationToken | None = None,
     ) -> Execution:
         """Start once across retries, recovering uncertain starts on cancellation."""
+        # The keyed request owns copies of the caller's list and dict, so a
+        # caller that changes them while the start is in flight cannot change
+        # what a recovery replays under the same key.
         keyed_request = replace(
-            request, idempotency_key=request.idempotency_key or secrets.token_hex(16)
+            request,
+            command=list(request.command),
+            env=dict(request.env) if request.env is not None else None,
+            idempotency_key=request.idempotency_key or secrets.token_hex(16),
         )
         if cancel is not None:
             try:

@@ -173,6 +173,47 @@ try {
     return { exitCodes: [ok.execution.exit_code, nonzero.execution.exit_code], timeoutReason: timeoutOutcome.reason };
   });
 
+  await run('env and cwd reach the process and env is never echoed', async () => {
+    const sb = await create();
+    const finish = async (request) => {
+      const started = await client.startExecution(sb.id, request);
+      return { started, done: await client.streamExecution(sb.id, started.id, evidence) };
+    };
+    // A shell would reject MY-VAR; reaching env proves the name passed through unchanged.
+    const placed = await finish({ command: ['sh', '-c', 'pwd; env'], env: { GREETING: 'hello-env', 'MY-VAR': 'dash' }, cwd: '/tmp' });
+    const lines = placed.done.stdout.split('\n');
+    assert.equal(lines[0], '/tmp');
+    assert.ok(lines.includes('GREETING=hello-env'), 'GREETING did not reach the process');
+    assert.ok(lines.includes('MY-VAR=dash'), 'a name a shell would reject did not reach the process');
+    assert.equal(placed.started.cwd, '/tmp');
+    assert.equal(placed.done.cwd, '/tmp');
+    assert.equal((await client.getExecution(sb.id, placed.started.id)).cwd, '/tmp');
+
+    const later = await finish({ command: ['sh', '-c', 'printf %s "${GREETING-unset}"'] });
+    assert.equal(later.done.stdout, 'unset', 'the environment leaked into a later execution');
+    assert.equal(later.started.cwd, null, 'an execution without cwd must report null');
+
+    // The command prints nothing, so the secret can only appear if a response echoed env.
+    const secret = await finish({ command: ['true'], env: { SECRET: 'e2e-secret-value' } });
+    const views = [secret.started, secret.done, await client.getExecution(sb.id, secret.started.id),
+      (await client.listExecutions(sb.id)).find(value => value.id === secret.started.id)];
+    for (const view of views) {
+      const raw = JSON.stringify(view);
+      assert.ok(!raw.includes('e2e-secret-value') && !raw.includes('"env"'), 'a response exposed env: ' + raw);
+    }
+
+    const missing = await finish({ command: ['true'], cwd: '/no/such/dir' });
+    assert.equal(missing.done.exit_code, 126);
+    assert.match(missing.done.stderr, /^sandbox: cwd is not a usable directory: \/no\/such\/dir/);
+    await rejected(client.startExecution(sb.id, { command: ['true'], cwd: 'relative' }), 'invalid_request');
+
+    const keyed = { command: ['true'], idempotency_key: 'e2e-env-key', env: { A: '1' } };
+    const first = await finish(keyed);
+    assert.equal((await client.startExecution(sb.id, { ...keyed, env: { A: '1' } })).id, first.started.id);
+    await rejected(client.startExecution(sb.id, { ...keyed, env: { A: '2' } }), 'idempotency_conflict');
+    return { cwd: placed.done.cwd, badCwdExit: missing.done.exit_code };
+  });
+
   await run('authenticated reconnect resumes without loss or duplicates', async () => {
     const sb = await create();
     let firstFrame = '';

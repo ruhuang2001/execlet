@@ -74,7 +74,10 @@ export class Client {
     if (!Array.isArray(request.command) || request.command.length === 0 || request.command.some(arg => typeof arg !== 'string')) {
       throw new SandboxError('invalid_request', 'sandbox: command must be a nonempty string array');
     }
-    const keyed: ExecuteRequest = { ...request, command: [...request.command], idempotency_key: request.idempotency_key || newKey() };
+    const keyed: ExecuteRequest = {
+      ...request, command: [...request.command], ...(request.env ? { env: { ...request.env } } : {}),
+      idempotency_key: request.idempotency_key || newKey(),
+    };
     try {
       return await this.start(sandboxID, keyed, options.signal);
     } catch (cause) {

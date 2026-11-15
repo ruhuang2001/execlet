@@ -172,6 +172,47 @@ class Suite:
         finally:
             self.direct.kill_sandbox(sb.id)
 
+    def env_cwd(self, name):
+        with self.sandbox() as sb:
+            def finish(request):
+                started = self.client.start_execution(sb.id, request)
+                return started, self.client.stream_execution(sb.id, started.id)
+
+            # A shell would reject MY-VAR; reaching env proves the name passed through unchanged.
+            started, done = finish(ExecuteRequest(
+                command=["sh", "-c", "pwd; env"], env={"GREETING": "hello-env", "MY-VAR": "dash"}, cwd="/tmp",
+            ))
+            lines = done.stdout.split("\n")
+            require(lines[0] == "/tmp", f"cwd not applied: {lines[0]!r}")
+            require("GREETING=hello-env" in lines, "GREETING did not reach the process")
+            require("MY-VAR=dash" in lines, "a name a shell would reject did not reach the process")
+            require(started.cwd == done.cwd == self.client.get_execution(sb.id, started.id).cwd == "/tmp",
+                    "cwd is not a typed field on every view")
+
+            later_started, later = finish(ExecuteRequest(command=["sh", "-c", 'printf %s "${GREETING-unset}"']))
+            require(later.stdout == "unset", "the environment leaked into a later execution")
+            require(later_started.cwd is None and "cwd" not in later_started.extra, "missing cwd must decode as None")
+
+            # The command prints nothing, so the secret can only appear if a response echoed env.
+            secret_started, secret_done = finish(ExecuteRequest(command=["true"], env={"SECRET": "e2e-secret-value"}))
+            views = [secret_started, secret_done, self.client.get_execution(sb.id, secret_started.id),
+                     next(v for v in self.client.list_executions(sb.id) if v.id == secret_started.id)]
+            for view in views:
+                raw = json.dumps(snapshot(view))
+                require("e2e-secret-value" not in raw and '"env"' not in raw, f"a response exposed env: {raw}")
+
+            _, missing = finish(ExecuteRequest(command=["true"], cwd="/no/such/dir"))
+            require(missing.exit_code == 126, f"bad cwd exit {missing.exit_code}, want 126")
+            require(missing.stderr.startswith("sandbox: cwd is not a usable directory: /no/such/dir"), "bad cwd marker missing")
+            error_from(lambda: self.client.start_execution(sb.id, ExecuteRequest(command=["true"], cwd="relative")), "invalid_request")
+
+            first, _ = finish(ExecuteRequest(command=["true"], idempotency_key="e2e-env-key", env={"A": "1"}))
+            replay = self.client.start_execution(sb.id, ExecuteRequest(command=["true"], idempotency_key="e2e-env-key", env={"A": "1"}))
+            require(replay.id == first.id, "an identical keyed replay started another execution")
+            error_from(lambda: self.client.start_execution(
+                sb.id, ExecuteRequest(command=["true"], idempotency_key="e2e-env-key", env={"A": "2"})), "idempotency_conflict")
+            return {"cwd": done.cwd, "bad_cwd_exit": missing.exit_code}
+
     def retry_statuses(self, name):
         evidence = []
         for status in (429, 500, 502, 503, 504, 400, 401, 404, 409, 413, 501):
@@ -356,13 +397,18 @@ class Suite:
             if fail:
                 faults.append(Fault("POST", r".*/executions", "status", remaining=20))
             self.proxy.arm(name, *faults)
+            # The caller's env changes while the start is in flight. Recovery
+            # must replay the invocation that was sent, or the server sees a
+            # different env under the same key and refuses it as a conflict.
+            env = {"PHASE": "original"}
             def interrupt():
                 if hold.accepted.wait(10):
+                    env["PHASE"] = "mutated"
                     token.cancel()
             thread = threading.Thread(target=interrupt, daemon=True)
             thread.start()
             started = time.monotonic()
-            exc = error_from(lambda: self.client.start_execution(sb.id, ExecuteRequest(command=["sh", "-c", "echo marker >> /tmp/recovered; sleep 30"]), cancel=token), "cancel_unconfirmed" if fail else "canceled")
+            exc = error_from(lambda: self.client.start_execution(sb.id, ExecuteRequest(command=["sh", "-c", "echo marker >> /tmp/recovered; sleep 30"], env=env), cancel=token), "cancel_unconfirmed" if fail else "canceled")
             elapsed = time.monotonic() - started
             thread.join(timeout=1)
             require(hold.accepted.is_set(), "original start was never accepted")
@@ -615,7 +661,7 @@ class Suite:
     def run(self):
         try:
             self.start()
-            scenarios = [("installed-distribution", self.distribution), ("entry-replay-confirmed-cancel", self.entry), ("lifecycle-files-resources", self.lifecycle),
+            scenarios = [("installed-distribution", self.distribution), ("entry-replay-confirmed-cancel", self.entry), ("lifecycle-files-resources", self.lifecycle), ("env-cwd", self.env_cwd),
                          ("retry-status-matrix", self.retry_statuses), ("retry-after", self.retry_after),
                          ("retry-configuration-and-cancel", self.retry_configuration), ("redirect-credential-boundary", self.credential_redirect),
                          ("tls-predispatch-cancellation", self.tls_predispatch_cancel),

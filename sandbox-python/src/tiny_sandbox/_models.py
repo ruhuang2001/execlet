@@ -73,6 +73,7 @@ class Execution(_Model):
     sandbox_id: str
     state: str = ""
     command: list[str] = field(default_factory=list)
+    cwd: str | None = None
     exit_code: int | None = None
     termination_reason: str | None = None
     stdout: str = ""
@@ -120,3 +121,5 @@ class ExecuteRequest(_Request):
     command: list[str]
     idempotency_key: str = ""
     timeout_seconds: int | None = None
+    env: dict[str, str] | None = None
+    cwd: str | None = None

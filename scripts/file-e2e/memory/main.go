@@ -70,12 +70,14 @@ func main() {
 	if regular != 1 || links != 1 || total != 9<<20 {
 		panic(fmt.Sprintf("regular=%d links=%d total=%d", regular, links, total))
 	}
+	metadataIterations := 0
 	for range 1000 {
 		page, err := c.ListFiles(ctx, sb.ID, "/", sandbox.ListFilesOptions{})
 		must(err)
 		if len(page.Entries) != 1 || page.Entries[0].Mode != 0o700 || !page.Entries[0].Mtime.Equal(mtime) {
 			panic(fmt.Sprintf("metadata: %+v", page))
 		}
+		metadataIterations++
 	}
 	single, err := c.ReadArchive(ctx, sb.ID, "/tree/alink")
 	must(err)
@@ -106,7 +108,7 @@ func main() {
 		panic("directory conflict mutated data")
 	}
 	verifyMemoryMutations(ctx, c)
-	summary, err := json.Marshal(map[string]any{"status": "passed", "regular_members": regular, "hardlinks": links, "payload_bytes": total, "metadata_iterations": 1000})
+	summary, err := json.Marshal(map[string]any{"status": "passed", "regular_members": regular, "hardlinks": links, "payload_bytes": total, "metadata_iterations": metadataIterations})
 	must(err)
 	fmt.Println(string(summary))
 	_, err = c.KillSandbox(ctx, sb.ID)

@@ -20,6 +20,9 @@ cleanup() {
  docker ps -aq --filter "label=tiny-sandbox.owner=$OWNER" >"$OUT/containers-after-cleanup.txt"
  [ ! -s "$OUT/containers-after-cleanup.txt" ] || code=1
  printf '{"owner":"%s","exit_code":%s,"remaining":%s}\n' "$OWNER" "$code" "$(wc -l <"$OUT/containers-after-cleanup.txt" | tr -d ' ')" >"$OUT/cleanup.json"
+ if [ "$code" -eq 0 ]; then
+  printf 'PASS: file API scenarios and memory HTTP regressions completed\n' | tee "$OUT/PASS"
+ fi
  exit "$code"
 }
 trap cleanup EXIT
@@ -73,5 +76,4 @@ if archive.get('upload_http_cases',0)<31: raise SystemExit(f'incomplete archive 
 memory=json.loads((out/'memory-results.json').read_text())
 if memory.get('metadata_iterations')!=1000: raise SystemExit(f'incomplete memory scenarios: {memory}')
 PYVERIFY
-printf 'PASS: file API scenarios and memory HTTP regressions completed\n' | tee "$OUT/PASS"
 COMPLETED=1

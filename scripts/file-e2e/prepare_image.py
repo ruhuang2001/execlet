@@ -6,9 +6,21 @@ import time
 
 out = pathlib.Path(sys.argv[1])
 image = "alpine:3.21"
+def inspect_image(log):
+    command = ["docker", "image", "inspect", image]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=15)
+    except subprocess.TimeoutExpired:
+        log.write("image inspect exceeded 15 seconds\n")
+        log.flush()
+        return subprocess.CompletedProcess(command, 124, stdout="", stderr="")
+    log.write(result.stdout + result.stderr)
+    log.flush()
+    return result
+
+
 with (out / "image-setup.log").open("w") as log:
-    inspected = subprocess.run(["docker", "image", "inspect", image], capture_output=True, text=True, timeout=15)
-    log.write(inspected.stdout + inspected.stderr)
+    inspected = inspect_image(log)
     for attempt in range(3):
         if inspected.returncode == 0:
             break
@@ -20,8 +32,7 @@ with (out / "image-setup.log").open("w") as log:
             log.write("pull exceeded 120 seconds\n")
         else:
             if pulled.returncode == 0:
-                inspected = subprocess.run(["docker", "image", "inspect", image], capture_output=True, text=True, timeout=15)
-                log.write(inspected.stdout + inspected.stderr)
+                inspected = inspect_image(log)
         if inspected.returncode != 0 and attempt < 2:
             time.sleep(attempt + 1)
     if inspected.returncode != 0:

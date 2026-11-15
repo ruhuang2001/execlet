@@ -120,6 +120,28 @@ func TestExecutions(t *testing.T) {
 		}
 	})
 
+	t.Run("completed execution no longer holds the sandbox", func(t *testing.T) {
+		// A client may start the next command the instant it sees the last
+		// one complete. Completion must therefore free the sandbox in the
+		// same step, or that start races the release and gets busy.
+		h := newHarness(t)
+		h.be.Programs["echo"] = memEcho
+		sb := h.create(daemon.CreateRequest{})
+		for i := range 1000 {
+			ex, _, err := h.s.StartExecution(ctx, sb.ID, daemon.ExecuteRequest{Command: []string{"echo", "x"}})
+			if err != nil {
+				t.Fatalf("start %d right after the previous completion: %v", i, err)
+			}
+			for {
+				got, err := h.s.GetExecution(sb.ID, ex.ID)
+				wantNoError(t, err)
+				if got.State == daemon.ExecCompleted {
+					break
+				}
+			}
+		}
+	})
+
 	t.Run("execution outlives the request context", func(t *testing.T) {
 		h := newHarness(t)
 		h.be.Programs["echo"] = memEcho

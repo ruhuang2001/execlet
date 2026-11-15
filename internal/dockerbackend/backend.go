@@ -343,7 +343,7 @@ func (b *Backend) WriteFile(ctx context.Context, containerID, path string, data 
 
 // ---------------------------------------------------------------- helpers
 
-// capture runs a command and returns its stdout, for the cgroup read.
+// capture runs an internal command and returns its stdout.
 func (b *Backend) capture(ctx context.Context, containerID string, command []string) ([]byte, error) {
 	return b.captureAs(ctx, containerID, "", command)
 }
@@ -368,7 +368,7 @@ func (b *Backend) captureAs(ctx context.Context, containerID, user string, comma
 		return nil, err
 	}
 	if inspect.ExitCode != nil && *inspect.ExitCode != 0 {
-		return nil, fmt.Errorf("cgroup read exited %d: %s", *inspect.ExitCode, strings.TrimSpace(stderr.String()))
+		return nil, fmt.Errorf("internal exec exited %d: %s", *inspect.ExitCode, strings.TrimSpace(stderr.String()))
 	}
 	return stdout.Bytes(), nil
 }

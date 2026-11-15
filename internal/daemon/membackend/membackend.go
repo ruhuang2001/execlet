@@ -281,6 +281,7 @@ func (b *Backend) WriteFile(_ context.Context, id, path string, data []byte) err
 	if err != nil {
 		return err
 	}
+	c.detachHardlinks(path)
 	c.files[path] = append([]byte(nil), data...)
 	delete(c.archiveHeaders, path)
 	return nil

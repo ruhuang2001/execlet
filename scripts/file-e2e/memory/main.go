@@ -96,14 +96,16 @@ func main() {
 	_, err = cw.Write([]byte("x"))
 	must(err)
 	must(cw.Close())
-	if err := c.WriteArchive(ctx, sb.ID, "/", conflict.Bytes()); err == nil {
-		panic("directory replacement accepted")
+	conflictErr := c.WriteArchive(ctx, sb.ID, "/", conflict.Bytes())
+	if typed, ok := errors.AsType[*sandbox.Error](conflictErr); !ok || typed.Code != "invalid_request" || typed.StatusCode != 400 {
+		panic(fmt.Sprintf("unexpected directory replacement error: %v", conflictErr))
 	}
 	still, err := c.ReadFile(ctx, sb.ID, "/tree/zdata")
 	must(err)
 	if len(still) != 9<<20 {
 		panic("directory conflict mutated data")
 	}
+	verifyMemoryMutations(ctx, c)
 	summary, err := json.Marshal(map[string]any{"status": "passed", "regular_members": regular, "hardlinks": links, "payload_bytes": total, "metadata_iterations": 1000})
 	must(err)
 	fmt.Println(string(summary))

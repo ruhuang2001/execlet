@@ -563,7 +563,8 @@ paths:
       description: >-
         Buffers and validates at most 32 MiB encoded, 16 MiB regular payload,
         and 4096 entries. Preserves regular bytes, directories, safe internal
-        relative symlinks and earlier-member hardlinks. Root entry is the
+        relative symlinks without parent traversal components (even normalized-safe
+        parent traversal is rejected) and earlier-member hardlinks. Root entry is the
         selected basename. Unsupported selected content intentionally returns 400,
         including a symlink selected without its target member; limits return 413.
       responses:

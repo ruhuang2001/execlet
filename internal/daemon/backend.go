@@ -154,7 +154,8 @@ type Backend interface {
 	// It only ever increases, so a delta across one execution attributes an
 	// OOM kill to that execution.
 	OOMKillCount(ctx context.Context, containerID string) (int64, error)
-	// ReadArchive returns bounded tar rooted at the selected file/directory basename.
+	// ReadArchive returns bounded, unvalidated tar bytes rooted at the selected basename.
+	// Callers must validate them with filearchive.Parse before serving or extracting.
 	ReadArchive(ctx context.Context, containerID, path string) ([]byte, error)
 	// WriteArchive extracts a validated archive beneath an existing directory.
 	// Failures can leave partial results; callers must quiesce concurrent writers.

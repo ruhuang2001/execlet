@@ -149,6 +149,12 @@ func (b *Backend) WriteArchive(_ context.Context, id, p string, archive *filearc
 			break
 		}
 	}
+	for name := range c.archiveHeaders {
+		if strings.HasPrefix(name, prefix) {
+			exists = true
+			break
+		}
+	}
 	if h, ok := c.archiveHeaders[p]; ok && h.Typeflag == tar.TypeDir {
 		exists = true
 	}
@@ -189,6 +195,7 @@ func (b *Backend) WriteArchive(_ context.Context, id, p string, archive *filearc
 	for _, entry := range archive.Entries() {
 		h := entry.Header
 		name := path.Join(p, h.Name)
+		c.detachHardlinks(name)
 		stored := h
 		if h.Typeflag == tar.TypeLink {
 			stored.Linkname = path.Join(p, h.Linkname)
@@ -204,4 +211,16 @@ func (b *Backend) WriteArchive(_ context.Context, id, p string, archive *filearc
 		}
 	}
 	return nil
+}
+
+// Replacing a path must not retarget existing links to its new bytes.
+func (c *container) detachHardlinks(target string) {
+	for name, h := range c.archiveHeaders {
+		if h.Typeflag == tar.TypeLink && h.Linkname == target {
+			h.Typeflag = tar.TypeReg
+			h.Linkname = ""
+			h.Size = int64(len(c.files[name]))
+			c.archiveHeaders[name] = h
+		}
+	}
 }

@@ -370,8 +370,8 @@ uses the larger execution-request JSON budget.
 
 ## Tar transfer
 
-client.read_archive(id, path, cancel=...) returns tar bytes rooted at path's
-basename. client.write_archive(id, destination, data, cancel=...) extracts
+client.read_archive(sandbox_id, path, cancel=...) returns tar bytes rooted at path's
+basename. client.write_archive(sandbox_id, path, data, cancel=...) extracts
 under an existing directory. Read retries follow normal policy; upload uses
 one attempt because runtime failure can leave partial extraction. Server
 limits are 32 MiB encoded, 16 MiB payload and 4096 entries. Invalid tar raises

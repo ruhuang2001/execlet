@@ -106,11 +106,16 @@ def check_archives(client, sid, out):
     call(tar_bytes([(str(i)+'x'*300,tarfile.REGTYPE,b'','') for i in range(3500)]),status=413)
     assert client.list_files(sid,'/archives/reject').entries==[]
     client.pause_sandbox(sid)
-    fifo=out/'input.fifo';os.mkfifo(fifo)
-    rejected=subprocess.run([str(out/'sandboxctl'),'files','archive','upload',sid,'/archives/cli',str(fifo)],capture_output=True,text=True,timeout=5)
-    assert rejected.returncode!=0 and 'regular file' in rejected.stderr
+    fifo=out/'input.fifo'
+    try:
+        fifo.unlink(missing_ok=True)
+        os.mkfifo(fifo)
+        rejected=subprocess.run([str(out/'sandboxctl'),'files','archive','upload',sid,'/archives/cli',str(fifo)],capture_output=True,text=True,timeout=5)
+        assert rejected.returncode!=0 and 'regular file' in rejected.stderr
+    finally:
+        fifo.unlink(missing_ok=True)
     failed_destination=subprocess.run([str(out/'sandboxctl'),'files','archive','download',sid,'/archives/source/tree',str(out/'missing-directory'/'archive.tar')],capture_output=True,text=True,timeout=5)
-    assert failed_destination.returncode!=0 and client.get_sandbox(sid).state=='paused'
+    assert failed_destination.returncode!=0 and 'no such file' in failed_destination.stderr.lower() and client.get_sandbox(sid).state=='paused'
     call(tar_bytes([safe,hostile[0]]))
     assert client.get_sandbox(sid).state=='paused'
     assert client.read_archive(sid,'/archives/source/tree')
@@ -118,7 +123,7 @@ def check_archives(client, sid, out):
     result=subprocess.run([str(out/'sandboxctl'),'files','archive','download',sid,'/large',str(out/'should-not-exist.tar')],capture_output=True,text=True,timeout=40)
     assert result.returncode!=0 and not (out/'should-not-exist.tar').exists()
     check_nonroot(client,out,fixture)
-    (out/'archive-results.json').write_text(json.dumps({'status':'passed','invalid_or_limited_uploads':len(records),'sdks':['go','python','typescript'],'cli':['upload','download']},indent=2))
+    (out/'archive-results.json').write_text(json.dumps({'status':'passed','invalid_or_limited_uploads':sum(r['status']>=400 for r in records),'upload_http_cases':len(records),'sdks':['go','python','typescript'],'cli':['upload','download']},indent=2))
 
 
 def check_nonroot(client, out, fixture):
@@ -136,4 +141,6 @@ def check_nonroot(client, out, fixture):
         (out/'nonroot-results.json').write_text(json.dumps({'status':'passed','image_user':'65534:65534','destination':'/root'}))
     finally:
         if sandbox is not None: client.kill_sandbox(sandbox.id)
-        subprocess.run(['docker','image','rm',image],capture_output=True,text=True,timeout=30,check=True)
+        cleanup=subprocess.run(['docker','image','rm',image],capture_output=True,text=True,timeout=30)
+        (out/'nonroot-image-cleanup.json').write_text(json.dumps({'exit_code':cleanup.returncode,'stdout':cleanup.stdout,'stderr':cleanup.stderr}))
+    assert cleanup.returncode==0,cleanup.stderr

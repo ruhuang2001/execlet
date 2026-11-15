@@ -309,7 +309,7 @@ data: {"id":"exe_456","state":"completed","exit_code":0,"termination_reason":"ex
 | JSON request body | 1 MiB (execution starts: 8 MiB) | `413 payload_too_large` |
 | Directory listing archive scan | 64 MiB / 10000 headers | `413 payload_too_large` |
 | Directory listing runtime | 30 seconds | `502 backend_error` |
-| Tar transfer | 32 MiB encoded / 16 MiB payload / 4096 members | `413 payload_too_large` |
+| Tar transfer | 32 MiB encoded / 16 MiB payload / 4096 members / 4096-byte names / 1 MiB total path text | `413 payload_too_large` |
 | File upload | 10 MiB | `413 payload_too_large` |
 | File download through Docker | 10 MiB | currently `502 backend_error` from archive extraction |
 
@@ -430,17 +430,20 @@ The body is tar (application/x-tar or application/octet-stream). A 204 means
 extraction finished beneath the existing directory. Missing destinations are
 404 and nondirectories are 400. Every header and payload is validated before
 any filesystem mutation. Invalid later members cannot leave earlier members
-written. Names are relative UTF-8, at most 4096 bytes (1 MiB aggregate member/link path text), with no NUL, backslash,
+written. Names are relative UTF-8, at most 4096 bytes (1 MiB aggregate member/link path text), with no NUL,
+backslash,
 absolute path or parent traversal component. Duplicate names, nondirectory
 ancestors, device/FIFO/sparse members and extended attributes are rejected.
 Only regular files, directories, symlinks and hardlinks are supported.
-Symlinks use relative targets without parent traversal and must refer to
+The supported symlink subset uses relative targets with no parent traversal
+components, even when normalization would keep them inside the archive. They must refer to
 a regular-file or directory member in the archive; hardlinks must refer
 to an earlier regular member by its archive-root-relative name. Unsupported
 PAX fields are rejected. UID/GID/owner names and special permission bits are
 not imported; ordinary permission bits, mtime and bytes are preserved.
 
-Existing destination/ancestor symlinks are rejected before extraction; archive
+Existing destination/ancestor symlinks are rejected with 400 invalid_request
+before extraction; archive
 entries cannot create symlink ancestors for later writes. Container path checks
 use sh as container root (matching Docker extraction privileges) with positional
 arguments in bounded 256 KiB batches. This protects against supplied archive

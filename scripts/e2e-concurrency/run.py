@@ -192,7 +192,7 @@ def paused_missing_cancel():
     try:
         call("POST", path(sb, a["id"]) + "/cancel")
     except AssertionError as error:
-        assert "404" in str(error) and "not_found" in str(error), error
+        assert "409" in str(error) and "invalid_state" in str(error) and "evicted" in str(error), error
     finish(sb, a, "evicted")
     finish(sb, b, "evicted")
     return {"target": a["id"], "sibling": b["id"]}

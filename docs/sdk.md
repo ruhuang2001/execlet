@@ -70,7 +70,7 @@ directory:
 
 | Field | Type | Accepted values |
 |---|---|---|
-| `Env` | `map[string]string` | at most 64 entries; 128-byte names, 8192-byte values, 32768 bytes in total; no `=`, NUL or newline in a name, no NUL in a value |
+| `Env` | `map[string]string` | at most 64 entries; 128-byte names, 8192-byte values, 32768 bytes in total; names must be non-empty and contain no `=`, NUL or newline; values contain no NUL |
 | `Cwd` | `string` | empty for the image's working directory, else an absolute path of at most 4096 bytes |
 
 `Env` is additive. A name here overrides the same name from the image, every

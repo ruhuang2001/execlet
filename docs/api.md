@@ -29,7 +29,7 @@ unknown paths or unsupported methods may use plain text:
 | 404 | `not_found` | sandbox, execution, or file does not exist | no |
 | 409 | `invalid_state` | operation not allowed in the sandbox's current state (see transition table) | no |
 | 409 | `busy` | the sandbox already has a running execution | no |
-| 409 | `idempotency_conflict` | idempotency key reused with a different command | no |
+| 409 | `idempotency_conflict` | idempotency key reused with a different `command`, `cwd`, or `env` | no |
 | 413 | `payload_too_large` | JSON request body or file upload exceeds a limit | no |
 | 429 | `rate_limited` | a create would exceed the live-sandbox limit; see [limits](#limits) | yes |
 | 500 | `internal` | unexpected server error | yes |

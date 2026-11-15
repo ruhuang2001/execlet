@@ -51,6 +51,8 @@ run flags:
   --idle-timeout S      idle timeout in seconds
   --idle-action A       kill or pause
   --exec-timeout S      timeout for this command in seconds (0 disables)
+  --env NAME=VALUE      variable for this command only; repeatable
+  --cwd DIR             absolute directory to run the command in
   --rm                  kill the sandbox after the command
 
 global flags (before the command):

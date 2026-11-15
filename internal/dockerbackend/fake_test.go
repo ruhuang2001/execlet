@@ -382,8 +382,8 @@ func (f *fakeDaemon) execCreate(w http.ResponseWriter, r *http.Request, containe
 		command:     cfg.Cmd,
 	}
 	actual := cfg.Cmd
-	if pidPath, realCmd, wrapped := unwrap(cfg.Cmd); wrapped {
-		c.files[pidPath] = []byte("4242\n")
+	if _, _, _, realCmd, wrapped := unwrap(cfg.Cmd); wrapped {
+		c.files[cfg.Cmd[3]] = []byte("4242\n")
 		ex.command = realCmd
 		actual = realCmd
 	}
@@ -523,15 +523,18 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"message": message})
 }
 
-// unwrap recognizes the PID-file wrapper and returns the PID file path and the
-// real command.
-// unwrap recovers the PID path and real argv from a wrapped exec. The wrapper
-// argv is: shell, -c, script, pidPath, dir, command...
-func unwrap(cmd []string) (pidPath string, actual []string, ok bool) {
+// unwrap recovers the PID path, the directory, the environment entries the
+// wrapper re-applies, and the real argv from a wrapped exec. The wrapper argv
+// is: shell, -c, script, pidPath, dir, envCount, env..., command...
+func unwrap(cmd []string) (pidPath, dir string, env, actual []string, ok bool) {
 	if len(cmd) < 6 || cmd[0] != "/bin/sh" || cmd[1] != "-c" || cmd[2] != execWrapper {
-		return "", nil, false
+		return "", "", nil, nil, false
 	}
-	return cmd[3], cmd[5:], true
+	n, err := strconv.Atoi(cmd[5])
+	if err != nil || n < 0 || len(cmd) < 6+n {
+		return "", "", nil, nil, false
+	}
+	return cmd[3], cmd[4], cmd[6 : 6+n], cmd[6+n:], true
 }
 
 // file returns a container's stored file.

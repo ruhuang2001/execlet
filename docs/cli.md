@@ -32,9 +32,11 @@ a value that already contains `=` is split on the first one, and an argument
 without `=` is a usage error (exit 2). The environment is additive to the
 image's, and it is not stored on the sandbox, so a second `run` does not inherit
 it. `--cwd` must be an absolute path; the server rejects anything else. A
-directory that does not exist does not fail the invocation: the command exits
-126 with `sandbox: cwd is not a usable directory: <path>` on stderr, and the CLI
-exits with that same status.
+directory that does not exist does not fail the invocation outright: the
+execution ends with status 126 and `sandbox: cwd is not a usable directory:
+<path>` on stderr. Because 126 is not a command exit, the CLI reports it as a
+sandbox failure and exits 1, like the other execution-level failures in
+[exit codes](#exit-codes); the recorded status is in the `execution:` line.
 
 `--exec-timeout` bounds the command this invocation starts, not the sandbox. It
 is forwarded on the execution request, so unlike the creation flags it is valid

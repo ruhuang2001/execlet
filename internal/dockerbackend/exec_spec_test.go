@@ -3,6 +3,7 @@ package dockerbackend
 import (
 	"context"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -10,9 +11,10 @@ import (
 	"github.com/ruhuang2001/tiny-sandbox/internal/dockerapi"
 )
 
-// TestExecPassesEnvironmentAlong proves the environment reaches the runtime.
-// The value is the whole feature: an exec that drops Env runs the command with
-// no variables at all while every unit above it still passes.
+// TestExecPassesEnvironmentAlong proves the environment reaches the runtime
+// twice: as the exec environment, and as arguments the wrapper re-applies at
+// the last step. Only the second survives a shell that filters names it
+// considers invalid, which is what dash does to MY-VAR and CONFIG.KEY.
 func TestExecPassesEnvironmentAlong(t *testing.T) {
 	f := newFakeDaemon(t)
 	b := f.backend(t)
@@ -21,15 +23,26 @@ func TestExecPassesEnvironmentAlong(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
+	env := []string{"A=1", "B=two"}
 	if _, err := b.Exec(context.Background(), id, daemon.ExecSpec{
 		Command: []string{"true"},
-		Env:     []string{"A=1", "B=two"},
+		Env:     env,
 	}); err != nil {
 		t.Fatalf("exec: %v", err)
 	}
 
-	if got := f.lastExecEnv(); strings.Join(got, ",") != "A=1,B=two" {
+	if got := f.lastExecEnv(); !slices.Equal(got, env) {
 		t.Fatalf("exec env = %v, want the request's environment", got)
+	}
+	_, _, wrapped, actual, ok := unwrap(f.lastExecCommand())
+	if !ok {
+		t.Fatal("command was not wrapped")
+	}
+	if !slices.Equal(wrapped, env) {
+		t.Errorf("wrapper environment = %v, want %v", wrapped, env)
+	}
+	if !slices.Equal(actual, []string{"true"}) {
+		t.Errorf("real command = %v, want [true]", actual)
 	}
 }
 
@@ -56,7 +69,7 @@ func TestExecUsesTheWrapperForCwd(t *testing.T) {
 	}
 
 	cmd := f.lastExecCommand()
-	if len(cmd) < 6 {
+	if len(cmd) < 7 {
 		t.Fatalf("command was not wrapped with a directory: %v", cmd)
 	}
 	if cmd[2] != execWrapper {
@@ -68,7 +81,7 @@ func TestExecUsesTheWrapperForCwd(t *testing.T) {
 	// The wrapper must write the PID before it can fail on the directory, so
 	// the write has to come first in the script.
 	pidWrite := strings.Index(cmd[2], "printf %s $$ >")
-	chdir := strings.Index(cmd[2], "cd --")
+	chdir := strings.Index(cmd[2], "cd -P --")
 	if pidWrite < 0 || chdir < 0 {
 		t.Fatalf("wrapper lost the PID write or the chdir: %q", cmd[2])
 	}
@@ -78,11 +91,40 @@ func TestExecUsesTheWrapperForCwd(t *testing.T) {
 	}
 }
 
+// TestWrapperResolvesTheDirectoryPhysically pins -P. A logical chdir
+// simplifies ".." before looking at the filesystem, so with link -> /data a
+// request for /work/link/.. would run in /work, and /nope/.. would succeed
+// instead of failing. TestRealWorkingDirectoryIsPhysical covers the same
+// property against a real shell.
+func TestWrapperResolvesTheDirectoryPhysically(t *testing.T) {
+	if !strings.Contains(execWrapper, "cd -P -- ") {
+		t.Fatalf("wrapper does not chdir physically:\n%s", execWrapper)
+	}
+}
+
+// TestWrapperAppliesTheEnvironmentWithoutAShell pins the mechanism. The shell
+// that starts the wrapper imports only names it accepts, so the environment is
+// re-applied by env(1) at the last step; leaving it to the shell silently drops
+// MY-VAR and CONFIG.KEY under dash. TestRealEnvironmentSurvivesTheShell covers
+// the property end to end.
+func TestWrapperAppliesTheEnvironmentWithoutAShell(t *testing.T) {
+	for _, want := range []string{`exec "$e" -- "$@"`, "/usr/bin/env", "/bin/env"} {
+		if !strings.Contains(execWrapper, want) {
+			t.Errorf("wrapper does not re-apply the environment through %s:\n%s", want, execWrapper)
+		}
+	}
+	// env must be addressed absolutely: the request may replace PATH, which
+	// would otherwise hide it and fail every execution that sets a variable.
+	if strings.Contains(execWrapper, "exec env ") {
+		t.Errorf("wrapper looks env up through PATH:\n%s", execWrapper)
+	}
+}
+
 // TestExecConfigHasNoWorkingDir pins the absence of the field. Adding it back
 // would reintroduce the failure above without any behavioural test noticing,
 // because the wrapper argument alone still looks correct.
 func TestExecConfigHasNoWorkingDir(t *testing.T) {
-	typ := reflect.TypeOf(dockerapi.ExecConfig{})
+	typ := reflect.TypeFor[dockerapi.ExecConfig]()
 	for i := range typ.NumField() {
 		tag := typ.Field(i).Tag.Get("json")
 		name, _, _ := strings.Cut(tag, ",")
@@ -95,8 +137,9 @@ func TestExecConfigHasNoWorkingDir(t *testing.T) {
 }
 
 // TestExecWithNoCwdKeepsTheArgumentShape keeps the no-cwd path explicit: the
-// wrapper always receives a directory argument, empty when the request sets
-// none, so the shift in the script always lines up.
+// wrapper always receives a directory argument and an environment count, both
+// empty and zero when the request sets nothing, so the shift in the script
+// always lines up.
 func TestExecWithNoCwdKeepsTheArgumentShape(t *testing.T) {
 	f := newFakeDaemon(t)
 	b := f.backend(t)
@@ -110,15 +153,21 @@ func TestExecWithNoCwdKeepsTheArgumentShape(t *testing.T) {
 	}
 
 	cmd := f.lastExecCommand()
-	pidPath, actual, ok := unwrap(cmd)
+	pidPath, dir, env, actual, ok := unwrap(cmd)
 	if !ok {
 		t.Fatalf("command was not wrapped: %v", cmd)
 	}
 	if pidPath == "" {
 		t.Error("pid path is empty")
 	}
-	if cmd[4] != "" {
-		t.Errorf("directory argument = %q, want empty when the request sets none", cmd[4])
+	if dir != "" {
+		t.Errorf("directory argument = %q, want empty when the request sets none", dir)
+	}
+	if cmd[5] != "0" {
+		t.Errorf("environment count = %q, want \"0\"", cmd[5])
+	}
+	if len(env) != 0 {
+		t.Errorf("environment = %v, want none", env)
 	}
 	if strings.Join(actual, " ") != "pwd" {
 		t.Errorf("real command = %v, want pwd", actual)

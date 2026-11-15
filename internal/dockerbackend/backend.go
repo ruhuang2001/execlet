@@ -227,7 +227,7 @@ func (b *Backend) Exec(ctx context.Context, containerID string, spec daemon.Exec
 		return nil, errors.New("dockerbackend: empty command")
 	}
 	pidPath := b.nextPidPath()
-	wrapped := wrapCommand(pidPath, spec.Dir, spec.Command)
+	wrapped := wrapCommand(pidPath, spec.Dir, spec.Env, spec.Command)
 
 	execID, err := b.api.ExecCreate(ctx, containerID, dockerapi.ExecConfig{
 		Cmd: wrapped,
@@ -376,8 +376,9 @@ func (b *Backend) waitInspect(ctx context.Context, execID string) (dockerapi.Exe
 
 // execWrapper records the process group leader's PID, changes directory, and
 // then becomes the command, without a shell around the command itself: $0 is
-// the PID file, $1 the directory, and "$@" after the shift the argv, so no
-// argument is ever parsed as shell syntax.
+// the PID file, $1 the directory, $2 the number of environment entries, and
+// "$@" after the shift the entries followed by the argv. No argument is ever
+// parsed as shell syntax.
 //
 // The PID is written first. Signal kills the process group through this file,
 // so everything that can fail after it fails where a cancel still reaches the
@@ -388,16 +389,35 @@ func (b *Backend) waitInspect(ctx context.Context, execID string) (dockerapi.Exe
 // on stderr. WorkingDir reports 127 on stdout instead, which reads like the
 // program's own output and collides with a missing command. Exit 126 is this
 // wrapper's own code, so it is distinguishable from a missing command (127).
+//
+// cd -P resolves the path physically. Plain cd simplifies ".." lexically
+// before looking at the filesystem, so for /work/link/.. with link -> /data it
+// lands in /work, and for /nope/.. it succeeds instead of failing.
+//
+// The environment is re-applied at the last step rather than left to the shell
+// that starts here. A shell imports only the names it considers valid
+// identifiers, so dash drops MY-VAR and CONFIG.KEY and rewrites IFS, PWD and
+// SHLVL; BusyBox keeps more. Exec env is what the target must see, and env(1)
+// passes every entry through unchanged. It is called by absolute path because
+// the request may replace PATH, which would otherwise hide it.
 const execWrapper = `printf %s $$ > "$0" || exit 125
-if [ -n "$1" ]; then cd -- "$1" 2>/dev/null || { printf 'sandbox: cwd is not a usable directory: %s\n' "$1" >&2; exit 126; }; fi
-shift
-exec "$@"`
+if [ -n "$1" ]; then cd -P -- "$1" 2>/dev/null || { printf 'sandbox: cwd is not a usable directory: %s\n' "$1" >&2; exit 126; }; fi
+n=$2; shift 2
+if [ "$n" -eq 0 ]; then exec "$@"; fi
+for e in /usr/bin/env /bin/env; do
+  [ -x "$e" ] && exec "$e" -- "$@"
+done
+printf 'sandbox: this image has no env utility, so the requested environment cannot be applied\n' >&2
+exit 126`
 
 // wrapCommand builds the argv an exec runs. Writing the PID before the exec
 // matters: the PID of the shell equals the PID of the process group that
 // Docker created for the exec, and the exec keeps that PID and group.
-func wrapCommand(pidPath, dir string, command []string) []string {
-	return append([]string{"/bin/sh", "-c", execWrapper, pidPath, dir}, command...)
+func wrapCommand(pidPath, dir string, env, command []string) []string {
+	argv := make([]string, 0, 6+len(env)+len(command))
+	argv = append(argv, "/bin/sh", "-c", execWrapper, pidPath, dir, strconv.Itoa(len(env)))
+	argv = append(argv, env...)
+	return append(argv, command...)
 }
 
 // nextPidPath returns a unique PID-file path. The counter keeps it unique per

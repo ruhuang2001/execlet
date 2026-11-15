@@ -295,7 +295,7 @@ func TestExecRunsWrappedCommandAndDemuxes(t *testing.T) {
 	}
 
 	cmd := f.lastExecCommand()
-	pidPath, actual, ok := unwrap(cmd)
+	pidPath, _, _, actual, ok := unwrap(cmd)
 	if !ok {
 		t.Fatalf("command was not wrapped: %v", cmd)
 	}

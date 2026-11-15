@@ -69,6 +69,9 @@ func (b *Backend) ListFiles(_ context.Context, id, p, after string, limit int) (
 		entries = daemon.SelectFilePage(entries, entry, after, limit)
 	}
 	for name, data := range c.files {
+		if _, ok := c.archiveHeaders[name]; ok {
+			continue
+		}
 		rest, ok := strings.CutPrefix(path.Clean(name), prefix)
 		if !ok {
 			continue

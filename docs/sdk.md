@@ -244,4 +244,8 @@ basename. WriteArchive(ctx, id, destination, data) extracts a validated archive
 under an existing directory. Upload is attempted once; callers must inspect
 remote state after transport failure because extraction is not transactional.
 Limits are 32 MiB encoded, 16 MiB payload and 4096 entries. Safe internal links
-are supported; the HTTP contract specifies validation and concurrency limits.
+are supported; the HTTP contract specifies validation and concurrent-writer requirements.
+
+Archive upload callers must quiesce in-container filesystem writers and inspect
+remote state after any failed or ambiguous upload, because extraction can be partial.
+The aggregate path/link text limit is 1 MiB, in addition to the byte/member limits.

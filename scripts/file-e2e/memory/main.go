@@ -85,6 +85,20 @@ func main() {
 	if h.Typeflag != tar.TypeReg || h.Size != 9<<20 {
 		panic("outside-subtree link not materialized")
 	}
+	var conflict bytes.Buffer
+	cw := tar.NewWriter(&conflict)
+	must(cw.WriteHeader(&tar.Header{Name: "tree", Typeflag: tar.TypeReg, Mode: 0o644, Size: 1}))
+	_, err = cw.Write([]byte("x"))
+	must(err)
+	must(cw.Close())
+	if err := c.WriteArchive(ctx, sb.ID, "/", conflict.Bytes()); err == nil {
+		panic("directory replacement accepted")
+	}
+	still, err := c.ReadFile(ctx, sb.ID, "/tree/zdata")
+	must(err)
+	if len(still) != 9<<20 {
+		panic("directory conflict mutated data")
+	}
 	summary, err := json.Marshal(map[string]any{"status": "passed", "regular_members": regular, "hardlinks": links, "payload_bytes": total, "metadata_iterations": 1000})
 	must(err)
 	fmt.Println(string(summary))

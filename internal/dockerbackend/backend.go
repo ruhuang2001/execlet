@@ -345,7 +345,11 @@ func (b *Backend) WriteFile(ctx context.Context, containerID, path string, data 
 
 // capture runs a command and returns its stdout, for the cgroup read.
 func (b *Backend) capture(ctx context.Context, containerID string, command []string) ([]byte, error) {
-	execID, err := b.api.ExecCreate(ctx, containerID, dockerapi.ExecConfig{Cmd: command})
+	return b.captureAs(ctx, containerID, "", command)
+}
+
+func (b *Backend) captureAs(ctx context.Context, containerID, user string, command []string) ([]byte, error) {
+	execID, err := b.api.ExecCreate(ctx, containerID, dockerapi.ExecConfig{Cmd: command, User: user})
 	if err != nil {
 		return nil, err
 	}

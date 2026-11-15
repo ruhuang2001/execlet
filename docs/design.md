@@ -410,7 +410,7 @@ consistency; concurrent mutations can change later pages. See the API contract.
 
 ### Tar transfer
 
-Tar requests are fully bounded and validated in memory before lifecycle or
+Tar uploads are fully bounded and validated in memory before lifecycle or
 filesystem mutation. The validator re-encodes only supported members, ordinary
 permission bits and mtime, preventing unsafe tar extension interpretation by
 Docker. Safe internal links are allowed; link ancestors, traversal and sparse
@@ -418,7 +418,8 @@ entries are refused. Docker preflight rejects existing symlink destinations
 and ancestors using fixed shell code with positional path arguments. This
 is not atomic against concurrent container writes; callers must quiesce writers.
 SDK uploads use one attempt because extraction is not transactional after a
-runtime failure. No tar bytes are extracted on the daemon host.
+runtime failure. Downloads resume before reading and validating runtime tar.
+No tar bytes are extracted on the daemon host.
 ## Further reading
 
 - [HTTP API](api.md), [Go SDK](sdk.md), and [CLI](cli.md): public contracts and usage.

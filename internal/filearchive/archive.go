@@ -18,6 +18,7 @@ const (
 	MaxExtractedBytes = 16 << 20
 	MaxEntries        = 4096
 	MaxNameBytes      = 4096
+	MaxPathBytes      = 1 << 20
 )
 
 // Error distinguishes invalid input from resource limits.
@@ -38,8 +39,8 @@ type Entry struct {
 
 // Archive is fully validated and canonically encoded for container extraction.
 type Archive struct {
-	Entries []Entry
-	Data    []byte
+	entries []Entry
+	data    []byte
 }
 
 // Parse validates every header and payload before constructing a safe archive.
@@ -55,6 +56,7 @@ func Parse(data []byte) (*Archive, error) {
 	entries := []Entry{}
 	names := map[string]byte{}
 	total := int64(0)
+	pathBytes := 0
 	for {
 		before := source.Len()
 		h, err := reader.Next()
@@ -69,6 +71,10 @@ func Parse(data []byte) (*Archive, error) {
 		}
 		if len(entries) >= MaxEntries {
 			return nil, large("archive exceeds 4096 entries")
+		}
+		pathBytes += len(h.Name) + len(h.Linkname)
+		if pathBytes > MaxPathBytes {
+			return nil, large("archive exceeds 1 MiB aggregate path bytes")
 		}
 		name, err := validName(h.Name)
 		if err != nil {
@@ -121,7 +127,7 @@ func Parse(data []byte) (*Archive, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Archive{Entries: entries, Data: encoded}, nil
+	return &Archive{entries: entries, data: encoded}, nil
 }
 func validName(name string) (string, error) {
 	if name == "" || path.IsAbs(name) || len(name) > MaxNameBytes || strings.ContainsAny(name, "\\\x00") || !utf8.ValidString(name) {
@@ -198,3 +204,18 @@ func allZero(data []byte) bool {
 	}
 	return true
 }
+
+// Entries returns detached validated members; callers cannot mutate the archive.
+func (a *Archive) Entries() []Entry {
+	result := make([]Entry, len(a.entries))
+	for i, entry := range a.entries {
+		result[i] = Entry{Header: entry.Header, Data: bytes.Clone(entry.Data)}
+	}
+	return result
+}
+
+// Bytes returns a copy of the canonical validated tar.
+func (a *Archive) Bytes() []byte { return bytes.Clone(a.data) }
+
+// Len reports the encoded size; only Parse can create a nonempty validated archive.
+func (a *Archive) Len() int { return len(a.data) }

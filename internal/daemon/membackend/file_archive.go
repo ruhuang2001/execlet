@@ -126,6 +126,9 @@ func (b *Backend) ReadArchive(_ context.Context, id, p string) ([]byte, error) {
 
 // WriteArchive applies a fully validated archive only after destination checks.
 func (b *Backend) WriteArchive(_ context.Context, id, p string, archive *filearchive.Archive) error {
+	if archive == nil || archive.Len() == 0 {
+		return &daemon.Error{Code: daemon.CodeInvalidRequest, Message: "archive must be constructed by filearchive.Parse"}
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	c, err := b.get(id)
@@ -149,7 +152,23 @@ func (b *Backend) WriteArchive(_ context.Context, id, p string, archive *filearc
 	if !exists {
 		return daemon.ErrNotFound
 	}
-	for _, entry := range archive.Entries {
+	for _, entry := range archive.Entries() {
+		target := path.Join(p, entry.Header.Name)
+		if entry.Header.Typeflag != tar.TypeDir {
+			if h, ok := c.archiveHeaders[target]; ok && h.Typeflag == tar.TypeDir {
+				return &daemon.Error{Code: daemon.CodeInvalidRequest, Message: "archive member would replace a directory"}
+			}
+			for name := range c.files {
+				if strings.HasPrefix(name, target+"/") {
+					return &daemon.Error{Code: daemon.CodeInvalidRequest, Message: "archive member would replace a directory"}
+				}
+			}
+			for name := range c.archiveHeaders {
+				if strings.HasPrefix(name, target+"/") {
+					return &daemon.Error{Code: daemon.CodeInvalidRequest, Message: "archive member would replace a directory"}
+				}
+			}
+		}
 		for current := path.Join(p, entry.Header.Name); current != "/"; current = path.Dir(current) {
 			if current != path.Join(p, entry.Header.Name) {
 				if _, ok := c.files[current]; ok {
@@ -164,7 +183,7 @@ func (b *Backend) WriteArchive(_ context.Context, id, p string, archive *filearc
 	if c.archiveHeaders == nil {
 		c.archiveHeaders = make(map[string]tar.Header)
 	}
-	for _, entry := range archive.Entries {
+	for _, entry := range archive.Entries() {
 		h := entry.Header
 		name := path.Join(p, h.Name)
 		stored := h

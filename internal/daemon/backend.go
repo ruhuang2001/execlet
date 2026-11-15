@@ -157,6 +157,7 @@ type Backend interface {
 	// ReadArchive returns bounded tar rooted at the selected file/directory basename.
 	ReadArchive(ctx context.Context, containerID, path string) ([]byte, error)
 	// WriteArchive extracts a validated archive beneath an existing directory.
+	// Failures can leave partial results; callers must quiesce concurrent writers.
 	WriteArchive(ctx context.Context, containerID, path string, archive *filearchive.Archive) error
 	// ListFiles returns up to limit+1 children after a name, sorted by name.
 	ListFiles(ctx context.Context, containerID, path, after string, limit int) ([]FileEntry, error)

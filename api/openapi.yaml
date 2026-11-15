@@ -564,7 +564,8 @@ paths:
         Buffers and validates at most 32 MiB encoded, 16 MiB regular payload,
         and 4096 entries. Preserves regular bytes, directories, safe internal
         relative symlinks and earlier-member hardlinks. Root entry is the
-        selected basename. Unsupported archives return 400, limits return 413.
+        selected basename. Unsupported selected content intentionally returns 400,
+        including a symlink selected without its target member; limits return 413.
       responses:
         '200':
           description: Validated uncompressed tar bytes.
@@ -591,7 +592,7 @@ paths:
         Validates all entries before any mutation. Rejects absolute/traversal
         names or targets, devices, FIFO, sparse, unsupported metadata, duplicate
         names, nondirectory ancestors, and existing symlink destinations. Limits:
-        32 MiB encoded, 16 MiB regular bytes, 4096 members, 4096-byte names.
+        32 MiB encoded, 16 MiB regular bytes, 4096 members, 4096-byte names, 1 MiB aggregate member/link path text.
         Extraction is not atomic against runtime failure or concurrent writes.
         Upload is not automatically retried by SDKs. No host extraction occurs.
       requestBody:

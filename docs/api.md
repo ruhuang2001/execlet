@@ -417,7 +417,11 @@ Returns application/x-tar. The archive contains the selected file/directory
 basename as its root, so downloading /work produces work/ and its descendants.
 Both directions use uncompressed tar, bounded to 32 MiB encoded, 4096 entries
 and 16 MiB total regular-file payload. Download validates before sending bytes.
-Malformed or unsupported content is 400; limits are 413. Paused sandboxes
+Malformed or unsupported content is intentionally 400 for both directions;
+on download this means the selected content cannot be represented by the
+supported safe archive subset, not that the Docker runtime failed. A symlink
+selected alone is rejected when its target is outside that selected archive;
+download a parent directory containing both instead. Limits are 413. Paused sandboxes
 resume first; runtime operations have a 30-second deadline.
 
 ### `PUT /v1/sandboxes/{sandbox_id}/files/archive?path=/abs/directory`
@@ -426,7 +430,7 @@ The body is tar (application/x-tar or application/octet-stream). A 204 means
 extraction finished beneath the existing directory. Missing destinations are
 404 and nondirectories are 400. Every header and payload is validated before
 any filesystem mutation. Invalid later members cannot leave earlier members
-written. Names are relative UTF-8, at most 4096 bytes, with no NUL, backslash,
+written. Names are relative UTF-8, at most 4096 bytes (1 MiB aggregate member/link path text), with no NUL, backslash,
 absolute path or parent traversal component. Duplicate names, nondirectory
 ancestors, device/FIFO/sparse members and extended attributes are rejected.
 Only regular files, directories, symlinks and hardlinks are supported.
@@ -438,7 +442,8 @@ not imported; ordinary permission bits, mtime and bytes are preserved.
 
 Existing destination/ancestor symlinks are rejected before extraction; archive
 entries cannot create symlink ancestors for later writes. Container path checks
-use sh with positional arguments. This protects against supplied archive
+use sh as container root (matching Docker extraction privileges) with positional
+arguments in bounded 256 KiB batches. This protects against supplied archive
 escapes, but is not hardened isolation: an independently running container
 process can change its filesystem between preflight and Docker extraction.
 Callers must quiesce filesystem writers during upload. Runtime failure or

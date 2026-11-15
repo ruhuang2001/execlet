@@ -133,7 +133,7 @@ For example: printf hello | sandboxctl run --rm --stdin-file - -- cat
 ## Tar transfer
 
 sandboxctl files archive upload SANDBOX /destination local.tar uploads an
-uncompressed tar into an existing container directory. The whole archive is
+uncompressed tar (32 MiB encoded limit enforced locally) into an existing container directory. The whole archive is
 validated before extraction. sandboxctl files archive download SANDBOX /work
 local.tar saves a validated tar containing work/ and descendants with mode
 0600 after an atomic temporary-file save and rename. Download/save errors

@@ -34,3 +34,5 @@ These failure cases precede the repair implementation and exercise real HTTP plu
 - Downloading only a hardlink whose target lies outside the selected path must materialize its bytes.
 - Listing an explicit mode-0700 directory with a distinct mtime 1000 times must never replace its metadata with a descendant-derived default.
 - Retain the downloaded tar and JSON summary for repeatable verification; no new unit tests.
+- Reject a regular archive member replacing an existing directory before mutation, including implicit directories. Count archive-backed memory files once when listing.
+- Bound aggregate archive path text to 1 MiB so destination preflight uses at most a few bounded exec batches; perform those checks as container root to match Docker extraction privileges.

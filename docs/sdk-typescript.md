@@ -156,7 +156,7 @@ connection uses the same implementation and guarantees.
 
 Repeatable ordinary requests retry transport failures (including interrupted
 response bodies) and HTTP 429/500/502/503/504. Repeatable operations are GET,
-DELETE, file PUT, pause/resume/cancel and keyed starts. Creation is attempted
+DELETE, ordinary file PUT (archive PUT excluded), pause/resume/cancel and keyed starts. Creation is attempted
 once. A complete malformed JSON body is a decode error, not a transport retry.
 
 Delay is sampled uniformly between half and all of the cap
@@ -283,3 +283,7 @@ to an existing directory. Read retries normally; upload sends one attempt
 because extraction can be partial after runtime failure. Server limits are
 32 MiB encoded, 16 MiB payload and 4096 members. Validation and concurrency
 boundaries are documented in the HTTP contract.
+
+Archive upload callers must quiesce in-container filesystem writers and inspect
+remote state after any failed or ambiguous upload, because extraction can be partial.
+The aggregate path/link text limit is 1 MiB, in addition to the byte/member limits.

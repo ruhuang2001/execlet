@@ -141,7 +141,7 @@ export class Client {
   /** One attempt: extraction is not atomic and cannot safely replay ambiguous uploads. */
   async writeArchive(sandboxID: string, path: string, data: Uint8Array, options: RequestOptions = {}): Promise<void> {
     await this.transport.request('PUT', sandboxPath(sandboxID) + '/files/archive?path=' + encodeURIComponent(path), false,
-      options.signal, new Uint8Array(data));
+      options.signal, data);
   }
 
   readFile(sandboxID: string, path: string, options: RequestOptions = {}): Promise<Uint8Array> {

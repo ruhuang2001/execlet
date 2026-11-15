@@ -17,12 +17,12 @@ func (in *invocation) files(args []string) int {
 		return in.archive(args[1:])
 	}
 	if len(args) == 0 || args[0] != "list" {
-		_, _ = fmt.Fprintln(in.stderr, "usage: sandboxctl files list SANDBOX PATH [--limit N] [--cursor TOKEN]")
+		_, _ = fmt.Fprintln(in.stderr, "usage: sandboxctl files list SANDBOX PATH [--limit N] [--cursor TOKEN]\n       sandboxctl files archive upload|download SANDBOX PATH LOCAL_TAR")
 		return 2
 	}
 	positional, flags := splitArgs(args[1:])
 	if len(positional) != 2 {
-		_, _ = fmt.Fprintln(in.stderr, "usage: sandboxctl files list SANDBOX PATH [--limit N] [--cursor TOKEN]")
+		_, _ = fmt.Fprintln(in.stderr, "usage: sandboxctl files list SANDBOX PATH [--limit N] [--cursor TOKEN]\n       sandboxctl files archive upload|download SANDBOX PATH LOCAL_TAR")
 		return 2
 	}
 	fs := flag.NewFlagSet("files list", flag.ContinueOnError)

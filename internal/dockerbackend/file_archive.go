@@ -3,7 +3,6 @@ package dockerbackend
 import (
 	"context"
 	"io"
-	"path"
 	"strings"
 
 	"github.com/ruhuang2001/tiny-sandbox/internal/daemon"
@@ -29,33 +28,36 @@ func (b *Backend) ReadArchive(ctx context.Context, id, p string) ([]byte, error)
 
 // WriteArchive preflights destination components before Docker extracts validated bytes.
 func (b *Backend) WriteArchive(ctx context.Context, id, p string, archive *filearchive.Archive) error {
+	if archive == nil || archive.Len() == 0 {
+		return &daemon.Error{Code: daemon.CodeInvalidRequest, Message: "archive must be constructed by filearchive.Parse"}
+	}
 	if err := b.checkArchiveDestination(ctx, id, p); err != nil {
 		return err
 	}
 	batch := []string{}
 	size := 0
-	for _, entry := range archive.Entries {
-		name := path.Join(p, entry.Header.Name)
-		if size+len(name) > 32000 {
-			if err := b.checkArchivePaths(ctx, id, batch); err != nil {
+	for _, entry := range archive.Entries() {
+		name := entry.Header.Name
+		if size+len(name)+1 > 256<<10 {
+			if err := b.checkArchivePaths(ctx, id, p, batch); err != nil {
 				return err
 			}
 			batch = nil
 			size = 0
 		}
 		batch = append(batch, name)
-		size += len(name)
+		size += len(name) + 1
 	}
-	if err := b.checkArchivePaths(ctx, id, batch); err != nil {
+	if err := b.checkArchivePaths(ctx, id, p, batch); err != nil {
 		return err
 	}
-	return notFound(b.api.ArchivePut(ctx, id, p, archive.Data), "%s", p)
+	return notFound(b.api.ArchivePut(ctx, id, p, archive.Bytes()), "%s", p)
 }
 func (b *Backend) checkArchiveDestination(ctx context.Context, id, p string) error {
-	if err := b.checkArchivePaths(ctx, id, []string{p}); err != nil {
+	if err := b.checkArchivePaths(ctx, id, "/", []string{p}); err != nil {
 		return err
 	}
-	out, err := b.capture(ctx, id, []string{"sh", "-c", `if [ ! -e "$1" ]; then printf missing; elif [ ! -d "$1" ]; then printf notdir; fi`, "archive-check", p})
+	out, err := b.captureAs(ctx, id, "0", []string{"sh", "-c", `if [ ! -e "$1" ]; then printf missing; elif [ ! -d "$1" ]; then printf notdir; fi`, "archive-check", p})
 	if err != nil {
 		return err
 	}
@@ -70,13 +72,13 @@ func (b *Backend) checkArchiveDestination(ctx context.Context, id, p string) err
 		return &daemon.Error{Code: daemon.CodeBackendError, Message: "unexpected archive destination check output"}
 	}
 }
-func (b *Backend) checkArchivePaths(ctx context.Context, id string, paths []string) error {
+func (b *Backend) checkArchivePaths(ctx context.Context, id, base string, paths []string) error {
 	if len(paths) == 0 {
 		return nil
 	}
-	command := []string{"sh", "-c", archivePathCheck, "archive-check"}
+	command := []string{"sh", "-c", archivePathCheck, base}
 	command = append(command, paths...)
-	out, err := b.capture(ctx, id, command)
+	out, err := b.captureAs(ctx, id, "0", command)
 	if err != nil {
 		return err
 	}
@@ -88,7 +90,7 @@ func (b *Backend) checkArchivePaths(ctx context.Context, id string, paths []stri
 
 // Fixed shell program; names are positional arguments, never evaluated as code.
 const archivePathCheck = `for file do
- current=$file
+ case "$file" in /*) current=$file;; *) current=$0/$file;; esac
  first=1
  while [ "$current" != / ] && [ "$current" != . ]; do
   if [ -L "$current" ]; then printf '%s' "$current"; exit 0; fi

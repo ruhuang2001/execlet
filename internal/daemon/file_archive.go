@@ -33,7 +33,7 @@ func (s *Sandboxes) ReadArchive(ctx context.Context, id, p string) ([]byte, erro
 	if err != nil {
 		return nil, archiveError(err)
 	}
-	return archive.Data, nil
+	return archive.Bytes(), nil
 }
 
 // WriteArchive validates the complete tar before preparing or mutating a sandbox.

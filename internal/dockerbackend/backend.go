@@ -404,11 +404,11 @@ func (b *Backend) waitInspect(ctx context.Context, execID string) (dockerapi.Exe
 // Nothing here assigns a shell variable. An assignment to a name the image
 // already exports replaces the value the image set, so a wrapper-local "n" or
 // "e" would silently rewrite the image's own n and e. The count is read from
-// $2 and the separator flag from $3 before the shift, and env is probed by
-// path, so no variable is needed.
+// $2 before the shift and env is probed by path, so no variable is needed.
 //
-// $3 is not read by this script: it describes the argument layout, so a reader
-// of the argv does not have to infer whether a separator was inserted.
+// $3 is layout metadata that this script only shifts away: it records whether
+// a separator was inserted, so a reader of the argv does not have to infer it
+// from the command.
 const execWrapper = `printf %s $$ > "$0" || exit 125
 if [ -n "$1" ]; then cd -P -- "$1" 2>/dev/null || { printf 'sandbox: cwd is not a usable directory: %s\n' "$1" >&2; exit 126; }; fi
 if [ "$2" -eq 0 ]; then shift 3; exec "$@"; fi

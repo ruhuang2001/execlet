@@ -93,8 +93,11 @@ exit code 126 for a cwd that is not a usable directory. Idempotency compares
 command, env and cwd, and the server never echoes env. Execution.cwd repeats
 the requested directory, is null when the request set none, and is absent on a
 server older than this contract, which ignores both fields without an error;
-nothing reveals an ignored env. exec and execStream take only a command, as in
-Go; set env or cwd through startExecution and streamExecution:
+nothing reveals an ignored env. Such a server also leaves them out of the
+idempotency comparison, so replaying a key with a different env or cwd returns
+the earlier execution instead of idempotency_conflict. exec and execStream take
+only a command, as in Go. To set env or cwd, put them on the request to
+startExecution, then stream the returned execution:
 
 ~~~ts
 const started = await client.startExecution(sandbox.id, {

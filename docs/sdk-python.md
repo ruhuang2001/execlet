@@ -98,7 +98,10 @@ code 126 for a `cwd` that is not a usable directory. The server never echoes
 `env`. `Execution.cwd` repeats the requested directory and is `None` when the
 request set none. A server older than this contract ignores both fields
 without an error: `Execution.cwd` staying `None` after a start that set `cwd`
-is the only visible sign, and nothing reveals an ignored `env`.
+is the only visible sign, and nothing reveals an ignored `env`. Such a server
+also leaves them out of the idempotency comparison, so replaying a key with a
+different `env` or `cwd` returns the earlier execution instead of
+`idempotency_conflict`.
 
 ```python
 started = client.start_execution(sandbox.id, ExecuteRequest(
@@ -108,8 +111,9 @@ started = client.start_execution(sandbox.id, ExecuteRequest(
 done = client.stream_execution(sandbox.id, started.id)
 ```
 
-The `exec` conveniences take only a command; use `start_execution` and
-`stream_execution` to set `env` or `cwd`, as in the Go SDK.
+The `exec` conveniences take only a command, as in the Go SDK. To set `env` or
+`cwd`, put them on the request to `start_execution`, then pass the returned ID
+to `stream_execution`.
 
 `Sandbox`, `Execution`, and `Event` are keyword-only response dataclasses.
 Resource fields use Python snake_case names matching the JSON contract.

@@ -397,13 +397,18 @@ class Suite:
             if fail:
                 faults.append(Fault("POST", r".*/executions", "status", remaining=20))
             self.proxy.arm(name, *faults)
+            # The caller's env changes while the start is in flight. Recovery
+            # must replay the invocation that was sent, or the server sees a
+            # different env under the same key and refuses it as a conflict.
+            env = {"PHASE": "original"}
             def interrupt():
                 if hold.accepted.wait(10):
+                    env["PHASE"] = "mutated"
                     token.cancel()
             thread = threading.Thread(target=interrupt, daemon=True)
             thread.start()
             started = time.monotonic()
-            exc = error_from(lambda: self.client.start_execution(sb.id, ExecuteRequest(command=["sh", "-c", "echo marker >> /tmp/recovered; sleep 30"]), cancel=token), "cancel_unconfirmed" if fail else "canceled")
+            exc = error_from(lambda: self.client.start_execution(sb.id, ExecuteRequest(command=["sh", "-c", "echo marker >> /tmp/recovered; sleep 30"], env=env), cancel=token), "cancel_unconfirmed" if fail else "canceled")
             elapsed = time.monotonic() - started
             thread.join(timeout=1)
             require(hold.accepted.is_set(), "original start was never accepted")

@@ -12,6 +12,15 @@ a command-line client, and HTTP API.
 - **Explicit outcomes** — distinguish command exits, timeouts, cancellation,
   OOM kills, and external eviction.
 
+## Execution and file capabilities
+
+- Per-execution environment overrides and working directory.
+- Bounded directory listing with cursor pagination.
+- Structured request/completion logs and Docker readiness checks.
+- Bounded one-shot stdin, followed by EOF.
+- Bounded tar upload/download for directory transfer.
+- Opt-in concurrent executions (1–8 slots; default 1), with independent cancellation.
+
 ## Install
 
 On macOS or Linux, paste this command to download the latest

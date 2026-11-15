@@ -18,6 +18,15 @@ The module is `github.com/ruhuang2001/tiny-sandbox`; `sandbox-go` is the package
 
 This project answers those questions with working code and tests rather than prose. The API semantics follow the public documentation of PPIO Sandbox and E2B where they agree; it does not claim wire compatibility with either.
 
+## Execution and file capabilities
+
+- Per-execution environment overrides and working directory.
+- Bounded directory listing with cursor pagination.
+- Structured request/completion logs and Docker readiness checks.
+- Bounded one-shot stdin, followed by EOF.
+- Bounded tar upload/download for directory transfer.
+- Opt-in concurrent executions (1–8 slots; default 1), with independent cancellation.
+
 ## Goals
 
 1. **Lifecycle**: create, pause, resume, and kill sandboxes; a lifetime timeout and an idle timeout, each able to kill or pause.

@@ -3,6 +3,7 @@ package dockerbackend
 import (
 	"context"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -108,15 +109,35 @@ func TestWrapperResolvesTheDirectoryPhysically(t *testing.T) {
 // MY-VAR and CONFIG.KEY under dash. TestRealEnvironmentSurvivesTheShell covers
 // the property end to end.
 func TestWrapperAppliesTheEnvironmentWithoutAShell(t *testing.T) {
-	for _, want := range []string{`exec "$e" -- "$@"`, "/usr/bin/env", "/bin/env"} {
+	for _, want := range []string{
+		"exec /usr/bin/env --",
+		"exec /bin/env --",
+		// Absolutely addressed: the request may replace PATH, which would
+		// otherwise hide env and fail every execution that sets a variable.
+		`[ -x /usr/bin/env ]`,
+	} {
 		if !strings.Contains(execWrapper, want) {
-			t.Errorf("wrapper does not re-apply the environment through %s:\n%s", want, execWrapper)
+			t.Errorf("wrapper does not re-apply the environment through %q:\n%s", want, execWrapper)
 		}
 	}
-	// env must be addressed absolutely: the request may replace PATH, which
-	// would otherwise hide it and fail every execution that sets a variable.
 	if strings.Contains(execWrapper, "exec env ") {
 		t.Errorf("wrapper looks env up through PATH:\n%s", execWrapper)
+	}
+}
+
+// TestWrapperAssignsNoShellVariables pins the names the wrapper must not use.
+//
+// Assigning to a name the image already exports replaces it, and the wrapper
+// runs in the container's environment. An earlier version read its argument
+// count into "n" and probed env into "e", which rewrote an image's own n and e
+// even for a request that set no environment.
+func TestWrapperAssignsNoShellVariables(t *testing.T) {
+	assignment := regexp.MustCompile(`^\s*([A-Za-z_][A-Za-z0-9_]*)=`)
+	for _, line := range strings.Split(execWrapper, "\n") {
+		if m := assignment.FindStringSubmatch(line); m != nil {
+			t.Errorf("wrapper assigns the shell variable %q, which would overwrite "+
+				"an exported image variable of that name:\n%s", m[1], execWrapper)
+		}
 	}
 }
 

@@ -222,7 +222,8 @@ paths:
         sandbox resumes it first. Reusing an idempotency key with the same
         command returns the retained execution instead of starting it again;
         the same command without a retained key starts a new execution.
-        Reusing a key with a different command returns 409 idempotency_conflict.
+        Reusing a key with a different command, cwd, or env returns 409
+        idempotency_conflict.
       requestBody:
         required: true
         content:
@@ -542,7 +543,7 @@ components:
         409, one of invalid_state (the operation is not allowed in the
         sandbox's current state), busy (the sandbox already has a running
         execution), or idempotency_conflict (the key was reused with a
-        different command).
+        different command, cwd, or env).
       content:
         application/json:
           schema:
@@ -559,7 +560,7 @@ components:
             idempotency_conflict:
               value:
                 code: idempotency_conflict
-                message: idempotency key was used for a different command
+                message: idempotency key was used for a different command, cwd, or environment
     PayloadTooLarge:
       description: >-
         413 payload_too_large: the JSON request body exceeds 1 MiB, or a file

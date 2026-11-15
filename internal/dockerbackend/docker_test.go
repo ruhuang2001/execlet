@@ -11,6 +11,7 @@ package dockerbackend
 
 import (
 	"context"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -392,4 +393,116 @@ func TestRealEnvironmentOverrideAppliesWithoutEnvOnPath(t *testing.T) {
 	if strings.TrimSpace(ex.Stdout) != "custom-bin-ran" {
 		t.Errorf("stdout = %q, want the command's output", ex.Stdout)
 	}
+}
+
+// TestRealCommandPathWithEqualsIsNotAnAssignment proves the environment step
+// cannot swallow the command.
+//
+// env(1) treats every leading NAME=VALUE as an assignment and only then starts
+// the command; "--" ends option parsing, not assignment parsing. A command
+// whose own path contains "=" would therefore become one more variable: env
+// would run nothing, exit 0, and print the environment, secrets included, as
+// if the program had produced that output.
+func TestRealCommandPathWithEqualsIsNotAnAssignment(t *testing.T) {
+	h := newRealHarness(t)
+	sb := h.create()
+
+	fixture := h.run(sb.ID, daemon.ExecuteRequest{
+		Command: []string{"sh", "-c", `printf '#!/bin/sh\necho tool-ran\n' > '/tmp/tool=v1' && chmod +x '/tmp/tool=v1'`},
+	})
+	if fixture.ExitCode == nil || *fixture.ExitCode != 0 {
+		t.Fatalf("fixture: exit %d, stderr %q", derefInt(fixture.ExitCode), fixture.Stderr)
+	}
+
+	ex := h.run(sb.ID, daemon.ExecuteRequest{
+		Command: []string{"/tmp/tool=v1"},
+		Env:     map[string]string{"TOKEN": "secret-value"},
+	})
+	if got := strings.TrimSpace(ex.Stdout); got != "tool-ran" {
+		t.Fatalf("stdout = %q, want the program's own output: the command was "+
+			"treated as another assignment (stderr %q)", got, ex.Stderr)
+	}
+	if strings.Contains(ex.Stdout, "secret-value") {
+		t.Errorf("stdout leaked the environment, secrets included:\n%s", ex.Stdout)
+	}
+}
+
+// TestRealWrapperDoesNotShadowImageVariables runs the real wrapper inside a
+// container whose shell already exports n and e.
+//
+// A shell assignment to a name that is already exported replaces that value,
+// and the wrapper is a shell. An earlier version read its argument count into
+// "n" and probed env into "e", so an image that exports either name had it
+// silently rewritten, even for a request that set no environment at all.
+//
+// The variables come from the shell that starts the wrapper rather than from
+// the image, because a request-level entry is supposed to win and so cannot
+// express "the image already sets this". Exporting them first is exactly the
+// environment an image produces, and the wrapper text under test is the one
+// the backend sends.
+func TestRealWrapperDoesNotShadowImageVariables(t *testing.T) {
+	h := newRealHarness(t)
+	sb := h.create()
+
+	for _, tc := range []struct {
+		name  string
+		count string
+		env   []string
+		cmd   []string
+	}{
+		{"no environment", "0", nil, []string{"/usr/bin/env"}},
+		{"one unrelated entry", "1", []string{"EXTRA=value"}, []string{"/usr/bin/env"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// $0 is the wrapper source for the outer shell, which exports the
+			// names an image would have set and then runs the wrapper exactly
+			// as the backend does.
+			argv := append([]string{"sh", "-c",
+				`export n=image-n e=image-e; exec /bin/sh -c "$1" /tmp/shadow-pid "" "$2"`,
+				"sandbox", execWrapper, tc.count}, tc.env...)
+			argv = append(argv, tc.cmd...)
+
+			proc, err := h.be.Exec(context.Background(), h.containerID(sb.ID), daemon.ExecSpec{Command: argv})
+			if err != nil {
+				t.Fatalf("exec: %v", err)
+			}
+			out, err := io.ReadAll(proc.Stdout())
+			if err != nil {
+				t.Fatalf("read stdout: %v", err)
+			}
+			if _, err := io.ReadAll(proc.Stderr()); err != nil {
+				t.Fatalf("read stderr: %v", err)
+			}
+			if code, err := proc.Wait(); err != nil || code != 0 {
+				t.Fatalf("wait: code %d, err %v", code, err)
+			}
+
+			got := map[string]string{}
+			for _, line := range strings.Split(string(out), "\n") {
+				if name, value, ok := strings.Cut(line, "="); ok {
+					got[name] = value
+				}
+			}
+			if got["n"] != "image-n" {
+				t.Errorf("n = %q, want image-n: the wrapper overwrote a variable "+
+					"that was already exported", got["n"])
+			}
+			if got["e"] != "image-e" {
+				t.Errorf("e = %q, want image-e: the wrapper overwrote a variable "+
+					"that was already exported", got["e"])
+			}
+		})
+	}
+}
+
+// containerID returns the container behind a sandbox.
+func (h *realHarness) containerID(sandboxID string) string {
+	h.t.Helper()
+	list, err := h.api.ContainerList(context.Background(), true, map[string][]string{
+		"label": {daemon.OwnerLabelKey + "=" + h.owner},
+	})
+	if err != nil || len(list) != 1 {
+		h.t.Fatalf("find container: %v, %d containers", err, len(list))
+	}
+	return list[0].ID
 }

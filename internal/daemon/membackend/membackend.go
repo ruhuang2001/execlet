@@ -68,15 +68,10 @@ type container struct {
 type process struct {
 	container string
 	command   []string
-	// env and dir are what the execution asked for. Nothing in this backend
-	// interprets them; they exist so a test can observe that Exec received
-	// them rather than dropping them on the floor.
-	env  []string
-	dir  string
-	outW *io.PipeWriter
-	errW *io.PipeWriter
-	outR *io.PipeReader
-	errR *io.PipeReader
+	outW      *io.PipeWriter
+	errW      *io.PipeWriter
+	outR      *io.PipeReader
+	errR      *io.PipeReader
 
 	mu         sync.Mutex
 	signals    []daemon.Signal
@@ -185,7 +180,13 @@ func (b *Backend) Exec(ctx context.Context, id string, spec daemon.ExecSpec) (da
 	command := spec.Command
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.lastExec = spec
+	// Copy the slices: the caller owns the request and could reuse its
+	// backing array, which would change what LastExecSpec reports.
+	b.lastExec = daemon.ExecSpec{
+		Command: append([]string(nil), spec.Command...),
+		Env:     append([]string(nil), spec.Env...),
+		Dir:     spec.Dir,
+	}
 	if b.ExecErr != nil {
 		err := b.ExecErr
 		b.ExecErr = nil
@@ -210,8 +211,6 @@ func (b *Backend) Exec(ctx context.Context, id string, spec daemon.ExecSpec) (da
 	p := &process{
 		container: id,
 		command:   append([]string(nil), command...),
-		env:       append([]string(nil), spec.Env...),
-		dir:       spec.Dir,
 		outR:      outR,
 		errR:      errR,
 		outW:      outW,

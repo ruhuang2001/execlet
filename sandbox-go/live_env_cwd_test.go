@@ -13,6 +13,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	sandbox "github.com/ruhuang2001/tiny-sandbox/sandbox-go"
 )
@@ -83,14 +84,16 @@ func TestLiveExecCwdIsApplied(t *testing.T) {
 	}
 }
 
-// TestLiveExecBadCwdStaysCancelable is the reason the wrapper chdirs instead of
-// using Docker's exec WorkingDir.
+// TestLiveExecBadCwdCostsOneExecution pins the failure model a bad directory
+// must have: exit 126 with our own marker on stderr, nothing on stdout, and a
+// sandbox that still works afterwards.
 //
-// With WorkingDir, the runtime fails before the wrapper writes its PID file,
-// so a cancel has no process to signal and removes the whole container. This
-// asserts the opposite: a bad directory is one failed execution with exit 126,
-// and the sandbox keeps working.
-func TestLiveExecBadCwdStaysCancelable(t *testing.T) {
+// 126 is the wrapper's code, which is the point of chdirring in the wrapper
+// instead of using Docker's exec WorkingDir: that runtime failure reports 127
+// on stdout, indistinguishable from a missing command. Cancellation is not
+// what this asserts, because the execution is already terminal; the test below
+// covers cancel after such a failure.
+func TestLiveExecBadCwdCostsOneExecution(t *testing.T) {
 	c := liveClient(t)
 	sb := liveSandbox(t, c, "alpine:3.20", 64)
 
@@ -135,30 +138,52 @@ func TestLiveExecBadCwdStaysCancelable(t *testing.T) {
 	}
 }
 
-// TestLiveExecCancelWorksWithBadCwd is the sharpest form of the regression: a
-// long-running command under an unusable directory must still be cancelable.
+// TestLiveExecCancelStillWorksWithABadCwd proves a bad cwd does not break the
+// cancel path for a following execution.
 //
-// With Docker's WorkingDir the process never starts, so there is nothing to
-// signal and the cancel path removes the container. With the wrapper the
-// process starts, fails the chdir, and exits 126 immediately, so this asserts
-// the execution is terminal without the container being destroyed.
-func TestLiveExecCancelWorksWithBadCwd(t *testing.T) {
+// A bad cwd fails on its own, so canceling it proves nothing: the execution is
+// already terminal and CancelExecution returns the record unchanged. What the
+// wrapper's PID-first order protects is the next execution, so this cancels a
+// long-running command with a valid directory and asserts the cancel actually
+// ended the process group. TestLiveCancel covers the same path without a cwd;
+// this one runs it right after the failure, in the same sandbox.
+func TestLiveExecCancelStillWorksWithABadCwd(t *testing.T) {
 	c := liveClient(t)
 	sb := liveSandbox(t, c, "alpine:3.20", 64)
 
-	started, err := c.StartExecution(context.Background(), sb.ID, sandbox.ExecuteRequest{
-		Command: []string{"sleep", "30"},
+	bad, err := liveExec(t, c, sb.ID, sandbox.ExecuteRequest{
+		Command: []string{"true"},
 		Cwd:     "/does-not-exist",
+	})
+	if err != nil {
+		t.Fatalf("bad cwd execution: %v", err)
+	}
+	if bad.ExitCode == nil || *bad.ExitCode != 126 {
+		t.Fatalf("bad cwd exit = %v, want 126", bad.ExitCode)
+	}
+
+	// A cwd that exists, so the command really runs and cancel has a process
+	// to signal. Requiring output first rules out cancelling a terminal
+	// record: without it, the assertion below would hold even if nothing ran.
+	started, err := c.StartExecution(context.Background(), sb.ID, sandbox.ExecuteRequest{
+		Command: []string{"sh", "-c", "sleep 30 & wait"},
+		Cwd:     "/tmp",
 	})
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
+	waitForRunning(t, c, sb.ID, started.ID)
+
 	canceled, err := c.CancelExecution(context.Background(), sb.ID, started.ID)
 	if err != nil {
 		t.Fatalf("cancel: %v", err)
 	}
 	if canceled.State != "completed" {
 		t.Fatalf("state = %s, want completed after cancel", canceled.State)
+	}
+	if canceled.TerminationReason == nil || *canceled.TerminationReason != sandbox.ReasonCanceled {
+		t.Fatalf("reason = %v, want canceled: the cancel did not end the process",
+			canceled.TerminationReason)
 	}
 
 	after, err := c.GetSandbox(context.Background(), sb.ID)
@@ -168,4 +193,25 @@ func TestLiveExecCancelWorksWithBadCwd(t *testing.T) {
 	if after.State != "running" {
 		t.Fatalf("sandbox state = %s; a cancel must leave the sandbox running", after.State)
 	}
+	if _, err := liveExec(t, c, sb.ID, sandbox.ExecuteRequest{Command: []string{"true"}}); err != nil {
+		t.Fatalf("sandbox is unusable after a cancel: %v", err)
+	}
+}
+
+// waitForRunning blocks until the execution reports running, so a cancel
+// cannot pass by returning a record that never started.
+func waitForRunning(t *testing.T, c *sandbox.Client, sandboxID, executionID string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		ex, err := c.GetExecution(context.Background(), sandboxID, executionID)
+		if err != nil {
+			t.Fatalf("get execution: %v", err)
+		}
+		if ex.State == "running" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("execution never reported running")
 }

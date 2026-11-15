@@ -57,6 +57,12 @@ type ExecInspect struct {
 // own environment: a name here overrides the container's value and every other
 // variable stays visible.
 //
+// Env also reaches the target a second way: the backend repeats it in the
+// wrapper argv, which re-applies it with env(1) after the shell has started.
+// That is not redundancy. A shell imports only the names it accepts, so dash
+// drops MY-VAR and CONFIG.KEY and both shells rewrite IFS, PWD and SHLVL; Env
+// alone therefore does not satisfy the contract for every accepted name.
+//
 // There is deliberately no WorkingDir. The runtime applies it before the
 // command starts, so an unusable directory fails the exec as a startup error:
 // exit 127 with the message on stdout, which is indistinguishable from a

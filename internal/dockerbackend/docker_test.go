@@ -251,3 +251,145 @@ func TestRealOOMIsOOM(t *testing.T) {
 		t.Fatalf("termination_reason = %s, want oom (exit %d, stderr %q)", reason, exit, ex.Stderr)
 	}
 }
+
+// waitCompleted blocks until an execution is terminal and returns it.
+func (h *realHarness) waitCompleted(sandboxID, executionID string) daemon.Execution {
+	h.t.Helper()
+	h.waitFor("execution to complete", 15*time.Second, func() bool {
+		ex, err := h.s.GetExecution(sandboxID, executionID)
+		return err == nil && ex.State == daemon.ExecCompleted
+	})
+	ex, err := h.s.GetExecution(sandboxID, executionID)
+	if err != nil {
+		h.t.Fatalf("get execution: %v", err)
+	}
+	return ex
+}
+
+// derefInt reports an exit code for a failure message. A nil code means the
+// execution did not exit, which is worth seeing as such in the output.
+func derefInt(v *int) int {
+	if v == nil {
+		return -1
+	}
+	return *v
+}
+
+// run starts an execution through the daemon, the same path a client takes,
+// and returns it once terminal.
+func (h *realHarness) run(sandboxID string, req daemon.ExecuteRequest) daemon.Execution {
+	h.t.Helper()
+	ex, _, err := h.s.StartExecution(context.Background(), sandboxID, req)
+	if err != nil {
+		h.t.Fatalf("start %v: %v", req.Command, err)
+	}
+	return h.waitCompleted(sandboxID, ex.ID)
+}
+
+// TestRealWorkingDirectoryIsPhysical proves the directory is resolved the way
+// the filesystem resolves it, not the way a shell abbreviates it.
+//
+// The wrapper chdirs, so the shell's own rules apply unless -P overrides them:
+// a logical cd simplifies ".." lexically, before it looks at the filesystem.
+// With link -> /data, a request for /work/link/.. then lands in /work, and
+// /nope/.. succeeds because ".." removes the component that does not exist.
+// Both would run the command somewhere the caller never named.
+func TestRealWorkingDirectoryIsPhysical(t *testing.T) {
+	h := newRealHarness(t)
+	sb := h.create()
+
+	fixture := h.run(sb.ID, daemon.ExecuteRequest{
+		Command: []string{"sh", "-c", "mkdir -p /work /data/project && ln -s /data/project /work/link"},
+	})
+	if fixture.ExitCode == nil || *fixture.ExitCode != 0 {
+		t.Fatalf("fixture: exit %d, stderr %q", derefInt(fixture.ExitCode), fixture.Stderr)
+	}
+
+	// The symlink is followed first, so ".." applies to its target.
+	if ex := h.run(sb.ID, daemon.ExecuteRequest{Command: []string{"pwd"}, Cwd: "/work/link/.."}); strings.TrimSpace(ex.Stdout) != "/data" {
+		t.Errorf("pwd in /work/link/.. = %q (exit %d), want /data; the path was "+
+			"simplified lexically instead of resolved", ex.Stdout, derefInt(ex.ExitCode))
+	}
+
+	// A component that does not exist cannot be removed by "..", so this is
+	// an unusable directory rather than /tmp.
+	ex := h.run(sb.ID, daemon.ExecuteRequest{Command: []string{"pwd"}, Cwd: "/tmp/nonexistent-review-directory/.."})
+	if ex.ExitCode == nil || *ex.ExitCode != 126 {
+		t.Errorf("exit in /tmp/nonexistent-review-directory/.. = %d (stdout %q), "+
+			"want 126: a missing component followed by .. is not a directory", derefInt(ex.ExitCode), ex.Stdout)
+	}
+	if !strings.Contains(ex.Stderr, "cwd is not a usable directory") {
+		t.Errorf("stderr = %q, want the cwd marker", ex.Stderr)
+	}
+
+	// The plain path still works, so -P did not break the ordinary case.
+	if ex := h.run(sb.ID, daemon.ExecuteRequest{Command: []string{"pwd"}, Cwd: "/work"}); strings.TrimSpace(ex.Stdout) != "/work" {
+		t.Errorf("pwd in /work = %q (exit %d), want /work", ex.Stdout, derefInt(ex.ExitCode))
+	}
+}
+
+// TestRealEnvironmentSurvivesTheShell proves the requested entries reach the
+// target unchanged, including names a shell rejects.
+//
+// The exec environment passes through /bin/sh, which imports only names it
+// considers valid identifiers: dash drops MY-VAR and CONFIG.KEY outright, and
+// both shells rewrite IFS, PWD and SHLVL. The wrapper's env(1) step is what
+// makes the target's environment the one the caller asked for, on whichever
+// shell the image ships.
+func TestRealEnvironmentSurvivesTheShell(t *testing.T) {
+	h := newRealHarness(t)
+	sb := h.create()
+
+	want := map[string]string{
+		"MY-VAR":     "hyphen",
+		"CONFIG.KEY": "dot",
+		"SHLVL":      "42",
+		"IFS":        "connector",
+		"NORMAL":     "kept",
+	}
+	ex := h.run(sb.ID, daemon.ExecuteRequest{Command: []string{"env"}, Env: want})
+	if ex.ExitCode == nil || *ex.ExitCode != 0 {
+		t.Fatalf("env: exit %d, stderr %q", derefInt(ex.ExitCode), ex.Stderr)
+	}
+
+	got := map[string]string{}
+	for _, line := range strings.Split(ex.Stdout, "\n") {
+		if name, value, ok := strings.Cut(line, "="); ok {
+			got[name] = value
+		}
+	}
+	for name, value := range want {
+		if got[name] != value {
+			t.Errorf("%s = %q, want %q; the wrapper did not pass the environment "+
+				"through unchanged", name, got[name], value)
+		}
+	}
+}
+
+// TestRealEnvironmentOverrideAppliesWithoutEnvOnPath proves the environment
+// step does not depend on PATH. A request that replaces PATH would otherwise
+// hide env(1) itself and fail every execution that sets a variable.
+func TestRealEnvironmentOverrideAppliesWithoutEnvOnPath(t *testing.T) {
+	h := newRealHarness(t)
+	sb := h.create()
+
+	fixture := h.run(sb.ID, daemon.ExecuteRequest{
+		Command: []string{"sh", "-c", "mkdir -p /custom && printf '#!/bin/sh\\necho custom-bin-ran\\n' > /custom/mybin && chmod +x /custom/mybin"},
+	})
+	if fixture.ExitCode == nil || *fixture.ExitCode != 0 {
+		t.Fatalf("fixture: exit %d, stderr %q", derefInt(fixture.ExitCode), fixture.Stderr)
+	}
+
+	// The command is found only through the PATH the request sets, which also
+	// means env(1) is not on it.
+	ex := h.run(sb.ID, daemon.ExecuteRequest{
+		Command: []string{"mybin"},
+		Env:     map[string]string{"PATH": "/custom"},
+	})
+	if ex.ExitCode == nil || *ex.ExitCode != 0 {
+		t.Fatalf("exit = %d, stderr %q, want the command found through the requested PATH", derefInt(ex.ExitCode), ex.Stderr)
+	}
+	if strings.TrimSpace(ex.Stdout) != "custom-bin-ran" {
+		t.Errorf("stdout = %q, want the command's output", ex.Stdout)
+	}
+}

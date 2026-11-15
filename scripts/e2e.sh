@@ -246,12 +246,46 @@ check "env-second isolated" "a later execution does not inherit the environment"
   "$(cat "$OUT/env-second.out")" "<unset>"
 "$BIN/sandboxctl" kill "$env_sandbox" >/dev/null 2>&1
 
+# Names a shell would reject still reach the process. The wrapper starts a
+# shell, which imports only the names it accepts: dash drops a hyphen or a dot
+# and every shell rewrites IFS, PWD and SHLVL. The evidence has to be a
+# non-shell reader, because an inner shell would filter the same names again.
+"$BIN/sandboxctl" run --rm --env 'MY-VAR=hyphen' --env 'CONFIG.KEY=dot' \
+  --env 'SHLVL=42' -- env >"$OUT/env-names.out" 2>"$OUT/env-names.err"
+check "env-names exit" "the probe command succeeds" "$?" "0"
+contains "env-names hyphen" "a name with a hyphen reaches the process" "$OUT/env-names.out" "MY-VAR=hyphen"
+contains "env-names dot" "a name with a dot reaches the process" "$OUT/env-names.out" "CONFIG.KEY=dot"
+contains "env-names shlvl" "a shell-managed name keeps the requested value" "$OUT/env-names.out" "SHLVL=42"
+
+# The directory is resolved the way the filesystem resolves it. A logical cd
+# simplifies ".." before it looks, so with link -> /data this would print
+# /work, and a missing component followed by ".." would succeed instead of
+# failing.
+"$BIN/sandboxctl" run -- sh -c 'mkdir -p /work /data/project && ln -s /data/project /work/link' \
+  >"$OUT/cwd-phys-fixture.out" 2>"$OUT/cwd-phys-fixture.err"
+check "cwd-phys fixture" "the fixture command succeeds" "$?" "0"
+cwd_phys_sandbox=$(sed -n 's/^sandbox: \(sbx_[a-z0-9]*\).*/\1/p' "$OUT/cwd-phys-fixture.err" | head -1)
+"$BIN/sandboxctl" run --sandbox "$cwd_phys_sandbox" --cwd /work/link/.. -- pwd \
+  >"$OUT/cwd-phys.out" 2>"$OUT/cwd-phys.err"
+check "cwd-phys exit" "a path through a symlink succeeds" "$?" "0"
+check "cwd-phys resolved" "a symlink followed by .. resolves physically" \
+  "$(cat "$OUT/cwd-phys.out")" "/data"
+"$BIN/sandboxctl" run --sandbox "$cwd_phys_sandbox" --cwd /tmp/nope/.. -- pwd \
+  >"$OUT/cwd-missing-upto.out" 2>"$OUT/cwd-missing-upto.err"
+check "cwd-missing-upto exit" "a missing component followed by .. fails" "$?" "1"
+contains "cwd-missing-upto marker" "the failure names the unusable directory" \
+  "$OUT/cwd-missing-upto.err" "sandbox: cwd is not a usable directory: /tmp/nope/.."
+check "cwd-missing-upto stdout" "nothing ran" "$(cat "$OUT/cwd-missing-upto.out")" ""
+"$BIN/sandboxctl" kill "$cwd_phys_sandbox" >/dev/null 2>&1
+
 # A cwd that does not exist must not read as a missing command: the marker is
-# on stderr and the status is 126, the shell's own "cannot execute".
+# on stderr and the recorded status is 126, the wrapper's own "cannot start".
+# The CLI collapses that status to 1, because it is not a command exit; the
+# `execution:` line carries the recorded one.
 "$BIN/sandboxctl" run --rm --timeout 0 --cwd /definitely/not/here -- true \
   >"$OUT/bad-cwd.out" 2>"$OUT/bad-cwd.err"
 code=$?
-check "bad-cwd exit" "a bad directory fails the invocation" "$code" "1"
+check "bad-cwd exit" "a bad directory fails the invocation with status 1" "$code" "1"
 check "bad-cwd empty stdout" "the marker is not program output" "$(cat "$OUT/bad-cwd.out")" ""
 contains "bad-cwd marker" "stderr names the unusable directory" \
   "$OUT/bad-cwd.err" "sandbox: cwd is not a usable directory: /definitely/not/here"

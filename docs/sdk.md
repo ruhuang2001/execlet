@@ -75,7 +75,11 @@ directory:
 
 `Env` is additive. A name here overrides the same name from the image, every
 other image variable stays visible, and a later execution does not inherit it.
-The server never echoes `Env` back, because it may carry credentials.
+Every accepted name reaches the process unchanged, including names a shell
+would reject such as `MY-VAR`, so the image must provide `env` at `/usr/bin/env`
+or `/bin/env`; without one the execution ends with `ExitCode` 126 and a marker
+on stderr. The server never echoes `Env` back, because it may carry
+credentials.
 `Execution.Cwd` is nullable and repeats the directory only when the request set
 one.
 

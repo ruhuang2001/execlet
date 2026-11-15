@@ -398,25 +398,55 @@ func (b *Backend) waitInspect(ctx context.Context, execID string) (dockerapi.Exe
 // that starts here. A shell imports only the names it considers valid
 // identifiers, so dash drops MY-VAR and CONFIG.KEY and rewrites IFS, PWD and
 // SHLVL; BusyBox keeps more. Exec env is what the target must see, and env(1)
-// passes every entry through unchanged. It is called by absolute path because
-// the request may replace PATH, which would otherwise hide it.
+// passes every entry through unchanged.
+//
+// Nothing here assigns a shell variable. An assignment to a name the image
+// already exports replaces the value the image set, so a wrapper-local "n" or
+// "e" would silently rewrite the image's own n and e. The count is read from
+// $2 before the shift and env is probed by path, which needs no variable.
 const execWrapper = `printf %s $$ > "$0" || exit 125
 if [ -n "$1" ]; then cd -P -- "$1" 2>/dev/null || { printf 'sandbox: cwd is not a usable directory: %s\n' "$1" >&2; exit 126; }; fi
-n=$2; shift 2
-if [ "$n" -eq 0 ]; then exec "$@"; fi
-for e in /usr/bin/env /bin/env; do
-  [ -x "$e" ] && exec "$e" -- "$@"
-done
+if [ "$2" -eq 0 ]; then shift 2; exec "$@"; fi
+shift 2
+if [ -x /usr/bin/env ]; then exec /usr/bin/env -- "$@"; fi
+if [ -x /bin/env ]; then exec /bin/env -- "$@"; fi
 printf 'sandbox: this image has no env utility, so the requested environment cannot be applied\n' >&2
 exit 126`
+
+// commandSeparator keeps a command out of env's assignment parsing, and is used
+// only when it is needed.
+//
+// env(1) reads every leading NAME=VALUE as an assignment and only then starts
+// the command; "--" ends option parsing, not assignment parsing. A command
+// whose own path contains "=" would therefore be swallowed: env would apply it
+// as a variable, run nothing, exit 0, and print the environment, secrets
+// included, as if that were the program's output. A command whose path has no
+// "=" ends the scan by itself, so the separator is only added in the case that
+// needs it.
+//
+// It is a shell, and a shell resets SHLVL and IFS on startup, so an execution
+// that both sets those names and names a command containing "=" sees the
+// shell's values instead of the requested ones. That combination is not worth a
+// mechanism of its own: every other execution keeps a single shell, which is
+// what lets the requested SHLVL and IFS reach the target.
+var commandSeparator = []string{"/bin/sh", "-c", `exec "$@"`, "sandbox"}
+
+// needsCommandSeparator reports whether the command would be read as another
+// assignment by env(1).
+func needsCommandSeparator(command []string) bool {
+	return len(command) > 0 && strings.Contains(command[0], "=")
+}
 
 // wrapCommand builds the argv an exec runs. Writing the PID before the exec
 // matters: the PID of the shell equals the PID of the process group that
 // Docker created for the exec, and the exec keeps that PID and group.
 func wrapCommand(pidPath, dir string, env, command []string) []string {
-	argv := make([]string, 0, 6+len(env)+len(command))
+	argv := make([]string, 0, 6+len(commandSeparator)+len(env)+len(command))
 	argv = append(argv, "/bin/sh", "-c", execWrapper, pidPath, dir, strconv.Itoa(len(env)))
 	argv = append(argv, env...)
+	if len(env) > 0 && needsCommandSeparator(command) {
+		argv = append(argv, commandSeparator...)
+	}
 	return append(argv, command...)
 }
 

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -525,7 +526,8 @@ func writeError(w http.ResponseWriter, status int, message string) {
 
 // unwrap recovers the PID path, the directory, the environment entries the
 // wrapper re-applies, and the real argv from a wrapped exec. The wrapper argv
-// is: shell, -c, script, pidPath, dir, envCount, env..., command...
+// is: shell, -c, script, pidPath, dir, envCount, env..., [separator,] command...
+// The separator only appears when there is an environment to end.
 func unwrap(cmd []string) (pidPath, dir string, env, actual []string, ok bool) {
 	if len(cmd) < 6 || cmd[0] != "/bin/sh" || cmd[1] != "-c" || cmd[2] != execWrapper {
 		return "", "", nil, nil, false
@@ -534,7 +536,13 @@ func unwrap(cmd []string) (pidPath, dir string, env, actual []string, ok bool) {
 	if err != nil || n < 0 || len(cmd) < 6+n {
 		return "", "", nil, nil, false
 	}
-	return cmd[3], cmd[4], cmd[6 : 6+n], cmd[6+n:], true
+	rest := cmd[6+n:]
+	// The separator only appears when the command would otherwise be read as
+	// another assignment.
+	if len(rest) >= len(commandSeparator) && slices.Equal(rest[:len(commandSeparator)], commandSeparator) {
+		rest = rest[len(commandSeparator):]
+	}
+	return cmd[3], cmd[4], cmd[6 : 6+n], rest, true
 }
 
 // file returns a container's stored file.

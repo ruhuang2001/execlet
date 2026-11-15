@@ -204,7 +204,11 @@ func waitForRunning(t *testing.T, c *sandbox.Client, sandboxID, executionID stri
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		ex, err := c.GetExecution(context.Background(), sandboxID, executionID)
+		// Bounded by the deadline, so an unresponsive daemon cannot hang the
+		// test beyond the timeout it was given.
+		pollCtx, cancel := context.WithDeadline(context.Background(), deadline)
+		ex, err := c.GetExecution(pollCtx, sandboxID, executionID)
+		cancel()
 		if err != nil {
 			t.Fatalf("get execution: %v", err)
 		}

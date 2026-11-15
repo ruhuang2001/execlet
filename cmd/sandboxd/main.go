@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/ruhuang2001/tiny-sandbox/internal/daemon"
+	"github.com/ruhuang2001/tiny-sandbox/internal/dockerapi"
 	"github.com/ruhuang2001/tiny-sandbox/internal/dockerbackend"
 )
 
@@ -44,7 +45,7 @@ func main() {
 
 	backend, err := dockerbackend.Dial(ctx, *dockerHost)
 	if err != nil {
-		slog.Error("docker connection failed")
+		slog.Error("docker connection failed", "error_category", runtimeErrorCategory(err))
 		os.Exit(1)
 	}
 
@@ -57,7 +58,7 @@ func main() {
 		*owner = *addr
 	}
 	if removed, err := backend.RemoveOwned(ctx, daemon.OwnerLabelKey, *owner); err != nil {
-		slog.Warn("startup cleanup incomplete", "removed", removed)
+		slog.Warn("startup cleanup incomplete", "removed", removed, "error_category", runtimeErrorCategory(err))
 	} else if removed > 0 {
 		slog.Info("startup cleanup completed", "removed", removed)
 	}
@@ -107,6 +108,27 @@ func main() {
 	// ListenAndServe returns as soon as Shutdown begins. Wait for the drain and
 	// the container sweep before exiting.
 	<-srvDone
+}
+
+// runtimeErrorCategory preserves actionable failure classes without Docker's
+// response body, which may contain private image names or runtime payloads.
+func runtimeErrorCategory(err error) string {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "deadline_exceeded"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	case errors.Is(err, os.ErrNotExist):
+		return "socket_missing"
+	case errors.Is(err, os.ErrPermission):
+		return "permission_denied"
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return "connection_refused"
+	}
+	if status, ok := errors.AsType[*dockerapi.StatusError](err); ok {
+		return fmt.Sprintf("docker_http_%d", status.Status)
+	}
+	return "runtime_error"
 }
 
 // defaultDockerSocket honours DOCKER_HOST and otherwise uses the standard

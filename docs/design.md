@@ -312,6 +312,10 @@ safe error codes in logs, because raw runtime text can contain user payloads.
 Public /healthz answers independently of Docker; public /readyz bounds a Docker
 /_ping check to two seconds and reports 503 when the runtime is unavailable.
 Readiness is an optional backend capability, leaving the execution interface stable.
+Completion logs are synchronous at the terminal transition so runner and eviction
+paths record exactly one stored outcome. A blocked log sink can therefore delay
+sandbox operations; deploy with a continuously drained stderr sink. Asynchronous
+logging would require a separate bounded queue and explicit record-loss policy.
 
 ### Server state
 

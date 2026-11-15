@@ -115,3 +115,11 @@ Exit 0 only if all applicable checks passed.
 - [Run flags and cleanup](../cmd/sandboxctl/run.go).
 - [Attach, logs, and lifecycle commands](../cmd/sandboxctl/ops.go).
 - [Doctor checks](../cmd/sandboxctl/doctor.go).
+
+## Directory listing
+
+sandboxctl files list SANDBOX /work [--limit 100] [--cursor TOKEN] prints one
+JSON page to stdout, including entry metadata and next_cursor when more
+entries exist. Flags follow the two positional arguments. Limit is 1–1000.
+Use the cursor with the same path; ordering is bytewise and not a snapshot.
+Failures use normal CLI error reporting and exit status.

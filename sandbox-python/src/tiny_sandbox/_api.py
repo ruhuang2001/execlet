@@ -12,7 +12,7 @@ from urllib.parse import quote, urlencode
 
 from ._cancel import CancellationToken, _Cancellation
 from ._errors import Error
-from ._models import CreateSandboxRequest, ExecuteRequest, Execution, Sandbox
+from ._models import CreateSandboxRequest, ExecuteRequest, Execution, FileEntry, FileList, Sandbox
 from ._transport import Transport
 
 _P = ParamSpec("_P")
@@ -185,6 +185,17 @@ class SandboxAPI(Transport, ABC):
                 cancel=cancel,
             )
         )
+
+    @_public_cancellation
+    def list_files(
+        self, sandbox_id: str, path: str, *, limit: int = 100, cursor: str = "",
+        cancel: CancellationToken | None = None,
+    ) -> FileList:
+        """Return one name-ordered page of immediate directory children."""
+        query = urlencode({"path": path, "limit": limit, "cursor": cursor})
+        payload = self._json("GET", self._sandbox_path(sandbox_id) + "/files/list?" + query, cancel=cancel)
+        entries = [FileEntry.from_dict(item) for item in _resource_items(payload, "entries")]
+        return FileList.from_dict({**payload, "entries": entries})
 
     @_public_cancellation
     def read_file(

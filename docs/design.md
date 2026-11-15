@@ -397,6 +397,17 @@ Recorded because earlier builds hit them, not as hypotheticals:
 12. **A shell in the path must not interpret the request.** Two measured cases, both reproduced on Alpine's BusyBox `sh` and Debian's dash. First, `cd` without `-P` simplifies `..` lexically before touching the filesystem, so `cwd: /work/link/..` with `link -> /data` runs in `/work`, and `/nope/..` succeeds instead of failing; the wrapper uses `cd -P`. Second, a shell imports only the environment names it accepts, so dash silently drops `MY-VAR` and `CONFIG.KEY` and both shells rewrite `IFS`, `PWD` and `SHLVL`; the wrapper re-applies the request's entries through `env --` at the last step, by absolute path because a request may replace `PATH`. That makes `env` an image dependency, which the HTTP contract states; the alternative was dropping names the contract accepts. Two more details followed from review: `env --` ends option parsing, not assignment parsing, so a command path containing `=` would be applied as a variable and its environment printed to stdout as output — a fixed `sh -c 'exec "$@"'` trampoline ends the assignments where the environment does. And the wrapper assigns no shell variable at all, because assigning to a name the image already exported rewrites it.
 13. **Documentation bloat.** Evidence goes in `artifacts/`; prose stays readable.
 
+### Directory listing
+
+The listing route shares file lifecycle rules and uses bounded recursive
+Docker archive reads. It retains only limit+1 immediate-child metadata records
+and emits a path-bound name cursor. A bounded map of scanned names, sizes and
+hardlink targets resolves file sizes even when targets are nested. Each request caps scanned archive bytes
+(64 MiB), headers (10000), and elapsed runtime work (30 seconds). This avoids
+unbounded host memory/work, but large nested file contents can prevent even
+a small page from succeeding. Pagination is deterministic without snapshot
+consistency; concurrent mutations can change later pages. See the API contract.
+
 ## Further reading
 
 - [HTTP API](api.md), [Go SDK](sdk.md), and [CLI](cli.md): public contracts and usage.

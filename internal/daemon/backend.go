@@ -150,6 +150,8 @@ type Backend interface {
 	// It only ever increases, so a delta across one execution attributes an
 	// OOM kill to that execution.
 	OOMKillCount(ctx context.Context, containerID string) (int64, error)
+	// ListFiles returns up to limit+1 children after a name, sorted by name.
+	ListFiles(ctx context.Context, containerID, path, after string, limit int) ([]FileEntry, error)
 	// ReadFile returns a file outside any execution, as the server sees it.
 	ReadFile(ctx context.Context, containerID, path string) ([]byte, error)
 	// WriteFile writes a file, creating parent directories.

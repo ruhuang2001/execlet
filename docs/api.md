@@ -31,7 +31,7 @@ unknown paths or unsupported methods may use plain text:
 | 409 | `invalid_state` | operation not allowed in the sandbox's current state (see transition table) | no |
 | 409 | `busy` | the sandbox already has a running execution | no |
 | 409 | `idempotency_conflict` | idempotency key reused with a different `command`, `cwd`, or `env` | no |
-| 413 | `payload_too_large` | JSON request body or file upload exceeds a limit | no |
+| 413 | `payload_too_large` | JSON request body, file upload, or directory archive scan exceeds a limit | no |
 | 429 | `rate_limited` | a create would exceed the live-sandbox limit; see [limits](#limits) | yes |
 | 500 | `internal` | unexpected server error | yes |
 | 502 | `backend_error` | the container runtime failed | yes |
@@ -307,6 +307,8 @@ data: {"id":"exe_456","state":"completed","exit_code":0,"termination_reason":"ex
 | Retained sandbox records | 64 killed sandboxes | the oldest killed record is dropped whole, including its execution history. `404 not_found` afterwards. Live sandboxes are never dropped |
 | Retained output, all sandboxes | 64 MiB | the oldest completed executions are dropped, across sandboxes, until the total fits. The running execution and each sandbox's newest completed one survive |
 | JSON request body | 1 MiB | `413 payload_too_large` |
+| Directory listing archive scan | 64 MiB / 10000 headers | `413 payload_too_large` |
+| Directory listing runtime | 30 seconds | `502 backend_error` |
 | File upload | 10 MiB | `413 payload_too_large` |
 | File download through Docker | 10 MiB | currently `502 backend_error` from archive extraction |
 
@@ -356,3 +358,26 @@ cleanup with the same owner label is the fallback.
 - [Execution engine](../internal/daemon/engine.go): idempotency, cancellation, and file access.
 - [Reaper](../internal/daemon/reaper.go): timeout and eviction checks.
 - [Server entry point](../cmd/sandboxd/main.go): startup cleanup and HTTP shutdown.
+
+## Directory listing
+
+### `GET /v1/sandboxes/{sandbox_id}/files/list`
+
+Query path=/work&limit=100&cursor=TOKEN returns
+entries with name, size (regular-file bytes, symlink target-path bytes,
+zero for directories), mode (POSIX permission bits), mtime (UTC
+RFC3339), and is_dir, plus next_cursor when another page exists. Only immediate
+children appear; child symlinks are not followed. Results sort by UTF-8 name
+bytes. Limits are 1–1000 (default 100); reuse the opaque cursor with the same
+path. Concurrent mutations do not provide snapshot consistency. Empty
+directories return entries: []; missing paths are 404 and files are 400.
+
+Paths must be absolute UTF-8, at most 4096 bytes, without NUL or parent
+traversal. Repeated/unknown parameters, invalid limits, and malformed or
+path-mismatched cursors return 400. Paused sandboxes resume first. Each page
+scans Docker's recursive tar stream, capped at 64 MiB, 10000 entries and
+30 seconds, retaining at most limit+1 page records and 10000 bounded
+name/size/link-target records to resolve hardlink sizes. Large nested files
+or trees can therefore return 413 even when immediate children are few;
+this API is not a constant-time filesystem index. Runtime deadline failures
+are 502. No archive is extracted on the host.

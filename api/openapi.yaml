@@ -494,6 +494,64 @@ paths:
           $ref: '#/components/responses/BackendError'
         '503':
           $ref: '#/components/responses/Unavailable'
+  /v1/sandboxes/{sandbox_id}/files/list:
+    parameters:
+      - $ref: '#/components/parameters/SandboxID'
+      - $ref: '#/components/parameters/FilePath'
+    get:
+      tags: [files]
+      operationId: listFiles
+      summary: List immediate directory children in bytewise name order
+      description: >-
+        Resumes paused sandboxes. No snapshot consistency across pages. Paths
+        must be UTF-8, absolute, at most 4096 bytes, without NUL or parent traversal.
+        Docker recursively scans at most 64 MiB and 10000 archive entries per
+        page within 30 seconds; large nested content can cause 413 even for a
+        small page. Child symlinks are not followed. Duplicate query values fail.
+      parameters:
+        - in: query
+          name: limit
+          schema: {type: integer, minimum: 1, maximum: 1000, default: 100}
+        - in: query
+          name: cursor
+          schema: {type: string, maxLength: 12000}
+          description: Opaque next_cursor from the preceding page for this path.
+      responses:
+        '200':
+          description: One directory page; next_cursor is omitted on the last page.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [entries]
+                properties:
+                  next_cursor: {type: string}
+                  entries:
+                    type: array
+                    items:
+                      type: object
+                      required: [name, size, mode, mtime, is_dir]
+                      properties:
+                        name: {type: string}
+                        size: {type: integer, format: int64, description: Regular-file bytes or symlink target-path bytes; zero for directories}
+                        mode: {type: integer, description: POSIX permission bits}
+                        mtime: {type: string, format: date-time}
+                        is_dir: {type: boolean}
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '502':
+          $ref: '#/components/responses/BackendError'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+
 components:
   securitySchemes:
     bearerAuth:
@@ -590,7 +648,7 @@ components:
     PayloadTooLarge:
       description: >-
         413 payload_too_large: the JSON request body exceeds 1 MiB, or a file
-        upload exceeds 10 MiB.
+        upload exceeds 10 MiB, or a directory archive scan exceeds 64 MiB / 10000 headers.
       content:
         application/json:
           schema:

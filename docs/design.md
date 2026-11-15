@@ -290,7 +290,7 @@ cleanup behavior when the runtime fails.
 ### Retries
 
 - Retry candidates: transport errors before a complete response, truncated response bodies, and status 429, 500, 502, 503, 504.
-- Safe to repeat: `GET`, `DELETE`, `PUT` (files), pause, resume, cancel, and execution starts carrying an idempotency key. `POST /v1/sandboxes` is attempted exactly once.
+- Safe to repeat: `GET`, `DELETE`, `PUT` (ordinary files only), pause, resume, cancel, and execution starts carrying an idempotency key. `POST /v1/sandboxes` and archive `PUT` are attempted exactly once.
 - For ordinary requests, the backoff cap is `min(2s, 200ms * 2^attempt)` and the delay is sampled uniformly from half that cap to the cap. A positive integer `Retry-After` value overrides it. SSE reconnects use the same backoff function; see [SDK streaming limitations](sdk.md#current-streaming-limitations) for differences in retry accounting and header handling.
 - Nothing is retried after the context is done.
 
@@ -408,6 +408,17 @@ unbounded host memory/work, but large nested file contents can prevent even
 a small page from succeeding. Pagination is deterministic without snapshot
 consistency; concurrent mutations can change later pages. See the API contract.
 
+### Tar transfer
+
+Tar requests are fully bounded and validated in memory before lifecycle or
+filesystem mutation. The validator re-encodes only supported members, ordinary
+permission bits and mtime, preventing unsafe tar extension interpretation by
+Docker. Safe internal links are allowed; link ancestors, traversal and sparse
+entries are refused. Docker preflight rejects existing symlink destinations
+and ancestors using fixed shell code with positional path arguments. This
+is not atomic against concurrent container writes; callers must quiesce writers.
+SDK uploads use one attempt because extraction is not transactional after a
+runtime failure. No tar bytes are extracted on the daemon host.
 ## Further reading
 
 - [HTTP API](api.md), [Go SDK](sdk.md), and [CLI](cli.md): public contracts and usage.

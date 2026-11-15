@@ -236,3 +236,12 @@ Command metadata remains limited to 1 MiB total UTF-8 bytes, counting one
 separator byte per argv element. Larger commands return 413 payload_too_large;
 this keeps complete SSE events within the SDK framing limits even when stdin
 uses the larger execution-request JSON budget.
+
+## Tar transfer
+
+ReadArchive(ctx, id, path) returns uncompressed tar bytes rooted at path's
+basename. WriteArchive(ctx, id, destination, data) extracts a validated archive
+under an existing directory. Upload is attempted once; callers must inspect
+remote state after transport failure because extraction is not transactional.
+Limits are 32 MiB encoded, 16 MiB payload and 4096 entries. Safe internal links
+are supported; the HTTP contract specifies validation and concurrency limits.

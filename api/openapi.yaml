@@ -552,6 +552,71 @@ paths:
         '503':
           $ref: '#/components/responses/Unavailable'
 
+  /v1/sandboxes/{sandbox_id}/files/archive:
+    parameters:
+      - $ref: '#/components/parameters/SandboxID'
+      - $ref: '#/components/parameters/FilePath'
+    get:
+      tags: [files]
+      operationId: readArchive
+      summary: Download a validated tar archive rooted at the selected name
+      description: >-
+        Buffers and validates at most 32 MiB encoded, 16 MiB regular payload,
+        and 4096 entries. Preserves regular bytes, directories, safe internal
+        relative symlinks and earlier-member hardlinks. Root entry is the
+        selected basename. Unsupported archives return 400, limits return 413.
+      responses:
+        '200':
+          description: Validated uncompressed tar bytes.
+          content:
+            application/x-tar:
+              schema: {type: string, format: binary}
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '502':
+          $ref: '#/components/responses/BackendError'
+    put:
+      tags: [files]
+      operationId: writeArchive
+      summary: Extract a fully validated tar beneath an existing directory
+      description: >-
+        Validates all entries before any mutation. Rejects absolute/traversal
+        names or targets, devices, FIFO, sparse, unsupported metadata, duplicate
+        names, nondirectory ancestors, and existing symlink destinations. Limits:
+        32 MiB encoded, 16 MiB regular bytes, 4096 members, 4096-byte names.
+        Extraction is not atomic against runtime failure or concurrent writes.
+        Upload is not automatically retried by SDKs. No host extraction occurs.
+      requestBody:
+        required: true
+        content:
+          application/x-tar:
+            schema: {type: string, format: binary}
+          application/octet-stream:
+            schema: {type: string, format: binary}
+      responses:
+        '204':
+          description: Archive extracted.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '502':
+          $ref: '#/components/responses/BackendError'
+
 components:
   securitySchemes:
     bearerAuth:
@@ -648,7 +713,8 @@ components:
     PayloadTooLarge:
       description: >-
         413 payload_too_large: the JSON request body exceeds 1 MiB (8 MiB for execution starts), decoded stdin exceeds 1 MiB, or a file
-        upload exceeds 10 MiB, or a directory archive scan exceeds 64 MiB / 10000 headers.
+        upload exceeds 10 MiB, a directory archive scan exceeds 64 MiB / 10000 headers,
+        or tar transfer exceeds 32 MiB encoded / 16 MiB payload / 4096 members.
       content:
         application/json:
           schema:

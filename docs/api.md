@@ -31,7 +31,7 @@ unknown paths or unsupported methods may use plain text:
 | 409 | `invalid_state` | operation not allowed in the sandbox's current state (see transition table) | no |
 | 409 | `busy` | the sandbox already has a running execution | no |
 | 409 | `idempotency_conflict` | idempotency key reused with a different `command`, `cwd`, `env`, or `stdin` | no |
-| 413 | `payload_too_large` | JSON request body, file upload, or directory archive scan exceeds a limit | no |
+| 413 | `payload_too_large` | JSON request body, file upload, directory scan, or tar transfer exceeds a limit | no |
 | 429 | `rate_limited` | a create would exceed the live-sandbox limit; see [limits](#limits) | yes |
 | 500 | `internal` | unexpected server error | yes |
 | 502 | `backend_error` | the container runtime failed | yes |
@@ -309,6 +309,7 @@ data: {"id":"exe_456","state":"completed","exit_code":0,"termination_reason":"ex
 | JSON request body | 1 MiB (execution starts: 8 MiB) | `413 payload_too_large` |
 | Directory listing archive scan | 64 MiB / 10000 headers | `413 payload_too_large` |
 | Directory listing runtime | 30 seconds | `502 backend_error` |
+| Tar transfer | 32 MiB encoded / 16 MiB payload / 4096 members | `413 payload_too_large` |
 | File upload | 10 MiB | `413 payload_too_large` |
 | File download through Docker | 10 MiB | currently `502 backend_error` from archive extraction |
 
@@ -407,3 +408,41 @@ Command metadata remains limited to 1 MiB total UTF-8 bytes, counting one
 separator byte per argv element. Larger commands return 413 payload_too_large;
 this keeps complete SSE events within the SDK framing limits even when stdin
 uses the larger execution-request JSON budget.
+
+## Tar transfer
+
+### `GET /v1/sandboxes/{sandbox_id}/files/archive?path=/abs/path`
+
+Returns application/x-tar. The archive contains the selected file/directory
+basename as its root, so downloading /work produces work/ and its descendants.
+Both directions use uncompressed tar, bounded to 32 MiB encoded, 4096 entries
+and 16 MiB total regular-file payload. Download validates before sending bytes.
+Malformed or unsupported content is 400; limits are 413. Paused sandboxes
+resume first; runtime operations have a 30-second deadline.
+
+### `PUT /v1/sandboxes/{sandbox_id}/files/archive?path=/abs/directory`
+
+The body is tar (application/x-tar or application/octet-stream). A 204 means
+extraction finished beneath the existing directory. Missing destinations are
+404 and nondirectories are 400. Every header and payload is validated before
+any filesystem mutation. Invalid later members cannot leave earlier members
+written. Names are relative UTF-8, at most 4096 bytes, with no NUL, backslash,
+absolute path or parent traversal component. Duplicate names, nondirectory
+ancestors, device/FIFO/sparse members and extended attributes are rejected.
+Only regular files, directories, symlinks and hardlinks are supported.
+Symlinks use relative targets without parent traversal and must refer to
+a regular-file or directory member in the archive; hardlinks must refer
+to an earlier regular member by its archive-root-relative name. Unsupported
+PAX fields are rejected. UID/GID/owner names and special permission bits are
+not imported; ordinary permission bits, mtime and bytes are preserved.
+
+Existing destination/ancestor symlinks are rejected before extraction; archive
+entries cannot create symlink ancestors for later writes. Container path checks
+use sh with positional arguments. This protects against supplied archive
+escapes, but is not hardened isolation: an independently running container
+process can change its filesystem between preflight and Docker extraction.
+Callers must quiesce filesystem writers during upload. Runtime failure or
+cancellation can leave partial extraction; there is no filesystem transaction.
+SDKs therefore send archive PUT exactly once, unlike ordinary file PUT.
+No uploaded data is extracted on the daemon host. The directory/archive path
+and query validation rules are the same as directory listing.

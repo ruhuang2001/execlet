@@ -2,12 +2,19 @@ package main
 
 import (
 	"encoding/json/v2"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"os"
+
 	sandbox "github.com/ruhuang2001/tiny-sandbox/sandbox-go"
 )
 
 func (in *invocation) files(args []string) int {
+	if len(args) > 0 && args[0] == "archive" {
+		return in.archive(args[1:])
+	}
 	if len(args) == 0 || args[0] != "list" {
 		_, _ = fmt.Fprintln(in.stderr, "usage: sandboxctl files list SANDBOX PATH [--limit N] [--cursor TOKEN]")
 		return 2
@@ -44,6 +51,45 @@ func (in *invocation) files(args []string) int {
 		return in.fail(err)
 	}
 	if _, err = fmt.Fprintln(in.stdout, string(data)); err != nil {
+		return in.fail(err)
+	}
+	return 0
+}
+
+func (in *invocation) archive(args []string) int {
+	if len(args) != 4 || (args[0] != "upload" && args[0] != "download") {
+		_, _ = fmt.Fprintln(in.stderr, "usage: sandboxctl files archive upload|download SANDBOX PATH LOCAL_TAR")
+		return 2
+	}
+	c, err := in.client()
+	if err != nil {
+		return in.fail(err)
+	}
+	ctx, cancel := contextWithSignals()
+	defer cancel()
+	if args[0] == "upload" {
+		f, err := os.Open(args[3])
+		if err != nil {
+			return in.fail(err)
+		}
+		data, readErr := io.ReadAll(io.LimitReader(f, (32<<20)+1))
+		closeErr := f.Close()
+		if err := errors.Join(readErr, closeErr); err != nil {
+			return in.fail(err)
+		}
+		if len(data) > 32<<20 {
+			return in.fail(fmt.Errorf("archive exceeds 32 MiB encoded limit"))
+		}
+		if err := c.WriteArchive(ctx, args[1], args[2], data); err != nil {
+			return in.fail(err)
+		}
+		return 0
+	}
+	data, err := c.ReadArchive(ctx, args[1], args[2])
+	if err != nil {
+		return in.fail(err)
+	}
+	if err := os.WriteFile(args[3], data, 0o600); err != nil {
 		return in.fail(err)
 	}
 	return 0

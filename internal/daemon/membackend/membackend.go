@@ -10,6 +10,7 @@
 package membackend
 
 import (
+	"archive/tar"
 	"context"
 	"errors"
 	"fmt"
@@ -57,12 +58,13 @@ type Backend struct {
 }
 
 type container struct {
-	id    string
-	spec  daemon.ContainerSpec
-	state daemon.Liveness
-	oom   int64
-	files map[string][]byte
-	proc  *process
+	id             string
+	spec           daemon.ContainerSpec
+	state          daemon.Liveness
+	oom            int64
+	files          map[string][]byte
+	archiveHeaders map[string]tar.Header
+	proc           *process
 }
 
 type process struct {
@@ -280,6 +282,7 @@ func (b *Backend) WriteFile(_ context.Context, id, path string, data []byte) err
 		return err
 	}
 	c.files[path] = append([]byte(nil), data...)
+	delete(c.archiveHeaders, path)
 	return nil
 }
 

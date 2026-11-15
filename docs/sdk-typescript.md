@@ -274,3 +274,12 @@ Command metadata remains limited to 1 MiB total UTF-8 bytes, counting one
 separator byte per argv element. Larger commands return 413 payload_too_large;
 this keeps complete SSE events within the SDK framing limits even when stdin
 uses the larger execution-request JSON budget.
+
+## Tar transfer
+
+client.readArchive(id, path, {signal}) returns Uint8Array tar bytes rooted at
+path's basename. client.writeArchive(id, destination, bytes, {signal}) uploads
+to an existing directory. Read retries normally; upload sends one attempt
+because extraction can be partial after runtime failure. Server limits are
+32 MiB encoded, 16 MiB payload and 4096 members. Validation and concurrency
+boundaries are documented in the HTTP contract.

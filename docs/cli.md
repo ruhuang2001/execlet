@@ -129,3 +129,12 @@ Failures use normal CLI error reporting and exit status.
 Use --stdin-file PATH to send a local UTF-8 file, or --stdin-file - to read
 standard input once. Both enforce a 1 MiB limit before creating a sandbox.
 For example: printf hello | sandboxctl run --rm --stdin-file - -- cat
+
+## Tar transfer
+
+sandboxctl files archive upload SANDBOX /destination local.tar uploads an
+uncompressed tar into an existing container directory. The whole archive is
+validated before extraction. sandboxctl files archive download SANDBOX /work
+local.tar saves a validated tar containing work/ and descendants with mode
+0600 for a newly created local file. Download errors leave local files intact;
+the CLI never extracts the tar on the host. Upload is attempted once.

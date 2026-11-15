@@ -3,6 +3,8 @@ package daemon
 import (
 	"context"
 	"io"
+
+	"github.com/ruhuang2001/tiny-sandbox/internal/filearchive"
 )
 
 // Signal is a signal the daemon sends to a process group. Only the two the
@@ -152,6 +154,10 @@ type Backend interface {
 	// It only ever increases, so a delta across one execution attributes an
 	// OOM kill to that execution.
 	OOMKillCount(ctx context.Context, containerID string) (int64, error)
+	// ReadArchive returns bounded tar rooted at the selected file/directory basename.
+	ReadArchive(ctx context.Context, containerID, path string) ([]byte, error)
+	// WriteArchive extracts a validated archive beneath an existing directory.
+	WriteArchive(ctx context.Context, containerID, path string, archive *filearchive.Archive) error
 	// ListFiles returns up to limit+1 children after a name, sorted by name.
 	ListFiles(ctx context.Context, containerID, path, after string, limit int) ([]FileEntry, error)
 	// ReadFile returns a file outside any execution, as the server sees it.

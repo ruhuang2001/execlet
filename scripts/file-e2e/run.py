@@ -7,6 +7,7 @@ from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from tiny_sandbox import Client, CreateSandboxRequest
+from archive_checks import check_archives
 
 out = pathlib.Path(os.environ['E2E_ARTIFACT_DIR'])
 client = Client()
@@ -75,6 +76,7 @@ try:
     raw(sb.id,'path=/wide&limit=1',413)
     assert client.exec(sb.id,['sh','-c','mkdir /large; dd if=/dev/zero of=/large/big bs=1048576 count=65 2>/dev/null']).exit_code==0
     raw(sb.id,'path=/large&limit=1',413)
+    check_archives(client, sb.id, out)
     client.kill_sandbox(sb.id)
     raw(sb.id,'path=/listing',409)
     (out/'results.json').write_text(json.dumps({'status':'passed','checks':len(results)+8,'names':names},indent=2))

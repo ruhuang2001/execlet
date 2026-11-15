@@ -1,11 +1,13 @@
 package membackend
 
 import (
+	"archive/tar"
 	"context"
-	"github.com/ruhuang2001/tiny-sandbox/internal/daemon"
 	"path"
 	"strings"
 	"time"
+
+	"github.com/ruhuang2001/tiny-sandbox/internal/daemon"
 )
 
 // ListFiles derives directories from stored file paths.
@@ -24,6 +26,42 @@ func (b *Backend) ListFiles(_ context.Context, id, p, after string, limit int) (
 	seen := make(map[string]bool)
 	exists := p == "/"
 	scanned := 0
+	if h, ok := c.archiveHeaders[p]; ok {
+		if h.Typeflag != tar.TypeDir {
+			return nil, &daemon.Error{Code: daemon.CodeInvalidRequest, Message: "path must identify a directory"}
+		}
+		exists = true
+	}
+	for name, h := range c.archiveHeaders {
+		rest, ok := strings.CutPrefix(path.Clean(name), prefix)
+		if !ok || rest == "" {
+			continue
+		}
+		scanned++
+		if scanned > daemon.MaxFileScanEntries {
+			return nil, &daemon.Error{Code: daemon.CodePayloadTooLarge, Message: "directory exceeds scan entry limit"}
+		}
+		exists = true
+		child, _, nested := strings.Cut(rest, "/")
+		if seen[child] {
+			continue
+		}
+		seen[child] = true
+		size := h.Size
+		if h.Typeflag == tar.TypeLink {
+			size = int64(len(c.files[name]))
+		}
+		if h.Typeflag == tar.TypeSymlink {
+			size = int64(len(h.Linkname))
+		}
+		entry := daemon.FileEntry{Name: child, Size: size, Mode: h.Mode, Mtime: h.ModTime.UTC(), IsDir: h.Typeflag == tar.TypeDir}
+		if nested {
+			entry.Size = 0
+			entry.Mode = 0o755
+			entry.IsDir = true
+		}
+		entries = daemon.SelectFilePage(entries, entry, after, limit)
+	}
 	for name, data := range c.files {
 		rest, ok := strings.CutPrefix(path.Clean(name), prefix)
 		if !ok {

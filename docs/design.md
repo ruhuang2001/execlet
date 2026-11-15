@@ -140,7 +140,7 @@ the `none` network mode.
   sandbox when termination cannot be confirmed. The reaper claims a due
   deadline once per execution, so a slow escalation never starts twice.
 - Output is recorded as an event log with monotonically increasing IDs: `stdout`, `stderr`, and one terminal `complete` event. The log is bounded; when the bound is hit a `truncated` event tells the client the stream is incomplete.
-- SSE was chosen over WebSocket: output flows one way, SSE works through ordinary HTTP proxies, is readable with `curl`, and has event IDs built in. The cost is no interactive stdin, and control operations need separate requests.
+- SSE was chosen over WebSocket: output flows one way, SSE works through ordinary HTTP proxies, is readable with `curl`, and has event IDs built in. One-shot UTF-8 stdin is bounded at 1 MiB and passed through an opened, unlinked temporary file; there is no interactive stdin, and control operations need separate requests.
 - `Last-Event-ID` replays only later events; the SDK also de-duplicates by ID. Closing a stream never cancels the execution.
 - The blocking `Exec` call is a projection of the same stream, so there is one source of truth for output.
 

@@ -6,8 +6,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	sandbox "github.com/ruhuang2001/tiny-sandbox/sandbox-go"
 )
@@ -32,6 +34,7 @@ type runFlags struct {
 	idleAction    string
 	execTimeout   int
 	cwd           string
+	stdinFile     string
 	env           envFlags
 	remove        bool
 
@@ -75,6 +78,7 @@ func (in *invocation) runCommand(args []string) int {
 	fs.StringVar(&rf.idleAction, "idle-action", "", "kill or pause")
 	fs.IntVar(&rf.execTimeout, "exec-timeout", 0, "timeout for this command in seconds (0 disables)")
 	fs.StringVar(&rf.cwd, "cwd", "", "absolute directory to run the command in")
+	fs.StringVar(&rf.stdinFile, "stdin-file", "", "one-shot UTF-8 input file (use - for stdin; maximum 1 MiB)")
 	fs.Var(&rf.env, "env", "NAME=VALUE for this command; repeatable")
 	fs.BoolVar(&rf.remove, "rm", false, "kill the sandbox after the command")
 	if err := fs.Parse(flagsPart); err != nil {
@@ -133,6 +137,27 @@ func (in *invocation) runCommand(args []string) int {
 		}
 	}
 
+	var input string
+	if rf.set("stdin-file") {
+		source := os.Stdin
+		if rf.stdinFile != "-" {
+			var err error
+			source, err = os.Open(rf.stdinFile)
+			if err != nil {
+				return in.fail(err)
+			}
+			defer func() { _ = source.Close() }()
+		}
+		data, err := io.ReadAll(io.LimitReader(source, (1<<20)+1))
+		if err != nil {
+			return in.fail(err)
+		}
+		if len(data) > 1<<20 || !utf8.Valid(data) {
+			_, _ = fmt.Fprintln(in.stderr, "sandboxctl: stdin must be valid UTF-8 and at most 1 MiB")
+			return 2
+		}
+		input = string(data)
+	}
 	client, err := in.client()
 	if err != nil {
 		return in.fail(err)
@@ -161,7 +186,7 @@ func (in *invocation) runCommand(args []string) int {
 		_, _ = fmt.Fprintf(in.stderr, "sandbox: %s\n", sandboxID)
 	}
 
-	startReq := sandbox.ExecuteRequest{Command: command, Cwd: rf.cwd}
+	startReq := sandbox.ExecuteRequest{Command: command, Cwd: rf.cwd, Stdin: input}
 	if rf.set("exec-timeout") {
 		startReq.TimeoutSeconds = &rf.execTimeout
 	}

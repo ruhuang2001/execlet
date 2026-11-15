@@ -107,6 +107,8 @@ type ExecSpec struct {
 	// reports the failure through the process's stderr and a non-zero exit, so
 	// the execution still has a record and remains cancelable.
 	Dir string
+	// Stdin is bounded, one-shot UTF-8 input. Empty means immediate EOF.
+	Stdin string
 }
 
 // Process is one execution's process, started by a Backend.

@@ -74,6 +74,8 @@ export interface ExecuteRequest {
   env?: Readonly<Record<string, string>>;
   /** Absolute working directory; omit for the image's own. */
   cwd?: string;
+  /** One-shot UTF-8 text, at most 1 MiB, followed by EOF. Never echoed. */
+  stdin?: string;
 }
 
 export interface RequestOptions { signal?: AbortSignal }

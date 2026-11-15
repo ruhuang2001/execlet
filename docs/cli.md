@@ -123,3 +123,9 @@ JSON page to stdout, including entry metadata and next_cursor when more
 entries exist. Flags follow the two positional arguments. Limit is 1–1000.
 Use the cursor with the same path; ordering is bytewise and not a snapshot.
 Failures use normal CLI error reporting and exit status.
+
+### One-shot input
+
+Use --stdin-file PATH to send a local UTF-8 file, or --stdin-file - to read
+standard input once. Both enforce a 1 MiB limit before creating a sandbox.
+For example: printf hello | sandboxctl run --rm --stdin-file - -- cat

@@ -120,6 +120,8 @@ type ExecuteRequest struct {
 	TimeoutSeconds *int              `json:"timeout_seconds,omitempty"`
 	Env            map[string]string `json:"env,omitempty"`
 	Cwd            string            `json:"cwd,omitempty"`
+	// Stdin is one-shot UTF-8 text (maximum 1 MiB), followed by EOF.
+	Stdin string `json:"stdin,omitempty"`
 }
 
 // EventType is an SSE event type.

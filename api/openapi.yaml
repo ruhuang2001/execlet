@@ -248,7 +248,7 @@ paths:
         sandbox resumes it first. Reusing an idempotency key with the same
         command returns the retained execution instead of starting it again;
         the same command without a retained key starts a new execution.
-        Reusing a key with a different command, cwd, or env returns 409
+        Reusing a key with a different command, cwd, env, or stdin returns 409
         idempotency_conflict.
       requestBody:
         required: true
@@ -627,7 +627,7 @@ components:
         409, one of invalid_state (the operation is not allowed in the
         sandbox's current state), busy (the sandbox already has a running
         execution), or idempotency_conflict (the key was reused with a
-        different command, cwd, or env).
+        different command, cwd, env, or stdin).
       content:
         application/json:
           schema:
@@ -644,10 +644,10 @@ components:
             idempotency_conflict:
               value:
                 code: idempotency_conflict
-                message: idempotency key was used for a different command, cwd, or environment
+                message: idempotency key was used for a different command, cwd, environment, or stdin
     PayloadTooLarge:
       description: >-
-        413 payload_too_large: the JSON request body exceeds 1 MiB, or a file
+        413 payload_too_large: the JSON request body exceeds 1 MiB (8 MiB for execution starts), decoded stdin exceeds 1 MiB, or a file
         upload exceeds 10 MiB, or a directory archive scan exceeds 64 MiB / 10000 headers.
       content:
         application/json:
@@ -857,8 +857,8 @@ components:
           maxLength: 128
           description: >-
             Optional. Scoped to the sandbox. Reusing a key with the same
-            command, cwd, and env returns the existing execution; reusing it
-            with any of the three different is 409 idempotency_conflict.
+            command, cwd, env, and stdin returns the existing execution; reusing it
+            with any of these different is 409 idempotency_conflict.
             Changing timeout_seconds on a replay does not change the existing
             execution's deadline.
         timeout_seconds:
@@ -902,6 +902,18 @@ components:
             "sandbox: cwd is not a usable directory: <path>" on stderr, so a
             bad path is distinguishable from a missing command (127). A
             relative path is an invalid_request.
+        stdin:
+          type: string
+          x-max-bytes: 1048576
+          description: >-
+            One-shot UTF-8 text followed by EOF. Omitted or empty means EOF.
+            The decoded input is at most 1 MiB; larger input is 413
+            payload_too_large. Input is not interactive and is never echoed
+            in execution responses. Only an input fingerprint is retained
+            for idempotency comparison. A command may itself print its input.
+            JSON bodies are separately bounded at 8 MiB for escaped text.
+            Non-empty input requires writable /tmp and /bin/mkdir, /bin/rm,
+            /bin/rmdir in the image; missing staging tools return backend_error.
     ExecutionSummary:
       type: object
       required:

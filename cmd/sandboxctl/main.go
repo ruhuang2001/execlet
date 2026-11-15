@@ -54,6 +54,7 @@ run flags:
   --exec-timeout S      timeout for this command in seconds (0 disables)
   --env NAME=VALUE      variable for this command only; repeatable
   --cwd DIR             absolute directory to run the command in
+  --stdin-file FILE     one-shot UTF-8 input (use - for stdin; maximum 1 MiB)
   --rm                  kill the sandbox after the command
 
 global flags (before the command):

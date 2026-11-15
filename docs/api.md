@@ -30,7 +30,7 @@ unknown paths or unsupported methods may use plain text:
 | 404 | `not_found` | sandbox, execution, or file does not exist | no |
 | 409 | `invalid_state` | operation not allowed in the sandbox's current state (see transition table) | no |
 | 409 | `busy` | the sandbox already has a running execution | no |
-| 409 | `idempotency_conflict` | idempotency key reused with a different `command`, `cwd`, or `env` | no |
+| 409 | `idempotency_conflict` | idempotency key reused with a different `command`, `cwd`, `env`, or `stdin` | no |
 | 413 | `payload_too_large` | JSON request body, file upload, or directory archive scan exceeds a limit | no |
 | 429 | `rate_limited` | a create would exceed the live-sandbox limit; see [limits](#limits) | yes |
 | 500 | `internal` | unexpected server error | yes |
@@ -239,8 +239,8 @@ No body. `200` Sandbox. Idempotent per the transition table.
 - `cwd` is optional and sets the directory the command runs in. Omitted or empty uses the image's working directory. It must be absolute and at most 4096 bytes; otherwise `400 invalid_request`. A directory that does not exist or is not a directory does not fail the start: the execution completes with `exit_code: 126` and `sandbox: cwd is not a usable directory: <path>` on stderr, which keeps it distinguishable from a missing command (`127`).
 - `201` with the new Execution (`state: running`).
 - State validation precedes idempotency lookup: a killed or pending sandbox rejects the start, including a replay; a paused sandbox resumes first.
-- Same key and the same invocation as an existing execution: `200` with that execution, in whatever state it is now. No new process starts; a different `timeout_seconds` on the replay does not change its deadline. The comparison covers `command`, `cwd`, and `env`, so a replay cannot silently return an execution that ran with a different environment.
-- Same key with a different command, `cwd`, or `env`: `409 idempotency_conflict`.
+- Same key and the same invocation as an existing execution: `200` with that execution, in whatever state it is now. No new process starts; a different `timeout_seconds` on the replay does not change its deadline. The comparison covers `command`, `cwd`, `env`, and `stdin`, so a replay cannot silently return an execution that ran with a different environment.
+- Same key with a different command, `cwd`, `env`, or `stdin`: `409 idempotency_conflict`.
 - Another execution is running: `409 busy`. One running execution per sandbox keeps container-wide OOM evidence attributable to a single execution.
 
 ### `GET /v1/sandboxes/{sandbox_id}/executions`
@@ -306,7 +306,7 @@ data: {"id":"exe_456","state":"completed","exit_code":0,"termination_reason":"ex
 | Live sandboxes | 64 | `POST /v1/sandboxes` returns `429 rate_limited` and starts no container. A killed sandbox does not count |
 | Retained sandbox records | 64 killed sandboxes | the oldest killed record is dropped whole, including its execution history. `404 not_found` afterwards. Live sandboxes are never dropped |
 | Retained output, all sandboxes | 64 MiB | the oldest completed executions are dropped, across sandboxes, until the total fits. The running execution and each sandbox's newest completed one survive |
-| JSON request body | 1 MiB | `413 payload_too_large` |
+| JSON request body | 1 MiB (execution starts: 8 MiB) | `413 payload_too_large` |
 | Directory listing archive scan | 64 MiB / 10000 headers | `413 payload_too_large` |
 | Directory listing runtime | 30 seconds | `502 backend_error` |
 | File upload | 10 MiB | `413 payload_too_large` |
@@ -381,3 +381,24 @@ name/size/link-target records to resolve hardlink sizes. Large nested files
 or trees can therefore return 413 even when immediate children are few;
 this API is not a constant-time filesystem index. Runtime deadline failures
 are 502. No archive is extracted on the host.
+
+### One-shot stdin
+
+The ExecuteRequest stdin field sends UTF-8 text once, followed by EOF. At most
+1 MiB of decoded bytes (including NULs) is accepted; omitted and empty mean
+EOF. Oversized input is 413 payload_too_large. Execution-start JSON bodies are separately
+bounded at 8 MiB to accommodate escaping. This is not interactive input.
+Set stdin on ExecuteRequest and pass it to the execution start endpoint, then stream the
+returned execution. Older servers ignore this field; require a server that
+implements the input contract.
+
+A keyed replay must match command, env, cwd and stdin. Input is staged in a
+private temporary directory, opened and unlinked before the command runs,
+with a bounded best-effort cleanup after startup failure or completion. If the
+runtime is unreachable, paused, or cannot start a cleanup process, container
+removal is the final cleanup boundary. Execution history retains only an input
+fingerprint. List responses never contain input or output. Get and complete-SSE
+snapshots only contain input when the command prints it. Runtime administrators can inspect live input; this is not a secret vault.
+
+Non-empty stdin requires writable /tmp and /bin/mkdir, /bin/rm and /bin/rmdir
+in the image. Missing staging tools cause backend_error before user execution.

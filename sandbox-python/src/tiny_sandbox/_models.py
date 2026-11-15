@@ -123,6 +123,7 @@ class ExecuteRequest(_Request):
     timeout_seconds: int | None = None
     env: dict[str, str] | None = None
     cwd: str | None = None
+    stdin: str | None = None
 
 
 @dataclass(kw_only=True)

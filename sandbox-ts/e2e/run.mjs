@@ -127,6 +127,21 @@ async function run(name, operation) {
 }
 
 try {
+  await run('one-shot stdin and keyed replay', async () => {
+    const sb = await create();
+    const text = 'input 世界\n\0$HOME; literal';
+    const request = { command: ['cat'], stdin: text, idempotency_key: 'stdin-ts' };
+    const started = await client.startExecution(sb.id, request);
+    const events = await collect(sb.id, started.id);
+    const done = events.at(-1).execution;
+    assert.equal(done.stdout, text);
+    assert.equal((await client.startExecution(sb.id, request)).id, done.id);
+    await rejected(client.startExecution(sb.id, { ...request, stdin: 'changed' }), 'idempotency_conflict');
+    const emptyStarted = await client.startExecution(sb.id, { command: ['cat'], stdin: '' });
+    const empty = (await collect(sb.id, emptyStarted.id)).at(-1);
+    assert.equal(empty.execution.stdout, '');
+    return { inputBytes: Buffer.byteLength(text), replayed: done.id };
+  });
   await run('authenticated lifecycle and exact binary files', async () => {
     const unauthorized = await rejected(new Client({ domain: proxy.domain, apiKey: 'wrong' }).listSandboxes(), 'unauthorized');
     assert.equal(unauthorized.statusCode, 401);

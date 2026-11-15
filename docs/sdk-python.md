@@ -341,3 +341,24 @@ Pass each nonempty next_cursor to retrieve the next page. Limits are 1–1000;
 names sort bytewise without snapshot consistency. cancel follows the normal
 request cancellation contract. Invalid requests and bounded scan failures
 raise Error with the server code.
+
+### One-shot stdin
+
+The ExecuteRequest stdin field sends UTF-8 text once, followed by EOF. At most
+1 MiB of decoded bytes (including NULs) is accepted; omitted and empty mean
+EOF. Oversized input is 413 payload_too_large. Execution-start JSON bodies are separately
+bounded at 8 MiB to accommodate escaping. This is not interactive input.
+Set stdin on ExecuteRequest and pass it to start_execution, then stream the
+returned execution. Older servers ignore this field; require a server that
+implements the input contract.
+
+A keyed replay must match command, env, cwd and stdin. Input is staged in a
+private temporary directory, opened and unlinked before the command runs,
+with a bounded best-effort cleanup after startup failure or completion. If the
+runtime is unreachable, paused, or cannot start a cleanup process, container
+removal is the final cleanup boundary. Execution history retains only an input
+fingerprint. List responses never contain input or output. Get and complete-SSE
+snapshots only contain input when the command prints it. Runtime administrators can inspect live input; this is not a secret vault.
+
+Non-empty stdin requires writable /tmp and /bin/mkdir, /bin/rm and /bin/rmdir
+in the image. Missing staging tools cause backend_error before user execution.

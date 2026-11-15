@@ -54,6 +54,10 @@ const (
 	MaxFileBytes = 10 << 20
 	// MaxRequestBodyBytes is the largest JSON request body.
 	MaxRequestBodyBytes = 1 << 20
+	// MaxExecutionRequestBodyBytes allows JSON escaping of one MiB of input.
+	MaxExecutionRequestBodyBytes = 8 << 20
+	// MaxStdinBytes bounds decoded UTF-8 input, independently of JSON escaping.
+	MaxStdinBytes = 1 << 20
 	// MaxExecutionsPerSandbox bounds the execution history. Above it, the
 	// oldest completed execution and its retained output are dropped; the
 	// running execution is never dropped.
@@ -247,6 +251,7 @@ type ExecuteRequest struct {
 	TimeoutSeconds *int              `json:"timeout_seconds,omitempty"`
 	Env            map[string]string `json:"env,omitempty"`
 	Cwd            string            `json:"cwd,omitempty"`
+	Stdin          string            `json:"stdin,omitempty"`
 }
 
 // envPairs flattens Env into the "NAME=value" form the container runtime takes,

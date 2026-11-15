@@ -16,17 +16,29 @@ def require(condition, message):
         raise RuntimeError(message)
 
 
-def request(method, path, body=None, expected=200):
+def request(method, path, body=None, expected=200, timeout=15):
     data = None if body is None else json.dumps(body).encode()
     req = urllib.request.Request(base + path, data=data, method=method,
                                  headers={"Content-Type": "application/json"})
     try:
-        response = urllib.request.urlopen(req, timeout=15)
+        response = urllib.request.urlopen(req, timeout=timeout)
     except urllib.error.HTTPError as error:
         response = error
     raw = response.read().decode()
     require(response.code == expected, "environment contract check failed at line 23")
     return json.loads(raw)
+
+
+def completed(result):
+    deadline = time.monotonic() + 10
+    while result["state"] != "completed":
+        remaining = deadline - time.monotonic()
+        require(remaining > 0, "execution completion deadline exceeded")
+        result = request("GET", path + "/" + result["id"], timeout=remaining)
+        if result["state"] != "completed":
+            time.sleep(min(.02, max(0, deadline - time.monotonic())))
+    require(result["exit_code"] == 0, "execution did not exit successfully")
+    return result
 
 
 def start(name, env=None, expected=201, key=None, cwd=None):
@@ -45,12 +57,7 @@ def start(name, env=None, expected=201, key=None, cwd=None):
     if expected >= 400:
         require(result["code"] == ("invalid_request" if expected == 400 else "idempotency_conflict"), "environment contract check failed at line 41")
     else:
-        for _ in range(200):
-            result = request("GET", path + "/" + result["id"])
-            if result["state"] == "completed":
-                break
-            time.sleep(.02)
-        require(result["state"] == "completed" and result["exit_code"] == 0, "environment contract check failed at line 48")
+        result = completed(result)
     report["checks"].append({"name": name, "status": expected, "id": result.get("id")})
     return result
 
@@ -86,12 +93,7 @@ try:
     views.append(response.read().decode())
     require(secret not in json.dumps(views) and '"env"' not in json.dumps(views), "environment contract check failed at line 82")
     probe = request("POST", path, {"command": ["sh", "-c", 'test ! -e /tmp/injected && test -z "' + '$' + '{SECRET+x}"']}, 201)
-    for _ in range(200):
-        probe = request("GET", path + "/" + probe["id"])
-        if probe["state"] == "completed":
-            break
-        time.sleep(.02)
-    require(probe["exit_code"] == 0, "environment contract check failed at line 89")
+    completed(probe)
     report["checks"].append({"name": "secrecy-isolation-no-injection", "status": "passed"})
     report["passed"] = True
 finally:

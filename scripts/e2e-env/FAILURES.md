@@ -22,3 +22,5 @@ command/env, and cancel the request. Recovery must replay the originally sent
 invocation, confirm cancellation, and leave exactly one terminal execution.
 Without owned copies the replay conflicts and returns cancel_unconfirmed.
 The live test uses a transport fault after a real HTTP response, not a fake server.
+
+- Caller mutates TimeoutSeconds to -1 after accepted start: recovery must use its original snapshot and cancel the accepted execution.

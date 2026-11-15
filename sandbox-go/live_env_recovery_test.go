@@ -3,9 +3,11 @@
 package sandbox_test
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -44,13 +46,14 @@ func TestLiveEnvRecoverySnapshotsInvocation(t *testing.T) {
 	sb := liveSandbox(t, direct, "alpine:3.20", 64)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	req := sandbox.ExecuteRequest{Command: []string{"sleep", "30"}, Env: map[string]string{"PHASE": "original"}}
+	req := sandbox.ExecuteRequest{Command: []string{"sleep", "30"}, Env: map[string]string{"PHASE": "original"}, TimeoutSeconds: new(60)}
 	fault := &acceptedStartFault{mutate: func() {
 		req.Command[1] = "60"
 		req.Env["PHASE"] = "mutated"
+		*req.TimeoutSeconds = -1
 		cancel()
 	}}
-	client, err := sandbox.NewClient(sandbox.Config{HTTPClient: &http.Client{Transport: fault}})
+	client, err := sandbox.NewClient(sandbox.Config{Domain: cmp.Or(os.Getenv("SANDBOX_DOMAIN"), "http://127.0.0.1:18080"), HTTPClient: &http.Client{Transport: fault}})
 	if err != nil {
 		t.Fatal(err)
 	}

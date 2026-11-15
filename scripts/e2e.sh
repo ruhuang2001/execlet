@@ -106,7 +106,8 @@ python3 "$ROOT/scripts/e2e-env/run.py" "$SANDBOX_DOMAIN" "$OUT/env-contract.json
 check "env-contract" "bounds, replay identity, secrecy and isolation; see $OUT/env-contract.log" "$?" "0"
 
 (cd "$ROOT" && go test -race -tags live ./sandbox-go -run '^TestLiveEnvRecoverySnapshotsInvocation$' -count=1 -v) >"$OUT/go-env-recovery.log" 2>&1
-check "go-env-recovery" "caller mutation preserves accepted invocation" "$?" "0"
+check "go-env-recovery" "caller mutation preserves accepted invocation; see $OUT/go-env-recovery.log" "$?" "0"
+contains "go-env-recovery ran" "test ran without skipping" "$OUT/go-env-recovery.log" "--- PASS: TestLiveEnvRecoverySnapshotsInvocation"
 
 # ---------------------------------------------------------------- doctor
 

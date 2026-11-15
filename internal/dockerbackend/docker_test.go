@@ -445,7 +445,8 @@ func TestRealCommandPathWithEqualsIsNotAnAssignment(t *testing.T) {
 //
 // The outer shell is a launcher, not part of the subject: it exports the
 // names, then execs the wrapper with the wrapper's own argument layout —
-// $0 the PID path, $1 the directory, $2 the count, then the entries and the
+// $0 the PID path, $1 the directory, $2 the count, $3 the separator flag
+// (0 here: these commands contain no "="), then the entries and the
 // command. Passing the wrapper text through a positional parameter and
 // forwarding the rest keeps every argument where the wrapper expects it; an
 // earlier version of this test shifted them, so the wrapper ran against the
@@ -470,7 +471,7 @@ func TestRealWrapperDoesNotShadowImageVariables(t *testing.T) {
 wrapper=$1
 count=$2
 shift 2
-exec /bin/sh -c "$wrapper" /tmp/shadow-pid "" "$count" "$@"`
+exec /bin/sh -c "$wrapper" /tmp/shadow-pid "" "$count" 0 "$@"`
 			argv := append([]string{"sh", "-c", launcher, "sandbox", execWrapper, tc.count}, tc.env...)
 			argv = append(argv, tc.cmd...)
 
@@ -509,6 +510,15 @@ exec /bin/sh -c "$wrapper" /tmp/shadow-pid "" "$count" "$@"`
 			if got["e"] != "image-e" {
 				t.Errorf("e = %q, want image-e: the wrapper overwrote a variable "+
 					"that was already exported", got["e"])
+			}
+			// Every entry must reach env. If the launcher's layout were off by
+			// one, the wrapper would consume an entry as layout metadata and
+			// the checks above would still pass.
+			for _, entry := range tc.env {
+				name, value, _ := strings.Cut(entry, "=")
+				if got[name] != value {
+					t.Errorf("%s = %q, want %q: the entry did not reach env", name, got[name], value)
+				}
 			}
 		})
 	}

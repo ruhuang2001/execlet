@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	sandbox "github.com/ruhuang2001/tiny-sandbox/sandbox-go"
 )
@@ -89,8 +90,28 @@ func (in *invocation) archive(args []string) int {
 	if err != nil {
 		return in.fail(err)
 	}
-	if err := os.WriteFile(args[3], data, 0o600); err != nil {
+	if err := saveArchive(args[3], data); err != nil {
 		return in.fail(err)
 	}
 	return 0
+}
+
+// saveArchive replaces the destination only after a complete local save.
+func saveArchive(destination string, data []byte) error {
+	file, err := os.CreateTemp(filepath.Dir(destination), ".sandbox-archive-*")
+	if err != nil {
+		return err
+	}
+	temporary := file.Name()
+	defer func() { _ = os.Remove(temporary) }()
+	if _, err := file.Write(data); err != nil {
+		return errors.Join(err, file.Close())
+	}
+	if err := file.Sync(); err != nil {
+		return errors.Join(err, file.Close())
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporary, destination)
 }

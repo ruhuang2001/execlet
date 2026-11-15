@@ -23,3 +23,5 @@ Failure model written before archive implementation on its preceding branch.
 - Cap encoded bytes (32 MiB), total regular bytes (16 MiB), and entries (4096): 413 for limits, 400 for malformed/unsupported tar.
 - Reject existing destination/ancestor symlinks and archive-created link ancestors. Concurrent in-container writers remain outside the atomicity boundary.
 - Check all three SDKs plus CLI upload/download; verify safe links and hardlink inode equivalence inside Docker. Preserve tar fixtures, response JSON and scoped cleanup evidence.
+
+- CLI local save failure must preserve an existing archive; simulate a file-size limit during an actual Docker download and verify no temporary file remains.

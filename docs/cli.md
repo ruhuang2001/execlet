@@ -136,5 +136,6 @@ sandboxctl files archive upload SANDBOX /destination local.tar uploads an
 uncompressed tar into an existing container directory. The whole archive is
 validated before extraction. sandboxctl files archive download SANDBOX /work
 local.tar saves a validated tar containing work/ and descendants with mode
-0600 for a newly created local file. Download errors leave local files intact;
+0600 after an atomic temporary-file save and rename. Download/save errors
+leave an existing destination intact;
 the CLI never extracts the tar on the host. Upload is attempted once.

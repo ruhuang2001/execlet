@@ -3,6 +3,8 @@ import io
 import json
 import os
 import pathlib
+import resource
+import signal
 import subprocess
 import tarfile
 from urllib.error import HTTPError
@@ -63,6 +65,15 @@ def check_archives(client, sid, out):
     result=subprocess.run([str(out/'sandboxctl'),'files','archive','download',sid,'/archives/cli/tree',str(out/'cli-download.tar')],capture_output=True,text=True)
     assert result.returncode==0,result.stderr
     with tarfile.open(out/'cli-download.tar') as archive: assert archive.extractfile('tree/data').read()==content
+    protected=out/'preserved-on-save-error.tar'
+    protected.write_bytes(b'existing backup')
+    def limit_file_size():
+        signal.signal(signal.SIGXFSZ,signal.SIG_IGN)
+        resource.setrlimit(resource.RLIMIT_FSIZE,(1024,1024))
+    failed=subprocess.run([str(out/'sandboxctl'),'files','archive','download',sid,'/archives/cli/tree',str(protected)],capture_output=True,text=True,preexec_fn=limit_file_size)
+    (out/'cli-save-failure.stderr').write_text(failed.stderr)
+    assert failed.returncode!=0 and protected.read_bytes()==b'existing backup'
+    assert list(out.glob('.sandbox-archive-*'))==[]
     safe=('good',tarfile.REGTYPE,b'not-written','')
     hostile=[('/absolute',tarfile.REGTYPE,b'x',''),('../outside',tarfile.REGTYPE,b'x',''),('x/../../escape',tarfile.REGTYPE,b'x',''),('device',tarfile.CHRTYPE,b'',''),('fifo',tarfile.FIFOTYPE,b'',''),('sparse',tarfile.GNUTYPE_SPARSE,b'',''),('link',tarfile.SYMTYPE,b'','/outside'),('link',tarfile.SYMTYPE,b'','../outside'),('link',tarfile.LNKTYPE,b'','/outside'),('link',tarfile.LNKTYPE,b'','../outside'),('dangling',tarfile.SYMTYPE,b'','absent')]
     for entry in hostile:

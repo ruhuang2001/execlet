@@ -3,6 +3,7 @@ package daemon
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"sort"
 	"time"
 )
 
@@ -35,6 +36,20 @@ const (
 	MaxEventDataBytes = 32 << 10
 	// MaxIdempotencyKey is the longest accepted idempotency key, in characters.
 	MaxIdempotencyKey = 128
+	// MaxEnvEntries bounds the environment variables one execution may set.
+	// Together with the three per-entry limits it keeps a request from turning
+	// the request body limit into an unbounded per-execution allocation.
+	MaxEnvEntries = 64
+	// MaxEnvKeyBytes bounds one environment variable name.
+	MaxEnvKeyBytes = 128
+	// MaxEnvValueBytes bounds one environment variable value.
+	MaxEnvValueBytes = 8 << 10
+	// MaxEnvTotalBytes bounds the whole environment of one execution, measured
+	// as the sum of every name, "=" and value.
+	MaxEnvTotalBytes = 32 << 10
+	// MaxCwdBytes bounds the working directory. It matches the usual PATH_MAX,
+	// so a directory the kernel accepts is never rejected here.
+	MaxCwdBytes = 4096
 	// MaxFileBytes is the largest file the daemon accepts or serves.
 	MaxFileBytes = 10 << 20
 	// MaxRequestBodyBytes is the largest JSON request body.
@@ -157,6 +172,7 @@ type Execution struct {
 	ID                string     `json:"id"`
 	SandboxID         string     `json:"sandbox_id"`
 	Command           []string   `json:"command"`
+	Cwd               *string    `json:"cwd"`
 	State             ExecState  `json:"state"`
 	ExitCode          *int       `json:"exit_code"`
 	TerminationReason *Reason    `json:"termination_reason"`
@@ -173,6 +189,7 @@ type ExecutionSummary struct {
 	ID                string     `json:"id"`
 	SandboxID         string     `json:"sandbox_id"`
 	Command           []string   `json:"command"`
+	Cwd               *string    `json:"cwd"`
 	State             ExecState  `json:"state"`
 	ExitCode          *int       `json:"exit_code"`
 	TerminationReason *Reason    `json:"termination_reason"`
@@ -187,6 +204,7 @@ func (e Execution) Summary() ExecutionSummary {
 		ID:                e.ID,
 		SandboxID:         e.SandboxID,
 		Command:           e.Command,
+		Cwd:               cloneString(e.Cwd),
 		State:             e.State,
 		ExitCode:          e.ExitCode,
 		TerminationReason: e.TerminationReason,
@@ -216,10 +234,34 @@ type CreateRequest struct {
 // execution has no deadline of its own and runs until it finishes, is
 // canceled, or the sandbox is killed. The sandbox lifetime policy still
 // applies: it can kill or pause the sandbox.
+//
+// Env is this execution's environment. It is additive: a name here overrides
+// the container's value and every other container variable stays visible. Cwd
+// is the directory the command runs in; empty means the image's working
+// directory. Neither is retained beyond the execution record, and Env is never
+// echoed in a response.
 type ExecuteRequest struct {
-	Command        []string `json:"command"`
-	IdempotencyKey string   `json:"idempotency_key,omitempty"`
-	TimeoutSeconds *int     `json:"timeout_seconds,omitempty"`
+	Command        []string          `json:"command"`
+	IdempotencyKey string            `json:"idempotency_key,omitempty"`
+	TimeoutSeconds *int              `json:"timeout_seconds,omitempty"`
+	Env            map[string]string `json:"env,omitempty"`
+	Cwd            string            `json:"cwd,omitempty"`
+}
+
+// envPairs flattens Env into the "NAME=value" form the container runtime takes,
+// sorted by name so the result is deterministic: the same request always
+// produces the same argv and environment, which is what makes an idempotency
+// comparison and a replay meaningful.
+func (r ExecuteRequest) envPairs() []string {
+	if len(r.Env) == 0 {
+		return nil
+	}
+	pairs := make([]string, 0, len(r.Env))
+	for name, value := range r.Env {
+		pairs = append(pairs, name+"="+value)
+	}
+	sort.Strings(pairs)
+	return pairs
 }
 
 // sandboxOptions is a CreateRequest resolved against the defaults.

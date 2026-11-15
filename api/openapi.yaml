@@ -760,9 +760,10 @@ components:
           maxLength: 128
           description: >-
             Optional. Scoped to the sandbox. Reusing a key with the same
-            command returns the existing execution; reusing it with a different
-            command is 409 idempotency_conflict. Changing timeout_seconds on a
-            replay does not change the existing execution's deadline.
+            command, cwd, and env returns the existing execution; reusing it
+            with any of the three different is 409 idempotency_conflict.
+            Changing timeout_seconds on a replay does not change the existing
+            execution's deadline.
         timeout_seconds:
           type: integer
           minimum: 0
@@ -774,6 +775,31 @@ components:
             failure to confirm process termination can require container removal.
             A sandbox lifetime deadline with timeout_action kill removes the
             sandbox; timeout_action pause pauses it instead.
+        env:
+          type: object
+          additionalProperties:
+            type: string
+          description: >-
+            Optional. Environment variables for this execution only. A name
+            here overrides a variable of the same name that the container
+            already has, and every other container variable stays visible.
+            Values are not retained in the response and are never echoed.
+            Omitted or empty leaves the container's environment unchanged.
+            At most 64 entries, 128 bytes per name, 8192 bytes per value, and
+            32768 bytes in total; exceeding a bound is an invalid_request.
+            A name must be non-empty and must not contain "=", a NUL byte, or a
+            newline. A value must not contain a NUL byte.
+        cwd:
+          type: string
+          x-max-bytes: 4096
+          description: >-
+            Optional. Absolute directory the command runs in, at most 4096
+            bytes. Omitted or empty uses the image's working directory. A
+            missing or non-directory path does not fail the start: the
+            execution completes with exit code 126 and
+            "sandbox: cwd is not a usable directory: <path>" on stderr, so a
+            bad path is distinguishable from a missing command (127). A
+            relative path is an invalid_request.
     ExecutionSummary:
       type: object
       required:
@@ -797,6 +823,12 @@ components:
           minItems: 1
           items:
             type: string
+        cwd:
+          type: [string, 'null']
+          description: >-
+            The working directory this execution was started with, echoed for
+            diagnostics. Null when the request set none. The environment is
+            never echoed, because it may carry credentials.
         state:
           type: string
           enum: [running, completed]

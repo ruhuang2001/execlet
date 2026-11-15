@@ -53,12 +53,23 @@ type ExecInspect struct {
 	ContainerID string `json:"ContainerID"`
 }
 
-type execConfig struct {
+// ExecConfig is the body of an exec create. Env is additive to the container's
+// own environment: a name here overrides the container's value and every other
+// variable stays visible.
+//
+// There is deliberately no WorkingDir. The runtime applies it before the
+// command starts, so an unusable directory fails the exec as a startup error:
+// exit 127 with the message on stdout, which is indistinguishable from a
+// missing command and reads like program output. The backend puts the
+// directory in the command wrapper instead, and reports a bad directory as
+// exit 126 with a marker on stderr.
+type ExecConfig struct {
 	AttachStdin  bool     `json:"AttachStdin"`
 	AttachStdout bool     `json:"AttachStdout"`
 	AttachStderr bool     `json:"AttachStderr"`
 	Tty          bool     `json:"Tty"`
 	Cmd          []string `json:"Cmd"`
+	Env          []string `json:"Env,omitempty"`
 }
 
 type execStart struct {

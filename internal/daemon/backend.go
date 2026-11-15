@@ -91,6 +91,24 @@ type ContainerSpec struct {
 	Labels map[string]string
 }
 
+// ExecSpec is what one execution needs beyond the container it runs in.
+type ExecSpec struct {
+	// Command is the argv to run. It is never parsed by a shell by the
+	// backend's caller; a backend may still need a shell of its own to record
+	// the process group, and must pass these arguments through unparsed.
+	Command []string
+	// Env is the execution's environment as sorted "NAME=value" pairs. It is
+	// additive to the container's own environment, so a name here overrides the
+	// container's value and every other variable stays visible. Empty means the
+	// container's environment unchanged.
+	Env []string
+	// Dir is the working directory. Empty means the image's working directory.
+	// A backend must not fail the start when the directory is unusable: it
+	// reports the failure through the process's stderr and a non-zero exit, so
+	// the execution still has a record and remains cancelable.
+	Dir string
+}
+
 // Process is one execution's process, started by a Backend.
 //
 // Wait blocks until the process tree has exited and returns the exit code, or
@@ -122,9 +140,10 @@ type Backend interface {
 	Pause(ctx context.Context, containerID string) error
 	// Unpause resumes a paused container.
 	Unpause(ctx context.Context, containerID string) error
-	// Exec starts command inside the container, without a shell, and returns
-	// its process. The process runs in its own process group.
-	Exec(ctx context.Context, containerID string, command []string) (Process, error)
+	// Exec starts a command inside the container, without a shell around the
+	// command itself, and returns its process. The process runs in its own
+	// process group.
+	Exec(ctx context.Context, containerID string, spec ExecSpec) (Process, error)
 	// Liveness reports whether the container exists and is running.
 	Liveness(ctx context.Context, containerID string) (Liveness, error)
 	// OOMKillCount returns the container cgroup's cumulative oom_kill counter.

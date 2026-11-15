@@ -172,15 +172,14 @@ func (c *Client) ContainerList(ctx context.Context, all bool, filters map[string
 // ---------------------------------------------------------------- exec
 
 // ExecCreate registers a command in a container and returns the exec ID.
-// Nothing runs until ExecStart.
-func (c *Client) ExecCreate(ctx context.Context, containerID string, command []string) (string, error) {
-	body := execConfig{
-		AttachStdout: true,
-		AttachStderr: true,
-		AttachStdin:  false,
-		Tty:          false,
-		Cmd:          command,
-	}
+// Nothing runs until ExecStart. The caller fills Cmd and Env; the attach and
+// tty fields are fixed by the way the daemon reads the stream.
+func (c *Client) ExecCreate(ctx context.Context, containerID string, cfg ExecConfig) (string, error) {
+	body := cfg
+	body.AttachStdout = true
+	body.AttachStderr = true
+	body.AttachStdin = false
+	body.Tty = false
 	var out struct {
 		ID string `json:"Id"`
 	}

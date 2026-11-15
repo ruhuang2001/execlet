@@ -224,6 +224,48 @@ check "exec-timeout survives" "the sandbox is still running after the command ti
 contains "exec-timeout state" "the sandbox was not killed" "$OUT/exec-timeout-inspect.txt" "state: running"
 "$BIN/sandboxctl" kill "$exec_timeout_sandbox" >/dev/null 2>&1
 
+# --env and --cwd belong to the execution, so the proof is the same probe as
+# the resource flags: what the process itself can see, not what the request
+# body said. Both variables have to arrive, one of them splitting on the first
+# "=" of its value, and the directory has to be the one the process reports.
+"$BIN/sandboxctl" run --env GREETING=hi --env 'PAIR=a=b' --cwd /tmp -- \
+  sh -c 'printf "%s|%s|%s" "$GREETING" "$PAIR" "$(pwd)"' \
+  >"$OUT/env-cwd.out" 2>"$OUT/env-cwd.err"
+check "env-cwd exit" "the probe command succeeds" "$?" "0"
+check "env-cwd applied" "the execution sees its environment and directory" \
+  "$(cat "$OUT/env-cwd.out")" "hi|a=b|/tmp"
+
+# The environment is per execution, so a second run on the same sandbox must
+# not inherit it. The variable has to be absent, which a probe can state
+# unambiguously.
+env_sandbox=$(sed -n 's/^sandbox: \(sbx_[a-z0-9]*\).*/\1/p' "$OUT/env-cwd.err" | head -1)
+"$BIN/sandboxctl" run --sandbox "$env_sandbox" -- \
+  sh -c 'printf "%s" "${GREETING-<unset>}"' >"$OUT/env-second.out" 2>"$OUT/env-second.err"
+check "env-second exit" "the second execution succeeds" "$?" "0"
+check "env-second isolated" "a later execution does not inherit the environment" \
+  "$(cat "$OUT/env-second.out")" "<unset>"
+"$BIN/sandboxctl" kill "$env_sandbox" >/dev/null 2>&1
+
+# A cwd that does not exist must not read as a missing command: the marker is
+# on stderr and the status is 126, the shell's own "cannot execute".
+"$BIN/sandboxctl" run --rm --timeout 0 --cwd /definitely/not/here -- true \
+  >"$OUT/bad-cwd.out" 2>"$OUT/bad-cwd.err"
+code=$?
+check "bad-cwd exit" "a bad directory fails the invocation" "$code" "1"
+check "bad-cwd empty stdout" "the marker is not program output" "$(cat "$OUT/bad-cwd.out")" ""
+contains "bad-cwd marker" "stderr names the unusable directory" \
+  "$OUT/bad-cwd.err" "sandbox: cwd is not a usable directory: /definitely/not/here"
+contains "bad-cwd status" "the failure is distinguishable from a missing command" \
+  "$OUT/bad-cwd.err" "(exited) with exit code 126"
+bad_cwd_sandbox=$(sed -n 's/^sandbox: \(sbx_[a-z0-9]*\).*/\1/p' "$OUT/bad-cwd.err" | head -1)
+[ -n "$bad_cwd_sandbox" ] && "$BIN/sandboxctl" kill "$bad_cwd_sandbox" >/dev/null 2>&1
+
+# A relative path never reaches the runtime at all: the daemon rejects it.
+"$BIN/sandboxctl" run --rm --cwd relative/dir -- true >"$OUT/relative-cwd.out" 2>"$OUT/relative-cwd.err"
+check "relative-cwd exit" "a relative directory is rejected" "$?" "1"
+contains "relative-cwd message" "the rejection names the requirement" \
+  "$OUT/relative-cwd.err" "must be an absolute path"
+
 # ---------------------------------------------------------------- hardening
 
 note "hardening"

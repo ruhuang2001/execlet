@@ -39,6 +39,7 @@ type fakeDaemon struct {
 	removed      []string
 	kills        []string
 	execCommands [][]string
+	execEnvs     [][]string
 
 	// Scenario switches.
 	failStart bool
@@ -362,6 +363,7 @@ func matchesLabel(labels map[string]string, want []string) bool {
 func (f *fakeDaemon) execCreate(w http.ResponseWriter, r *http.Request, containerID string) {
 	var cfg struct {
 		Cmd []string `json:"Cmd"`
+		Env []string `json:"Env"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
 		writeError(w, 400, err.Error())
@@ -388,6 +390,7 @@ func (f *fakeDaemon) execCreate(w http.ResponseWriter, r *http.Request, containe
 	ex.stdout, ex.stderr, ex.exitCode = f.programLocked(containerID, c, actual)
 	f.execs[ex.id] = ex
 	f.execCommands = append(f.execCommands, cfg.Cmd)
+	f.execEnvs = append(f.execEnvs, cfg.Env)
 	writeJSON(w, 201, map[string]string{"Id": ex.id})
 }
 
@@ -522,11 +525,13 @@ func writeError(w http.ResponseWriter, status int, message string) {
 
 // unwrap recognizes the PID-file wrapper and returns the PID file path and the
 // real command.
+// unwrap recovers the PID path and real argv from a wrapped exec. The wrapper
+// argv is: shell, -c, script, pidPath, dir, command...
 func unwrap(cmd []string) (pidPath string, actual []string, ok bool) {
-	if len(cmd) < 5 || cmd[0] != "/bin/sh" || cmd[1] != "-c" || cmd[2] != execWrapper {
+	if len(cmd) < 6 || cmd[0] != "/bin/sh" || cmd[1] != "-c" || cmd[2] != execWrapper {
 		return "", nil, false
 	}
-	return cmd[3], cmd[4:], true
+	return cmd[3], cmd[5:], true
 }
 
 // file returns a container's stored file.
@@ -537,6 +542,16 @@ func (f *fakeDaemon) file(containerID, path string) []byte {
 		return c.files[path]
 	}
 	return nil
+}
+
+// lastExecEnv returns the environment of the most recent exec.
+func (f *fakeDaemon) lastExecEnv() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.execEnvs) == 0 {
+		return nil
+	}
+	return f.execEnvs[len(f.execEnvs)-1]
 }
 
 // lastExecCommand returns the most recent exec argv.

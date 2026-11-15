@@ -31,6 +31,8 @@ type runFlags struct {
 	idleTimeout   int
 	idleAction    string
 	execTimeout   int
+	cwd           string
+	env           envFlags
 	remove        bool
 
 	given map[string]bool
@@ -38,6 +40,22 @@ type runFlags struct {
 
 // set reports whether the caller passed the named flag.
 func (rf *runFlags) set(name string) bool { return rf.given[name] }
+
+// envFlags collects repeated --env flags. The flag package needs a Value, and
+// a repeatable flag is the only way to pass an environment that keeps names and
+// values apart without a delimiter the user has to escape.
+type envFlags []string
+
+func (e *envFlags) String() string { return strings.Join(*e, ",") }
+
+func (e *envFlags) Set(value string) error {
+	name, _, ok := strings.Cut(value, "=")
+	if !ok || name == "" {
+		return fmt.Errorf("expected NAME=VALUE, got %q", value)
+	}
+	*e = append(*e, value)
+	return nil
+}
 
 // runCommand implements `sandboxctl run [flags] -- CMD [ARG...]`.
 func (in *invocation) runCommand(args []string) int {
@@ -56,6 +74,8 @@ func (in *invocation) runCommand(args []string) int {
 	fs.IntVar(&rf.idleTimeout, "idle-timeout", 0, "idle timeout in seconds (0 disables)")
 	fs.StringVar(&rf.idleAction, "idle-action", "", "kill or pause")
 	fs.IntVar(&rf.execTimeout, "exec-timeout", 0, "timeout for this command in seconds (0 disables)")
+	fs.StringVar(&rf.cwd, "cwd", "", "absolute directory to run the command in")
+	fs.Var(&rf.env, "env", "NAME=VALUE for this command; repeatable")
 	fs.BoolVar(&rf.remove, "rm", false, "kill the sandbox after the command")
 	if err := fs.Parse(flagsPart); err != nil {
 		return 2
@@ -141,9 +161,16 @@ func (in *invocation) runCommand(args []string) int {
 		_, _ = fmt.Fprintf(in.stderr, "sandbox: %s\n", sandboxID)
 	}
 
-	startReq := sandbox.ExecuteRequest{Command: command}
+	startReq := sandbox.ExecuteRequest{Command: command, Cwd: rf.cwd}
 	if rf.set("exec-timeout") {
 		startReq.TimeoutSeconds = &rf.execTimeout
+	}
+	if len(rf.env) > 0 {
+		startReq.Env = make(map[string]string, len(rf.env))
+		for _, kv := range rf.env {
+			name, value, _ := strings.Cut(kv, "=")
+			startReq.Env[name] = value
+		}
 	}
 	started, err := client.StartExecution(ctx, sandboxID, startReq)
 	if err != nil {

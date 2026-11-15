@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log"
+	"strings"
 	"sync"
 	"time"
 )
@@ -26,7 +27,13 @@ type execution struct {
 	id        string
 	sandboxID string
 	command   []string
-	key       string
+	// env and cwd are what the request asked for, kept only so a replayed
+	// idempotency key can tell "the same invocation" from a different one.
+	// env is normalized by envPairs, so the comparison does not depend on map
+	// iteration order. Neither is serialized, except cwd in the snapshot.
+	env []string
+	cwd string
+	key string
 
 	startedAt time.Time
 	finished  *time.Time
@@ -94,6 +101,7 @@ func (ex *execution) finish(at time.Time, exitCode int, outcome ExecOutcome) boo
 		ID:                ex.id,
 		SandboxID:         ex.sandboxID,
 		Command:           append([]string(nil), ex.command...),
+		Cwd:               cwdPtr(ex.cwd),
 		State:             ExecCompleted,
 		ExitCode:          ex.exitCode,
 		TerminationReason: ex.reason,
@@ -122,6 +130,7 @@ func (ex *execution) snapshotLocked() Execution {
 		ID:                ex.id,
 		SandboxID:         ex.sandboxID,
 		Command:           append([]string(nil), ex.command...),
+		Cwd:               cwdPtr(ex.cwd),
 		State:             ex.state,
 		ExitCode:          cloneInt(ex.exitCode),
 		TerminationReason: cloneReason2(ex.reason),
@@ -149,6 +158,7 @@ func (ex *execution) summary() ExecutionSummary {
 		ID:                ex.id,
 		SandboxID:         ex.sandboxID,
 		Command:           append([]string(nil), ex.command...),
+		Cwd:               cwdPtr(ex.cwd),
 		State:             ex.state,
 		ExitCode:          cloneInt(ex.exitCode),
 		TerminationReason: cloneReason2(ex.reason),
@@ -176,6 +186,12 @@ func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req Ex
 	if req.TimeoutSeconds != nil && *req.TimeoutSeconds < 0 {
 		return Execution{}, false, errorf(CodeInvalidRequest, "timeout_seconds must not be negative")
 	}
+	if err := validateExecEnv(req.Env); err != nil {
+		return Execution{}, false, err
+	}
+	if err := validateCwd(req.Cwd); err != nil {
+		return Execution{}, false, err
+	}
 
 	sb, err := s.lookup(sandboxID)
 	if err != nil {
@@ -202,12 +218,12 @@ func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req Ex
 	if key := req.IdempotencyKey; key != "" {
 		if prior := sb.idempotency[key]; prior != nil {
 			prior.mu.Lock()
-			same := equalStrings(prior.command, req.Command)
+			same := sameInvocation(prior, req)
 			prior.mu.Unlock()
 			if !same {
 				sb.mu.Unlock()
 				return Execution{}, false, errorf(CodeIdempotencyConflict,
-					"idempotency key was used for a different command")
+					"idempotency key was used for a different command, cwd, or environment")
 			}
 			out := prior.snapshot()
 			sb.mu.Unlock()
@@ -243,7 +259,11 @@ func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req Ex
 	// the process itself outlives this context, which the backend detaches
 	// from the request.
 	startCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), BackendCallTimeout)
-	proc, err := s.backend.Exec(startCtx, sb.container, req.Command)
+	proc, err := s.backend.Exec(startCtx, sb.container, ExecSpec{
+		Command: req.Command,
+		Env:     req.envPairs(),
+		Dir:     req.Cwd,
+	})
 	cancel()
 	if err != nil {
 		sb.mu.Unlock()
@@ -254,6 +274,8 @@ func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req Ex
 		id:          newID("exe_"),
 		sandboxID:   sandboxID,
 		command:     append([]string(nil), req.Command...),
+		env:         req.envPairs(),
+		cwd:         req.Cwd,
 		key:         req.IdempotencyKey,
 		startedAt:   s.now(),
 		state:       ExecRunning,
@@ -713,6 +735,68 @@ func isAbsPath(path string) bool {
 	return len(path) > 0 && path[0] == '/'
 }
 
+// validateExecEnv enforces the environment limits from docs/api.md. Every bound
+// is checked before the sandbox lookup, so a malformed request costs nothing
+// and answers the same way whatever the sandbox's state is.
+func validateExecEnv(env map[string]string) error {
+	if len(env) == 0 {
+		return nil
+	}
+	if len(env) > MaxEnvEntries {
+		return errorf(CodeInvalidRequest, "env has %d entries; the limit is %d", len(env), MaxEnvEntries)
+	}
+	total := 0
+	for name, value := range env {
+		switch {
+		case name == "":
+			return errorf(CodeInvalidRequest, "env has an empty variable name")
+		case len(name) > MaxEnvKeyBytes:
+			return errorf(CodeInvalidRequest, "env name %q exceeds %d bytes", name, MaxEnvKeyBytes)
+		case strings.ContainsAny(name, "=\x00\n"):
+			return errorf(CodeInvalidRequest, "env name %q must not contain '=', a NUL byte, or a newline", name)
+		case len(value) > MaxEnvValueBytes:
+			return errorf(CodeInvalidRequest, "env value for %q exceeds %d bytes", name, MaxEnvValueBytes)
+		case strings.IndexByte(value, 0) >= 0:
+			return errorf(CodeInvalidRequest, "env value for %q must not contain a NUL byte", name)
+		}
+		total += len(name) + 1 + len(value)
+		if total > MaxEnvTotalBytes {
+			return errorf(CodeInvalidRequest, "env exceeds %d bytes in total", MaxEnvTotalBytes)
+		}
+	}
+	return nil
+}
+
+// validateCwd checks only what the daemon can decide without asking the
+// runtime: the path is absolute and bounded. Whether the directory exists is
+// deliberately not checked here. A stat would cost a backend round trip on
+// every start and could race with the command that creates the directory; the
+// wrapper reports an unusable directory as exit 126 instead, which the
+// execution record then carries.
+func validateCwd(cwd string) error {
+	switch {
+	case cwd == "":
+		return nil
+	case len(cwd) > MaxCwdBytes:
+		return errorf(CodeInvalidRequest, "cwd exceeds %d bytes", MaxCwdBytes)
+	case strings.IndexByte(cwd, 0) >= 0:
+		return errorf(CodeInvalidRequest, "cwd must not contain a NUL byte")
+	case !isAbsPath(cwd):
+		return errorf(CodeInvalidRequest, "cwd must be an absolute path")
+	}
+	return nil
+}
+
+// sameInvocation reports whether an existing execution was started with this
+// request. It is the idempotency comparison: a key identifies one invocation,
+// and a replay with a different environment would otherwise return an
+// execution that ran with the old one.
+func sameInvocation(ex *execution, req ExecuteRequest) bool {
+	return equalStrings(ex.command, req.Command) &&
+		equalStrings(ex.env, req.envPairs()) &&
+		ex.cwd == req.Cwd
+}
+
 // ---------------------------------------------------------------- small helpers
 
 func equalStrings(a, b []string) bool {
@@ -728,6 +812,27 @@ func equalStrings(a, b []string) bool {
 }
 
 func cloneInt(v *int) *int {
+	if v == nil {
+		return nil
+	}
+	c := *v
+	return &c
+}
+
+// cwdPtr returns a pointer to cwd for the snapshot, or nil when the execution
+// used the image's working directory. The field is nullable on the wire so a
+// client can tell "no cwd requested" from a directory it happens to share with
+// the image's default.
+func cwdPtr(cwd string) *string {
+	if cwd == "" {
+		return nil
+	}
+	return &cwd
+}
+
+// cloneString copies a *string so a caller cannot mutate a snapshot through the
+// pointer it was handed.
+func cloneString(v *string) *string {
 	if v == nil {
 		return nil
 	}

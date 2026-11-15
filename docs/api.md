@@ -66,6 +66,7 @@ Clients may honor a `Retry-After` header (seconds) on 429 and 503.
 | `id` | string | |
 | `sandbox_id` | string | |
 | `command` | string[] | argv, executed without a shell |
+| `cwd` | string or null | the directory the execution was started with; null when the request set none. Never the environment, which may carry credentials |
 | `state` | string | `running` or `completed` |
 | `exit_code` | int or null | null while running, or if the runtime could not report one |
 | `termination_reason` | string or null | null while running; see below |
@@ -207,10 +208,12 @@ No body. `200` Sandbox. Idempotent per the transition table.
 - `command` is required and non-empty.
 - `idempotency_key` is optional, at most 128 characters, scoped to the sandbox.
 - `timeout_seconds` is optional and bounds this execution. Omitted or `0` means no deadline of its own. The sandbox lifetime deadline still applies, and whichever comes first wins. See [execution timeout](#execution-timeout).
+- `env` is optional and sets environment variables for this execution only. It is additive: a name here overrides the container's value, and every other container variable stays visible. A later execution does not inherit it. Limits: 64 entries, 128 bytes per name, 8192 bytes per value, 32768 bytes in total. A name must be non-empty and must not contain `=`, a NUL byte, or a newline; a value must not contain a NUL byte. Exceeding a limit is `400 invalid_request`. Values are never echoed in a response.
+- `cwd` is optional and sets the directory the command runs in. Omitted or empty uses the image's working directory. It must be absolute and at most 4096 bytes; otherwise `400 invalid_request`. A directory that does not exist or is not a directory does not fail the start: the execution completes with `exit_code: 126` and `sandbox: cwd is not a usable directory: <path>` on stderr, which keeps it distinguishable from a missing command (`127`).
 - `201` with the new Execution (`state: running`).
 - State validation precedes idempotency lookup: a killed or pending sandbox rejects the start, including a replay; a paused sandbox resumes first.
-- Same key and same command as an existing execution: `200` with that execution, in whatever state it is now. No new process starts; a different `timeout_seconds` on the replay does not change its deadline.
-- Same key with a different command: `409 idempotency_conflict`.
+- Same key and the same invocation as an existing execution: `200` with that execution, in whatever state it is now. No new process starts; a different `timeout_seconds` on the replay does not change its deadline. The comparison covers `command`, `cwd`, and `env`, so a replay cannot silently return an execution that ran with a different environment.
+- Same key with a different command, `cwd`, or `env`: `409 idempotency_conflict`.
 - Another execution is running: `409 busy`. One running execution per sandbox keeps container-wide OOM evidence attributable to a single execution.
 
 ### `GET /v1/sandboxes/{sandbox_id}/executions`

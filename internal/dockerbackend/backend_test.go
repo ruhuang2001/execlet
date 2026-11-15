@@ -277,7 +277,7 @@ func TestExecRunsWrappedCommandAndDemuxes(t *testing.T) {
 		return "out\n", "err\n", 3
 	})
 
-	proc, err := b.Exec(context.Background(), id, []string{"python3", "-c", "print(1)"})
+	proc, err := b.Exec(context.Background(), id, daemon.ExecSpec{Command: []string{"python3", "-c", "print(1)"}})
 	if err != nil {
 		t.Fatalf("exec: %v", err)
 	}
@@ -320,7 +320,7 @@ func TestExecOutputSurvivesRequestContextCancel(t *testing.T) {
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
-	proc, err := b.Exec(ctx, id, []string{"slow"})
+	proc, err := b.Exec(ctx, id, daemon.ExecSpec{Command: []string{"slow"}})
 	if err != nil {
 		t.Fatalf("exec: %v", err)
 	}
@@ -339,7 +339,7 @@ func TestSignalKillsProcessGroup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	proc, err := b.Exec(context.Background(), id, []string{"sleep", "100"})
+	proc, err := b.Exec(context.Background(), id, daemon.ExecSpec{Command: []string{"sleep", "100"}})
 	if err != nil {
 		t.Fatalf("exec: %v", err)
 	}
@@ -367,7 +367,7 @@ func TestSignalWaitsForPidFile(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	f.noPidFile = true
-	proc, err := b.Exec(context.Background(), id, []string{"sleep", "100"})
+	proc, err := b.Exec(context.Background(), id, daemon.ExecSpec{Command: []string{"sleep", "100"}})
 	if err != nil {
 		t.Fatalf("exec: %v", err)
 	}

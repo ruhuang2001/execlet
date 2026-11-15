@@ -27,12 +27,12 @@ export SANDBOX_DOMAIN="http://127.0.0.1:$PORT" SANDBOX_API_KEY="file-e2e-$OWNER"
 export PYTHONPATH="$ROOT/sandbox-python/src${PYTHONPATH:+:$PYTHONPATH}"
 docker info >"$OUT/docker-info.txt" 2>&1
 "${PYTHON:-python3}" scripts/file-e2e/prepare_image.py "$OUT"
-BUILD_FLAGS=()
+BUILD_FLAGS=(-buildvcs=true)
 if [ "${E2E_COVERAGE:-0}" = "1" ]; then
  COVER_DIR=${FILES_COVER_DIR:-$OUT/coverage}
  mkdir -p "$COVER_DIR"
  export GOCOVERDIR=$(cd "$COVER_DIR" && pwd)
- BUILD_FLAGS=(-cover -covermode=atomic -coverpkg=./...)
+ BUILD_FLAGS+=(-cover -covermode=atomic -coverpkg=./...)
 fi
 {
  go build "${BUILD_FLAGS[@]}" -o "$OUT/sandboxd" ./cmd/sandboxd

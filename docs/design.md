@@ -271,8 +271,9 @@ Implementation: [start recovery](../sandbox-go/exec.go),
 | `canceled` | an explicit cancel request |
 | `oom` | the kernel OOM killer stopped the command |
 | `evicted` | the container disappeared or was stopped externally |
+| `unknown` | unexplained exit 137 when configured for multiple execution slots |
 
-The execution classifier checks the first recorded intent (`canceled` or `timeout`), then a positive delta in the cgroup `oom_kill` counter, container liveness, and the exit code. The periodic eviction sweep can also finalize an execution directly. Exit 137 alone never means OOM: an explicit `kill -9`, an eviction, and a runtime stop all produce 137.
+With multiple configured slots, OOM counters are not attributed to individual executions; unexplained exit 137 is unknown. The execution classifier checks the first recorded intent (`canceled` or `timeout`), then a positive delta in the cgroup `oom_kill` counter, container liveness, and the exit code. The periodic eviction sweep can also finalize an execution directly. Exit 137 alone never means OOM: an explicit `kill -9`, an eviction, and a runtime stop all produce 137.
 
 Docker container records can briefly be missing or still report running after
 an external stop. For exit 137 with no recorded intent or OOM delta, the

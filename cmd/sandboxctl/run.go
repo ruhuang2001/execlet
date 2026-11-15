@@ -107,6 +107,10 @@ func (in *invocation) runCommand(args []string) int {
 		_, _ = fmt.Fprintln(in.stderr, "sandboxctl: --exec-timeout must not be negative; use 0 to disable")
 		return 2
 	}
+	if rf.set("max-concurrent-executions") && (rf.maxConcurrentExecutions < 1 || rf.maxConcurrentExecutions > 8) {
+		_, _ = fmt.Fprintln(in.stderr, "sandboxctl: --max-concurrent-executions must be between 1 and 8")
+		return 2
+	}
 	if rf.set("pids-limit") && rf.pidsLimit <= 0 {
 		_, _ = fmt.Fprintln(in.stderr, "sandboxctl: --pids-limit must be positive")
 		return 2

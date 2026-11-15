@@ -129,6 +129,7 @@ var (
     ErrNonZeroExit       // termination_reason "exited" with a nonzero exit code
     ErrTimeout           // termination_reason "timeout": the sandbox lifetime, or the execution's own deadline
     ErrCanceled          // canceled outcome or an accepted SDK cancellation response; inspect execution state
+    ErrUnknown           // termination_reason "unknown"
     ErrOOM               // termination_reason "oom"
     ErrEvicted           // termination_reason "evicted"
     ErrCancelUnconfirmed // the caller's context ended but the SDK could not confirm the server stopped the work

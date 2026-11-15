@@ -25,10 +25,11 @@ type process struct {
 	stderr *bufferedStream
 	done   chan struct{} // closed when the output stream has ended
 
-	signalMu sync.Mutex
-	exited   bool
-	mu       sync.Mutex
-	demuxErr error
+	signalMu   sync.Mutex
+	exited     bool
+	pidCleaned bool
+	mu         sync.Mutex
+	demuxErr   error
 }
 
 var _ daemon.Process = (*process)(nil)
@@ -101,7 +102,7 @@ func (p *process) Signal(sig daemon.Signal) error {
 func (p *process) cleanupPID() {
 	p.signalMu.Lock()
 	defer p.signalMu.Unlock()
-	if p.exited {
+	if p.pidCleaned {
 		return
 	}
 	p.exited = true
@@ -114,7 +115,20 @@ func (p *process) cleanupPID() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	_, _ = p.b.capture(ctx, p.containerID, []string{"/bin/rm", "-f", "--", p.pidPath})
+	for attempt := range 3 {
+		if _, err := p.b.capture(ctx, p.containerID, []string{"/bin/rm", "-f", "--", p.pidPath}); err == nil {
+			p.pidCleaned = true
+			return
+		}
+		if attempt == 2 || ctx.Err() != nil {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
 }
 
 // pid reads the wrapper's PID file, retrying while the exec is still starting.

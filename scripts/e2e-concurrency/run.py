@@ -183,6 +183,21 @@ def retention_idle_unknown():
     return {"sequential_successes": 310, "pid_files": int(probe["stdout"].strip()), "retained": len(records), "after_output_pressure": len(after_pressure), "unknown": out}
 
 
+def paused_missing_cancel():
+    sb = create()
+    a, b = start(sb), start(sb)
+    call("POST", "/v1/sandboxes/" + sb + "/pause")
+    subprocess.run(["docker", "rm", "-f", "tiny-sandbox-" + sb], check=True, capture_output=True)
+    # A sweep may win the race and make cancel return the terminal record.
+    try:
+        call("POST", path(sb, a["id"]) + "/cancel")
+    except AssertionError as error:
+        assert "404" in str(error) and "not_found" in str(error), error
+    finish(sb, a, "evicted")
+    finish(sb, b, "evicted")
+    return {"target": a["id"], "sibling": b["id"]}
+
+
 def lifetime_and_fallback():
     sb = create(timeout_seconds=1)
     a, b = start(sb), start(sb)
@@ -222,6 +237,7 @@ try:
     check("freeze-resume-external-eviction", pause_and_eviction)
     check("active-retention-idle-unknown137", retention_idle_unknown)
     check("lifetime-and-container-removal-fallback", lifetime_and_fallback)
+    check("paused-missing-container-cancel", paused_missing_cancel)
     report["passed"] = True
 except Exception as error:
     report["passed"] = False

@@ -469,8 +469,9 @@ func (s *Sandboxes) CancelExecution(ctx context.Context, sandboxID, executionID 
 	sb.mu.Lock()
 	if sb.state == StatePaused {
 		if err := s.backend.Unpause(ctx, sb.container); err != nil {
+			failure := s.backendFailure(ctx, sb, err)
 			sb.mu.Unlock()
-			return Execution{}, s.backendFailure(ctx, sb, err)
+			return Execution{}, failure
 		}
 		sb.state = StateRunning
 		sb.armLifetimeLocked(s.now())

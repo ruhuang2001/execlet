@@ -132,8 +132,8 @@ func classifyWithAttribution(ctx context.Context, s sampler, containerID string,
 	}
 
 	// The process exited on its own while its container still lives. This is
-	// the ordinary case, and it includes exit 137 from an in-sandbox
-	// `kill -9`: no intent, no OOM delta, container alive.
+	// the ordinary case. Single-slot execution treats unexplained 137 as exited;
+	// multi-slot execution cannot attribute OOM and reports unknown instead.
 	if !attributeOOM && exitCode == 137 {
 		return withTrace(ExecOutcome{Reason: ReasonUnknown, ExitCode: exitCode})
 	}

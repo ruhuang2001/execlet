@@ -62,7 +62,7 @@ cancellation. Authentication uses the HTTP contract's Bearer token.
 ## Requests and responses
 
 Requests are typed dataclasses. `CreateSandboxRequest` accepts `image`,
-`memory_mb`, `pids_limit`, `nano_cpus`, `network`, `timeout_seconds`,
+`memory_mb`, `max_concurrent_executions`, `pids_limit`, `nano_cpus`, `network`, `timeout_seconds`,
 `timeout_action`, `idle_timeout_seconds`, and `idle_timeout_action`.
 An optional value of `None` is omitted from JSON. Explicit zero is sent to the
 server, preserving the difference between omission and disabling a timeout.

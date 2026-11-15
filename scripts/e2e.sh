@@ -116,6 +116,8 @@ check "concurrency" "admission, lifecycle, retention and outcomes; see $OUT/conc
 check "go-concurrency" "SDK overlap, cancel and unknown outcome; see $OUT/go-concurrency.log" "$?" "0"
 contains "go-concurrency ran" "test ran without skipping" "$OUT/go-concurrency.log" "--- PASS: TestLiveConcurrency"
 
+"$BIN/sandboxctl" run --max-concurrent-executions 9 -- true >"$OUT/concurrency-invalid.out" 2>"$OUT/concurrency-invalid.err"
+check "concurrency-cli-invalid" "invalid slot limit is a usage error" "$?" "2"
 "$BIN/sandboxctl" run --max-concurrent-executions 2 -- true >"$OUT/concurrency-cli.out" 2>"$OUT/concurrency-cli.err"
 check "concurrency-cli-create" "CLI accepts concurrency limit" "$?" "0"
 concurrency_sb=$(sed -n 's/^sandbox: \(sbx_[a-z0-9]*\).*/\1/p' "$OUT/concurrency-cli.err" | head -1)

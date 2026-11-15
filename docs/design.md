@@ -307,7 +307,7 @@ cleanup behavior when the runtime fails.
 sandboxd writes JSON logs through log/slog. Each handled HTTP request receives
 a validated or generated X-Request-ID echoed in the response; its context carries
 the same logger through execution start and completion. Access records contain
-method, route template, status, duration_ms, and bytes. Runtime errors expose only
+request_id, method, route template, status, duration_ms, bytes, and completed. Runtime errors expose only
 safe error codes in logs, because raw runtime text can contain user payloads.
 Public /healthz answers independently of Docker; public /readyz bounds a Docker
 /_ping check to two seconds and reports 503 when the runtime is unavailable.

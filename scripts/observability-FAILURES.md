@@ -27,3 +27,10 @@ Review follow-up failure (recorded before repair): eviction can win terminal
 finalization before the runner, leaving only a start log. Delay real Docker exec
 inspection in the private proxy, externally remove the owned container, and
 require exactly one correlated completion record matching the stored outcome.
+
+Additional review failure cases (before repair): Docker /_ping redirects must
+not be accepted as healthy; a stalled proxy must outlast the deadline assertion;
+HTTP panic unwinding must not record an implicit 200. Every captured response,
+including direct SSE, needs its correlation header. Startup wait exhaustion
+must identify readiness failure, and bind/shutdown errors must retain their
+safe infrastructure cause rather than only a generic message.

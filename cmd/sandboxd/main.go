@@ -91,7 +91,7 @@ func main() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
-			slog.Warn("http shutdown incomplete")
+			slog.Warn("http shutdown incomplete", "error", err)
 		}
 		// Containers are this process's state, so they go with it. Startup
 		// cleanup covers a crash; this covers the ordinary stop.
@@ -101,7 +101,7 @@ func main() {
 
 	slog.Info("server listening", "version", version, "addr", *addr, "owner", *owner)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		slog.Error("http server failed")
+		slog.Error("http server failed", "error", err)
 		os.Exit(1)
 	}
 	// ListenAndServe returns as soon as Shutdown begins. Wait for the drain and

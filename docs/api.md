@@ -15,7 +15,8 @@ Status: normative. [OpenAPI specification](../api/openapi.yaml) must describe ex
 
 ## Errors
 
-Errors emitted by the API handlers use this body. Router-level errors for
+Errors emitted by the API handlers use this body, except /readyz, whose 503
+response uses the readiness object documented below. Router-level errors for
 unknown paths or unsupported methods may use plain text:
 
 ```json
@@ -176,8 +177,8 @@ authorization headers, query values, or raw runtime error messages.
 
 Public Docker readiness probe, bounded to two seconds. It calls Docker's
 unversioned /_ping and requires HTTP 200 with body OK. Success returns 200
-with {"status":"ok","version":"dev","docker":"ok"}. Failure returns 503
-with {"status":"unavailable","version":"dev","docker":"unreachable"};
+with {"status":"ok","version":"<build version>","docker":"ok"}. Failure returns 503
+with {"status":"unavailable","version":"<build version>","docker":"unreachable"};
 version is the daemon build version. A backend without readiness support is
 unavailable. Readiness checks connectivity, not image availability or capacity.
 

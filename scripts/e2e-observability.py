@@ -55,12 +55,18 @@ class Forward(socketserver.BaseRequestHandler):
             body = json.dumps({'message': secret}).encode()
             self.request.sendall(b'HTTP/1.1 500 Internal Server Error\r\nContent-Length: ' + str(len(body)).encode() + b'\r\nConnection: close\r\n\r\n' + body)
             return
+        if path == '/redirect-ok':
+            self.request.sendall(b'HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK')
+            return
         if path == '/_ping' and mode != 'healthy':
             selected = mode
             if selected == 'refused':
                 return
+            if selected == 'redirect':
+                self.request.sendall(b'HTTP/1.1 302 Found\r\nLocation: /redirect-ok\r\nContent-Length: 0\r\nConnection: close\r\n\r\n')
+                return
             if selected == 'stall':
-                time.sleep(2.5)
+                time.sleep(5)
                 return
             status = b'503 Unavailable' if selected == 'status' else b'200 OK'
             body = b'OK' if selected == 'status' else b'NOT-OK'
@@ -111,6 +117,7 @@ def request(path, *, method='GET', payload=None, headers=(), auth=False):
     with (out / 'responses.jsonl').open('a') as f:
         f.write(json.dumps(record) + '\n')
     conn.close()
+    check('response request id present', bool(record['request_id']), record)
     return record
 
 
@@ -142,6 +149,8 @@ try:
                 if server.poll() is not None:
                     raise RuntimeError('sandboxd exited during startup')
                 time.sleep(.05)
+        else:
+            raise RuntimeError('sandboxd did not become reachable within startup budget')
         check('public liveness', response['status'] == 200)
         check('generated request id', is_uuid(response['request_id']))
         response = request('/readyz')
@@ -153,7 +162,7 @@ try:
                         [('X-Request-ID', 'one'), ('X-Request-ID', 'two')], [('X-Request-ID', '')]]:
             response = request('/healthz', headers=headers)
             check('rejected request id', is_uuid(response['request_id']))
-        for failure in ['refused', 'status', 'body', 'stall']:
+        for failure in ['refused', 'status', 'body', 'redirect', 'stall']:
             mode = failure
             response = request('/readyz')
             check('readiness ' + failure, response['status'] == 503 and json.loads(response['body'])['docker'] == 'unreachable' and response['elapsed'] < 3, response)
@@ -175,6 +184,7 @@ try:
         conn.request('GET', base + '/executions/' + execution_id + '/events', headers={'Authorization': 'Bearer ' + key, 'X-Request-ID': 'stream-correlation'})
         started = time.monotonic()
         stream = conn.getresponse()
+        check('SSE request id preserved', stream.getheader('X-Request-ID') == 'stream-correlation')
         first_output = None
         lines = []
         for raw in stream:

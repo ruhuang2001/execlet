@@ -70,7 +70,9 @@ func (c *Client) Ping(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	resp, err := c.http.Do(req)
+	probe := *c.http
+	probe.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := probe.Do(req)
 	if err != nil {
 		return err
 	}

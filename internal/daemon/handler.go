@@ -91,18 +91,24 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		response = &flushingResponse{responseRecorder: recorded}
 	}
 	w = response
+	completed := false
 	defer func() {
 		status := recorded.status
 		if status == 0 {
 			status = http.StatusOK
+			if !completed {
+				status = http.StatusInternalServerError
+			}
 		}
-		logger.InfoContext(r.Context(), "http request", "status", status, "duration_ms", float64(time.Since(started).Microseconds())/1000, "bytes", recorded.bytes)
+		logger.InfoContext(r.Context(), "http request", "status", status, "duration_ms", float64(time.Since(started).Microseconds())/1000, "bytes", recorded.bytes, "completed", completed)
 	}()
 	if h.apiKey != "" && r.URL.Path != "/healthz" && r.URL.Path != "/readyz" && !h.authorized(r) {
 		writeError(w, http.StatusUnauthorized, string(CodeUnauthorized), "missing or wrong API key")
+		completed = true
 		return
 	}
 	h.mux.ServeHTTP(w, r)
+	completed = true
 }
 
 // authorized compares the bearer token in constant time.

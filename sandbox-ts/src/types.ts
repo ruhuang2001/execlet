@@ -26,6 +26,8 @@ export interface Execution {
   id: string;
   sandbox_id: string;
   command: string[];
+  /** The requested working directory; null when the request set none. Absent on servers without cwd support. */
+  cwd?: string | null;
   state: OpenString<'running' | 'completed'>;
   exit_code: number | null;
   termination_reason: OpenString<TerminationReason> | null;
@@ -68,6 +70,10 @@ export interface ExecuteRequest {
   command: readonly string[];
   idempotency_key?: string;
   timeout_seconds?: number;
+  /** Added to the image's environment for this execution only. Never echoed back. */
+  env?: Readonly<Record<string, string>>;
+  /** Absolute working directory; omit for the image's own. */
+  cwd?: string;
 }
 
 export interface RequestOptions { signal?: AbortSignal }

@@ -86,6 +86,23 @@ Execution stdout/stderr are optional because lists omit them. All request and
 response interfaces, Event, ExecutionOutcome, SandboxError and executionOutcome
 are exported from the package root. Deep imports are not supported.
 
+ExecuteRequest also takes `env` (string record, added to the image's
+environment for this execution only) and `cwd` (absolute working directory).
+The [shared SDK contract](sdk.md) lists their limits and behavior, including
+exit code 126 for a cwd that is not a usable directory. Idempotency compares
+command, env and cwd, and the server never echoes env. Execution.cwd repeats
+the requested directory, is null when the request set none, and is absent on a
+server older than this contract, which ignores both fields without an error;
+nothing reveals an ignored env. exec and execStream take only a command, as in
+Go; set env or cwd through startExecution and streamExecution:
+
+~~~ts
+const started = await client.startExecution(sandbox.id, {
+  command: ['sh', '-c', 'echo "$GREETING from $(pwd)"'], env: { GREETING: 'hello' }, cwd: '/tmp',
+});
+const done = await client.streamExecution(sandbox.id, started.id, () => {});
+~~~
+
 ## Outcomes and errors
 
 Completed commands resolve values, including nonzero exits. ExecutionOutcome
@@ -147,8 +164,9 @@ stop when their signal aborts.
 
 ## Cancellation and start recovery
 
-startExecution copies the request and, absent a supplied key, generates 128
-random bits as a 32-digit hex idempotency key. Retries reuse key and command.
+startExecution copies the request, including its command array and env
+record, and, absent a supplied key, generates 128 random bits as a 32-digit
+hex idempotency key. Retries reuse key, command, env and cwd.
 A signal already aborted before starting sends no request.
 
 An aborted in-flight start triggers a fresh five-second deadline: repeat the

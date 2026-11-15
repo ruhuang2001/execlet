@@ -83,13 +83,33 @@ execute_request = ExecuteRequest(
 )
 ```
 
-`ExecuteRequest(command=..., idempotency_key="", timeout_seconds=None)` describes
+`ExecuteRequest(command=..., idempotency_key="", timeout_seconds=None, env=None, cwd=None)` describes
 a start. An empty key causes the SDK to generate 128 random bits encoded as
 hex, reused for every retry or recovery of that start. Keys are scoped to a
 sandbox and only remembered while the execution is retained. Replaying a
-retained key with the same command returns that execution; changing the
-timeout does not update its deadline. A different command produces
-`idempotency_conflict`.
+retained key with the same command, `env`, and `cwd` returns that execution;
+changing the timeout does not update its deadline. A different command, `env`,
+or `cwd` produces `idempotency_conflict`.
+
+`env` is a `dict[str, str]` added to the image's environment for this execution
+only, and `cwd` is an absolute working directory; `None` omits either. The
+[shared SDK contract](sdk.md) lists their limits and behavior, including exit
+code 126 for a `cwd` that is not a usable directory. The server never echoes
+`env`. `Execution.cwd` repeats the requested directory and is `None` when the
+request set none. A server older than this contract ignores both fields
+without an error: `Execution.cwd` staying `None` after a start that set `cwd`
+is the only visible sign, and nothing reveals an ignored `env`.
+
+```python
+started = client.start_execution(sandbox.id, ExecuteRequest(
+    command=["sh", "-c", 'echo "$GREETING from $(pwd)"'],
+    env={"GREETING": "hello"}, cwd="/tmp",
+))
+done = client.stream_execution(sandbox.id, started.id)
+```
+
+The `exec` conveniences take only a command; use `start_execution` and
+`stream_execution` to set `env` or `cwd`, as in the Go SDK.
 
 `Sandbox`, `Execution`, and `Event` are keyword-only response dataclasses.
 Resource fields use Python snake_case names matching the JSON contract.

@@ -17,6 +17,8 @@ async function consumer(client = new Client(), signal?: AbortSignal) {
   const options = signal ? { signal } : {};
   const sandbox = await client.createSandbox({ timeout_seconds: 0, nano_cpus: 0 }, options);
   const started = await client.startExecution(sandbox.id, { command: ['echo', 'hello'] }, options);
+  const placed = await client.startExecution(sandbox.id, { command: ['pwd'], env: { MY_VAR: 'x' }, cwd: '/tmp' }, options);
+  const placedCwd: string | null | undefined = placed.cwd;
   const events: AsyncIterable<Event> = client.streamExecution(sandbox.id, started.id, options);
   for await (const event of events) {
     switch (event.type) {
@@ -34,6 +36,6 @@ async function consumer(client = new Client(), signal?: AbortSignal) {
   const bytes: Uint8Array = await client.readFile(sandbox.id, '/tmp/file', options);
   const future: Sandbox['state'] = 'future_state';
   const retryable: boolean = new SandboxError('transport', 'failed').retryable;
-  void [bytes, future, retryable];
+  void [bytes, future, retryable, placedCwd];
 }
 void consumer;

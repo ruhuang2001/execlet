@@ -27,13 +27,11 @@ type execution struct {
 	id        string
 	sandboxID string
 	command   []string
-	// env and cwd are what the request asked for, kept only so a replayed
-	// idempotency key can tell "the same invocation" from a different one.
-	// env is normalized by envPairs, so the comparison does not depend on map
-	// iteration order. Neither is serialized, except cwd in the snapshot.
-	env []string
-	cwd string
-	key string
+	// Env identity retains no raw names or values. Cwd remains diagnostic data.
+	envDigest [32]byte
+	envCount  int
+	cwd       string
+	key       string
 
 	startedAt time.Time
 	finished  *time.Time
@@ -274,7 +272,8 @@ func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req Ex
 		id:          newID("exe_"),
 		sandboxID:   sandboxID,
 		command:     append([]string(nil), req.Command...),
-		env:         req.envPairs(),
+		envDigest:   envFingerprint(req),
+		envCount:    len(req.Env),
 		cwd:         req.Cwd,
 		key:         req.IdempotencyKey,
 		startedAt:   s.now(),
@@ -798,7 +797,8 @@ func validateCwd(cwd string) error {
 // execution that ran with the old one.
 func sameInvocation(ex *execution, req ExecuteRequest) bool {
 	return equalStrings(ex.command, req.Command) &&
-		equalStrings(ex.env, req.envPairs()) &&
+		ex.envCount == len(req.Env) &&
+		ex.envDigest == envFingerprint(req) &&
 		ex.cwd == req.Cwd
 }
 

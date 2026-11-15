@@ -101,6 +101,14 @@ done
 curl -fsS "$SANDBOX_DOMAIN/healthz" >"$OUT/healthz.json" 2>&1
 check "healthz" "health endpoint answers" "$(grep -c '"status":"ok"' "$OUT/healthz.json")" "1"
 
+# Real Docker environment boundaries and identity; included in CI artifacts.
+python3 "$ROOT/scripts/e2e-env/run.py" "$SANDBOX_DOMAIN" "$OUT/env-contract.json" >"$OUT/env-contract.log" 2>&1
+check "env-contract" "bounds, replay identity, secrecy and isolation; see $OUT/env-contract.log" "$?" "0"
+
+(cd "$ROOT" && go test -race -tags live ./sandbox-go -run '^TestLiveEnvRecoverySnapshotsInvocation$' -count=1 -v) >"$OUT/go-env-recovery.log" 2>&1
+check "go-env-recovery" "caller mutation preserves accepted invocation; see $OUT/go-env-recovery.log" "$?" "0"
+contains "go-env-recovery ran" "test ran without skipping" "$OUT/go-env-recovery.log" "--- PASS: TestLiveEnvRecoverySnapshotsInvocation"
+
 # ---------------------------------------------------------------- doctor
 
 note "doctor"

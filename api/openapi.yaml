@@ -778,15 +778,20 @@ components:
             sandbox; timeout_action pause pauses it instead.
         env:
           type: object
+          maxProperties: 64
+          x-max-key-bytes: 64
+          x-max-total-bytes: 32768
           additionalProperties:
             type: string
+            x-max-bytes: 8192
           description: >-
             Optional. Environment variables for this execution only. A name
             here overrides a variable of the same name that the container
             already has, and every other container variable stays visible.
-            Values are not retained in the response and are never echoed.
+            Values are never echoed. Execution records retain only the entry count
+            and a process-keyed HMAC-SHA256 fingerprint, not raw env.
             Omitted or empty leaves the container's environment unchanged.
-            At most 64 entries, 128 bytes per name, 8192 bytes per value, and
+            At most 64 entries, 64 bytes per name, 8192 bytes per value, and
             32768 bytes in total; exceeding a bound is an invalid_request.
             A name must be non-empty and must not contain "=", a NUL byte, or a
             newline. A value must not contain a NUL byte.

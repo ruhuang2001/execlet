@@ -41,7 +41,7 @@ const (
 	// the request body limit into an unbounded per-execution allocation.
 	MaxEnvEntries = 64
 	// MaxEnvKeyBytes bounds one environment variable name.
-	MaxEnvKeyBytes = 128
+	MaxEnvKeyBytes = 64
 	// MaxEnvValueBytes bounds one environment variable value.
 	MaxEnvValueBytes = 8 << 10
 	// MaxEnvTotalBytes bounds the whole environment of one execution, measured
@@ -238,7 +238,8 @@ type CreateRequest struct {
 // Env is this execution's environment. It is additive: a name here overrides
 // the container's value and every other container variable stays visible. Cwd
 // is the directory the command runs in; empty means the image's working
-// directory. Neither is retained beyond the execution record, and Env is never
+// directory. Execution records retain an environment fingerprint and entry count.
+// Raw environment values are never retained in history or
 // echoed in a response.
 type ExecuteRequest struct {
 	Command        []string          `json:"command"`

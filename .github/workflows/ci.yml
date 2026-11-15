@@ -26,11 +26,16 @@ jobs:
           ref: ${{ inputs.ref || github.ref }}
       - name: detect file E2E at the requested revision
         id: files
+        env:
+          REQUESTED_REF: ${{ inputs.ref }}
         run: |
           if test -f scripts/e2e-files.sh; then
             echo 'present=true' >> "$GITHUB_OUTPUT"
-          else
+          elif test -n "$REQUESTED_REF"; then
             echo 'No file E2E in this historical revision.'
+          else
+            echo 'Missing required scripts/e2e-files.sh on normal CI.' >&2
+            exit 1
           fi
       - uses: actions/setup-go@v5
         if: steps.files.outputs.present == 'true'

@@ -66,7 +66,8 @@ shift
 }
 
 // cleanupStdin is also used if exec creation or startup fails before the
-// wrapper runs. It never recursively removes a directory. Cleanup is bounded
+// wrapper runs. rm removes a replacement symlink itself, never its target.
+// The exact random private directory has no user content. Cleanup is bounded
 // and best effort; container removal is the final fallback if the runtime fails.
 func (b *Backend) cleanupStdin(containerID, dir string) {
 	if dir == "" || !validStdinDir(dir) {
@@ -74,5 +75,5 @@ func (b *Backend) cleanupStdin(containerID, dir string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	_, _ = b.capture(ctx, containerID, []string{"/bin/sh", "-c", `/bin/rm -f -- "$1/input"; /bin/rmdir -- "$1" 2>/dev/null`, "stdin-cleanup", dir})
+	_, _ = b.capture(ctx, containerID, []string{"/bin/rm", "-rf", "--", dir})
 }

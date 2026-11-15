@@ -185,6 +185,13 @@ func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req Ex
 	if len(req.Command) == 0 {
 		return Execution{}, false, errorf(CodeInvalidRequest, "command must not be empty")
 	}
+	commandBytes := 0
+	for _, arg := range req.Command {
+		if len(arg) >= MaxCommandBytes-commandBytes {
+			return Execution{}, false, errorf(CodePayloadTooLarge, "command exceeds %d bytes including argv separators", MaxCommandBytes)
+		}
+		commandBytes += len(arg) + 1
+	}
 	if req.IdempotencyKey != "" && len(req.IdempotencyKey) > MaxIdempotencyKey {
 		return Execution{}, false, errorf(CodeInvalidRequest, "idempotency_key exceeds %d characters", MaxIdempotencyKey)
 	}

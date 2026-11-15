@@ -181,9 +181,13 @@ class Suite:
             require(done.stdout == text, "stdin bytes changed")
             require(self.client.start_execution(sb.id, request).id == done.id, "stdin replay duplicated execution")
             error_from(lambda: self.client.start_execution(sb.id, ExecuteRequest(command=["cat"], stdin="changed", idempotency_key="stdin-python")), "idempotency_conflict")
-            empty_started = self.client.start_execution(sb.id, ExecuteRequest(command=["cat"], stdin=""))
-            empty = self.client.stream_execution(sb.id, empty_started.id)
-            require(empty.stdout == "", "empty stdin was not EOF")
+            for label, request in [("omitted", ExecuteRequest(command=["cat"], timeout_seconds=2)),
+                                   ("empty", ExecuteRequest(command=["cat"], stdin="", timeout_seconds=2))]:
+                empty_started = self.client.start_execution(sb.id, request)
+                empty = self.client.stream_execution(sb.id, empty_started.id, cancel=CancellationToken(timeout=8))
+                require(empty.stdout == "" and empty.termination_reason == "exited" and empty.exit_code == 0,
+                        label + " stdin did not complete with EOF and exited/0")
+            error_from(lambda: self.client.start_execution(sb.id, ExecuteRequest(command=["true"], stdin="x" * ((1 << 20) + 1))), "payload_too_large")
             return {"input_bytes": len(text.encode()), "replayed": done.id}
 
     def env_cwd(self, name):

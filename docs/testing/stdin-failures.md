@@ -23,3 +23,29 @@ Evidence: go-live.log (assertions, byte lengths and zero staged paths), daemon
 logs, healthz.json, CLI output, source-revision.txt, and result.json with before
 and after container cleanup counts in artifacts/stdin-e2e. Repeat with
 scripts/e2e-stdin.sh. Python/TypeScript runners retain their own wire evidence.
+
+Review coverage extension (before harness changes):
+- Inspect untyped raw start/get/list/SSE bytes for a unique unprinted marker and
+  any stdin field; typed SDK decoding alone cannot establish wire privacy.
+- Assert decoded one MiB success and +1 rejection, execution JSON above eight
+  MiB and ordinary JSON above one MiB rejection, and command aggregate above
+  one MiB rejection. Persist statuses and lengths, not oversized payload dumps.
+- Python and TypeScript each exercise omitted and explicit-empty input with
+  bounded execution time and exited/0 outcomes, plus oversized SDK input.
+- CLI byte-for-byte output comparison includes NUL, Unicode and trailing
+  newlines. Invalid UTF-8 and oversized files fail before sandbox creation;
+  invalid execution flags must fail before reading a blocking input stream.
+- Assert cleanup immediately after every normal, missing-command, unusable-cwd,
+  cancellation and timeout outcome; timeout exit_code may legitimately be null.
+- Harness cleanup continues after individual removal failures and always
+  records before/after owned-container state and the real process result.
+
+No malicious staging-replacement result is claimed by this gate; it does not
+currently intercept the staging handshake. Runtime-failure cleanup remains
+bounded best effort, distinct from successful wrapper unlink before execution.
+
+The raw HTTP/CLI gate retains privacy-start/get/list JSON, privacy-sse.sse,
+raw request status/byte-count/hash records, raw-results.json, exact CLI input
+and output for cmp, and source hashes. Failure reports name the failed property
+without dumping a large request or execution payload. Per-case Go cleanup
+checks and the Python/TypeScript EOF/oversize scenarios run against real Docker.

@@ -137,6 +137,9 @@ func (in *invocation) runCommand(args []string) int {
 		}
 	}
 
+	if err := checkNoCreationFlags(rf); err != nil {
+		return in.fail(err)
+	}
 	var input string
 	if rf.set("stdin-file") {
 		source := os.Stdin
@@ -169,9 +172,6 @@ func (in *invocation) runCommand(args []string) int {
 	created := false
 	sandboxID := rf.sandboxID
 	if sandboxID == "" {
-		if err := checkNoCreationFlags(rf); err != nil {
-			return in.fail(err)
-		}
 		sb, err := client.CreateSandbox(ctx, rf.createRequest())
 		if err != nil {
 			return in.fail(err)
@@ -180,9 +180,6 @@ func (in *invocation) runCommand(args []string) int {
 		sandboxID = sb.ID
 		_, _ = fmt.Fprintf(in.stderr, "sandbox: %s (created; remove with: sandboxctl kill %s)\n", sb.ID, sb.ID)
 	} else {
-		if err := checkNoCreationFlags(rf); err != nil {
-			return in.fail(err)
-		}
 		_, _ = fmt.Fprintf(in.stderr, "sandbox: %s\n", sandboxID)
 	}
 

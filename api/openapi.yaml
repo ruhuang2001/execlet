@@ -851,7 +851,10 @@ components:
           minItems: 1
           items:
             type: string
-          description: argv, executed without a shell.
+          description: >-
+            argv, executed without a shell. Total UTF-8 bytes plus one byte
+            per argument must not exceed 1048576; larger commands return 413
+            payload_too_large so echoed commands fit complete-event limits.
         idempotency_key:
           type: string
           maxLength: 128

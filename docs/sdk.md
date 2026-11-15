@@ -95,7 +95,7 @@ distinguishable from a missing command (`127`). The server rejects a relative
 `Cwd` with `400 invalid_request`.
 
 Idempotency covers the whole invocation, not just the command: replaying a key
-with a different `Command`, `Cwd`, or `Env` is `409 idempotency_conflict`.
+with a different `Command`, `Cwd`, `Env`, or `Stdin` is `409 idempotency_conflict`.
 
 `ExecuteRequest.TimeoutSeconds` bounds one execution. `Exec` and `ExecStream`
 take no timeout argument, so a caller that needs one calls `StartExecution`
@@ -211,7 +211,7 @@ NextCursor into the next call's Cursor until it is empty. Limit zero omits
 the query parameter and uses the server default. Names sort bytewise; changes
 between pages are not a snapshot. Server scan limits can return 413.
 
-### One-shot stdin
+## One-shot stdin
 
 The ExecuteRequest stdin field sends UTF-8 text once, followed by EOF. At most
 1 MiB of decoded bytes (including NULs) is accepted; omitted and empty mean
@@ -231,3 +231,8 @@ snapshots only contain input when the command prints it. Runtime administrators 
 
 Non-empty stdin requires writable /tmp and /bin/mkdir, /bin/rm and /bin/rmdir
 in the image. Missing staging tools cause backend_error before user execution.
+
+Command metadata remains limited to 1 MiB total UTF-8 bytes, counting one
+separator byte per argv element. Larger commands return 413 payload_too_large;
+this keeps complete SSE events within the SDK framing limits even when stdin
+uses the larger execution-request JSON budget.

@@ -382,7 +382,7 @@ or trees can therefore return 413 even when immediate children are few;
 this API is not a constant-time filesystem index. Runtime deadline failures
 are 502. No archive is extracted on the host.
 
-### One-shot stdin
+## One-shot stdin
 
 The ExecuteRequest stdin field sends UTF-8 text once, followed by EOF. At most
 1 MiB of decoded bytes (including NULs) is accepted; omitted and empty mean
@@ -402,3 +402,8 @@ snapshots only contain input when the command prints it. Runtime administrators 
 
 Non-empty stdin requires writable /tmp and /bin/mkdir, /bin/rm and /bin/rmdir
 in the image. Missing staging tools cause backend_error before user execution.
+
+Command metadata remains limited to 1 MiB total UTF-8 bytes, counting one
+separator byte per argv element. Larger commands return 413 payload_too_large;
+this keeps complete SSE events within the SDK framing limits even when stdin
+uses the larger execution-request JSON budget.

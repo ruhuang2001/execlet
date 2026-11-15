@@ -117,3 +117,15 @@ PYTHON=python3.15 bash scripts/e2e-files.sh artifacts/files-e2e
 
 The files-e2e CI job runs this same command and uploads requests, SDK outputs,
 server logs, the source diff, and owner-scoped container cleanup evidence.
+
+With E2E_COVERAGE=1, scripts/e2e.sh also runs the real file scenarios with
+instrumented daemon, CLI, Go client probe and memory HTTP probe binaries.
+All counters feed the same coverage directory and unchanged 70% merged gate.
+For a standalone instrumented file run, set E2E_COVERAGE=1 and optionally
+FILES_COVER_DIR to an existing covdata directory. Node 22+ and Python 3.10+
+are required for the coverage E2E command as well.
+
+The file runner verifies its pinned alpine:3.21 fixture before starting the
+daemon, with at most three 120-second Docker pull setup attempts. Image inspect
+and pull diagnostics are retained; scenario requests themselves are not retried
+by this setup step.

@@ -135,7 +135,7 @@ keyword-only `cancel=token`; omitting it means no caller deadline.
 | Executions | `start_execution(sandbox_id, request)`, `get_execution(sandbox_id, execution_id)`, `list_executions(sandbox_id)`, `cancel_execution(sandbox_id, execution_id)` |
 | Streaming | `stream_execution(sandbox_id, execution_id, *, on_event=None, on_stdout=None, on_stderr=None)` |
 | Conveniences | `exec(sandbox_id, command)`, `exec_stream(sandbox_id, command, *, on_event=None, on_stdout=None, on_stderr=None)` |
-| Files | `read_file(sandbox_id, path) -> bytes`, `write_file(sandbox_id, path, data)` |
+| Files | `read_file(sandbox_id, path) -> bytes`, `write_file(sandbox_id, path, data)`, `list_files(sandbox_id, path)`, `read_archive(sandbox_id, path) -> bytes`, `write_archive(sandbox_id, path, data)` |
 
 Files preserve raw bytes; paths must be absolute. List methods return lists of
 typed resources. Execution lists omit retained output at the HTTP layer; get
@@ -261,7 +261,7 @@ The policy matches Go except for configuring zero retries:
 
 - Retry transport failures before a complete response, truncated bodies, and
   statuses 429, 500, 502, 503, and 504.
-- Repeat only safe operations: GET, DELETE, file PUT, pause, resume, cancel,
+- Repeat only safe operations: GET, DELETE, ordinary file PUT (archive PUT excluded), pause, resume, cancel,
   and execution starts carrying an idempotency key. Sandbox creation is
   attempted once, including on a lost response.
 - For retry index `n` starting at zero, the cap is
@@ -367,3 +367,16 @@ Command metadata remains limited to 1 MiB total UTF-8 bytes, counting one
 separator byte per argv element. Larger commands return 413 payload_too_large;
 this keeps complete SSE events within the SDK framing limits even when stdin
 uses the larger execution-request JSON budget.
+
+## Tar transfer
+
+client.read_archive(sandbox_id, path, cancel=...) returns tar bytes rooted at path's
+basename. client.write_archive(sandbox_id, path, data, cancel=...) extracts
+under an existing directory. Read retries follow normal policy; upload uses
+one attempt because runtime failure can leave partial extraction. Server
+limits are 32 MiB encoded, 16 MiB payload and 4096 entries. Invalid tar raises
+Error(invalid_request); exceeded limits raise Error(payload_too_large).
+
+Archive upload callers must quiesce in-container filesystem writers and inspect
+remote state after any failed or ambiguous upload, because extraction can be partial.
+The aggregate path/link text limit is 1 MiB, in addition to the byte/member limits.

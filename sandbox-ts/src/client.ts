@@ -134,6 +134,16 @@ export class Client {
     return this.transport.json('GET', sandboxPath(sandboxID) + '/files/list?' + query, true, options.signal);
   }
 
+  readArchive(sandboxID: string, path: string, options: RequestOptions = {}): Promise<Uint8Array> {
+    return this.transport.request('GET', sandboxPath(sandboxID) + '/files/archive?path=' + encodeURIComponent(path), true, options.signal);
+  }
+
+  /** One attempt: extraction is not atomic and cannot safely replay ambiguous uploads. */
+  async writeArchive(sandboxID: string, path: string, data: Uint8Array, options: RequestOptions = {}): Promise<void> {
+    await this.transport.request('PUT', sandboxPath(sandboxID) + '/files/archive?path=' + encodeURIComponent(path), false,
+      options.signal, data);
+  }
+
   readFile(sandboxID: string, path: string, options: RequestOptions = {}): Promise<Uint8Array> {
     return this.transport.request('GET', sandboxPath(sandboxID) + '/files?path=' + encodeURIComponent(path), true, options.signal);
   }

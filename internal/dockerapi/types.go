@@ -70,6 +70,7 @@ type ExecInspect struct {
 // directory in the command wrapper instead, and reports a bad directory as
 // exit 126 with a marker on stderr.
 type ExecConfig struct {
+	User         string   `json:"User,omitempty"`
 	AttachStdin  bool     `json:"AttachStdin"`
 	AttachStdout bool     `json:"AttachStdout"`
 	AttachStderr bool     `json:"AttachStderr"`

@@ -34,6 +34,8 @@ commands:
   inspect SANDBOX                        print one sandbox
   list                                   list sandboxes
   files list SANDBOX PATH [flags]         list directory entries as JSON
+  files archive upload|download SANDBOX PATH LOCAL_TAR
+                                         transfer a tar archive
   pause SANDBOX                          pause a sandbox
   resume SANDBOX                         resume a sandbox
   kill SANDBOX                           kill a sandbox

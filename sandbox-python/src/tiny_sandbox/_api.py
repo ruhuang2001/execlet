@@ -198,6 +198,20 @@ class SandboxAPI(Transport, ABC):
         return FileList.from_dict({**payload, "entries": entries})
 
     @_public_cancellation
+    def read_archive(
+        self, sandbox_id: str, path: str, *, cancel: CancellationToken | None = None,
+    ) -> bytes:
+        """Download a validated tar rooted at the selected file/directory name."""
+        return self._request("GET", self._sandbox_path(sandbox_id) + "/files/archive?" + urlencode({"path": path}), cancel=cancel)
+
+    @_public_cancellation
+    def write_archive(
+        self, sandbox_id: str, path: str, data: bytes, *, cancel: CancellationToken | None = None,
+    ) -> None:
+        """Extract validated tar beneath an existing directory, without retries."""
+        self._request("PUT", self._sandbox_path(sandbox_id) + "/files/archive?" + urlencode({"path": path}), body=data, cancel=cancel, retry=False)
+
+    @_public_cancellation
     def read_file(
         self,
         sandbox_id: str,

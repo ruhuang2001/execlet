@@ -48,3 +48,19 @@ func (c *Client) ListFiles(ctx context.Context, id, path string, options ListFil
 	}
 	return &out, nil
 }
+
+// ReadArchive downloads a tar archive rooted at the selected file or directory name.
+func (c *Client) ReadArchive(ctx context.Context, id, path string) ([]byte, error) {
+	resp, err := c.do(ctx, request{method: http.MethodGet, path: "/v1/sandboxes/" + url.PathEscape(id) + "/files/archive", query: "?path=" + url.QueryEscape(path), repeatable: true})
+	if err != nil {
+		return nil, err
+	}
+	return resp.body, nil
+}
+
+// WriteArchive validates and extracts tar bytes beneath an existing directory.
+// Upload is attempted once: filesystem changes can make an ambiguous retry unsafe.
+func (c *Client) WriteArchive(ctx context.Context, id, path string, data []byte) error {
+	_, err := c.do(ctx, request{method: http.MethodPut, path: "/v1/sandboxes/" + url.PathEscape(id) + "/files/archive", query: "?path=" + url.QueryEscape(path), raw: data})
+	return err
+}

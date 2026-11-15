@@ -11,6 +11,7 @@ set -uo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 OUT=${1:-$ROOT/artifacts/e2e}
 mkdir -p "$OUT"
+OUT=$(cd "$OUT" && pwd)
 
 PORT=${E2E_PORT:-18081}
 export SANDBOX_DOMAIN="http://127.0.0.1:$PORT"
@@ -564,6 +565,17 @@ done
 reclaimed=$(docker ps -a --filter "name=^${crash_container}$" --format '{{.ID}}' | wc -l | tr -d ' ')
 check "startup sweep" "the next start reclaims the orphan by owner label" "$reclaimed" "0"
 contains "startup sweep log" "startup cleanup is reported" "$SERVER_LOG.restart" '"msg":"startup cleanup completed","removed":1'
+
+# File routes have their own three-SDK/CLI scenarios; include their real
+# runtime counters in this same coverage directory before enforcing the gate.
+if [ "${E2E_COVERAGE:-0}" = "1" ]; then
+  note "file API coverage scenarios"
+  if FILES_COVER_DIR="$COVER_DIR" bash "$ROOT/scripts/e2e-files.sh" "$OUT/files"; then
+    pass "file API coverage scenarios"
+  else
+    fail "file API coverage scenarios" "instrumented file E2E completes" "failed" "passed"
+  fi
+fi
 
 # ---------------------------------------------------------------- summary
 

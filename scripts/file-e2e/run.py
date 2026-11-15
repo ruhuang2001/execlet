@@ -7,6 +7,7 @@ from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from tiny_sandbox import Client, CreateSandboxRequest
+from archive_checks import check_archives
 
 out = pathlib.Path(os.environ['E2E_ARTIFACT_DIR'])
 client = Client()
@@ -16,7 +17,7 @@ def raw(sid, query, status=200):
     url = os.environ['SANDBOX_DOMAIN'] + '/v1/sandboxes/' + sid + '/files/list?' + query
     req = Request(url, headers={'Authorization': 'Bearer ' + os.environ['SANDBOX_API_KEY']})
     try:
-        with urlopen(req) as response:
+        with urlopen(req,timeout=40) as response:
             code, data = response.status, response.read()
     except HTTPError as exc:
         code, data = exc.code, exc.read()
@@ -65,7 +66,7 @@ try:
     assert len(client.list_files(sb.id,'/listing').entries)==7
     assert client.get_sandbox(sb.id).state=='running'
     for name,cmd in [('go',[str(out/'go-files'),sb.id]),('typescript',['node','scripts/file-e2e/typescript.mjs',sb.id]),('cli',[str(out/'sandboxctl'),'files','list',sb.id,'/listing','--limit','2'])]:
-        result=subprocess.run(cmd,text=True,capture_output=True)
+        result=subprocess.run(cmd,text=True,capture_output=True,timeout=40)
         (out/(name+'.stdout')).write_text(result.stdout)
         (out/(name+'.stderr')).write_text(result.stderr)
         assert result.returncode==0,(name,result.stderr)
@@ -75,8 +76,9 @@ try:
     raw(sb.id,'path=/wide&limit=1',413)
     assert client.exec(sb.id,['sh','-c','mkdir /large; dd if=/dev/zero of=/large/big bs=1048576 count=65 2>/dev/null']).exit_code==0
     raw(sb.id,'path=/large&limit=1',413)
+    check_archives(client, sb.id, out)
     client.kill_sandbox(sb.id)
     raw(sb.id,'path=/listing',409)
-    (out/'results.json').write_text(json.dumps({'status':'passed','checks':len(results)+8,'names':names},indent=2))
+    (out/'results.json').write_text(json.dumps({'status':'passed','listing_http_cases':len(results),'archive_report':'archive-results.json','memory_report':'memory-results.json','names':names},indent=2))
 finally:
     client.kill_sandbox(sb.id)

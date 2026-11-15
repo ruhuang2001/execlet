@@ -12,3 +12,29 @@ Written before implementation. Verify through a live authenticated daemon and re
 - HTTP, Go/Python/TypeScript SDKs and CLI preserve encoding, error codes and page metadata.
 
 - Hardlink sizes resolve from targets anywhere in the scanned tree; symlink size is target-path bytes. Memory listings normalize paths and scope scan limits to the requested subtree.
+
+## Tar transfer
+
+Failure model written before archive implementation on its preceding branch.
+
+- Round-trip nested directories, empty files, binary content, permissions, Unicode and safe internal links without host extraction.
+- Validate every header and payload before mutation; invalid later members must leave earlier members unwritten. Invalid upload to a paused sandbox must not resume it.
+- Reject malformed or truncated tar streams, missing end-of-archive markers, trailing nonzero data, absolute/traversal names and targets, duplicate/conflicting entries, device/FIFO/sparse members and unsupported PAX metadata.
+- Cap encoded bytes (32 MiB), total regular bytes (16 MiB), and entries (4096): 413 for limits, 400 for malformed/unsupported tar.
+- Reject existing destination/ancestor symlinks and archive-created link ancestors. Concurrent in-container writers remain outside the atomicity boundary.
+- Check all three SDKs plus CLI upload/download; verify safe links and hardlink inode equivalence inside Docker. Preserve tar fixtures, response JSON and scoped cleanup evidence.
+
+- CLI local save failure must preserve an existing archive; simulate a file-size limit during an actual Docker download and verify no temporary file remains.
+
+## In-memory HTTP regression scenarios
+
+These failure cases precede the repair implementation and exercise real HTTP plus the Go SDK against the in-memory backend, separately from Docker evidence:
+
+- A 9 MiB regular member plus hardlink must upload/download within the 16 MiB payload limit, retain one regular payload and one remapped link, and support a lexically earlier link name.
+- Downloading only a hardlink whose target lies outside the selected path must materialize its bytes.
+- Listing an explicit mode-0700 directory with a distinct mtime 1000 times must never replace its metadata with a descendant-derived default.
+- Retain the downloaded tar and JSON summary for repeatable verification; no new unit tests.
+- Reject a regular archive member replacing an existing directory before mutation, including implicit directories. Count archive-backed memory files once when listing.
+- Bound aggregate archive path text to 1 MiB so destination preflight uses at most a few bounded exec batches; perform those checks as container root to match Docker extraction privileges.
+- Reject FIFO/nonregular local uploads promptly without resuming a paused sandbox; fail unwritable/missing local download destinations before remote access. Confirm materialized hardlink bytes, not only headers.
+- After replacing a hardlink target, memory ReadFile bytes and downloaded tar bytes must still agree for existing links. Uploads into implicit directories created by empty-directory descendants must succeed.

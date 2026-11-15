@@ -47,6 +47,8 @@ var routes = []Route{
 	{Operation{http.MethodPost, "/v1/sandboxes/{sandbox_id}/executions/{execution_id}/cancel"}, (*Handler).cancelExecution},
 	{Operation{http.MethodGet, "/v1/sandboxes/{sandbox_id}/executions/{execution_id}/events"}, (*Handler).streamEvents},
 
+	{Operation{http.MethodGet, "/v1/sandboxes/{sandbox_id}/files/archive"}, (*Handler).readArchive},
+	{Operation{http.MethodPut, "/v1/sandboxes/{sandbox_id}/files/archive"}, (*Handler).writeArchive},
 	{Operation{http.MethodGet, "/v1/sandboxes/{sandbox_id}/files/list"}, (*Handler).listFiles},
 	{Operation{http.MethodGet, "/v1/sandboxes/{sandbox_id}/files"}, (*Handler).readFile},
 	{Operation{http.MethodPut, "/v1/sandboxes/{sandbox_id}/files"}, (*Handler).writeFile},

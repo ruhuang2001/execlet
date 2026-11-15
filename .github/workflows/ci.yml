@@ -221,6 +221,12 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.15'
       - name: end-to-end suite with coverage
         env:
           E2E_COVERAGE: "1"

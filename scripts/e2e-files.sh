@@ -26,7 +26,19 @@ export DOCKER_HOST="$DOCKER_ENDPOINT"
 export SANDBOX_DOMAIN="http://127.0.0.1:$PORT" SANDBOX_API_KEY="file-e2e-$OWNER" E2E_ARTIFACT_DIR="$OUT"
 export PYTHONPATH="$ROOT/sandbox-python/src${PYTHONPATH:+:$PYTHONPATH}"
 docker info >"$OUT/docker-info.txt" 2>&1
-{ go build -o "$OUT/sandboxd" ./cmd/sandboxd; go build -o "$OUT/sandboxctl" ./cmd/sandboxctl; go build -o "$OUT/go-files" ./scripts/file-e2e/go.go; } >"$OUT/build.log" 2>&1
+BUILD_FLAGS=()
+if [ "${E2E_COVERAGE:-0}" = "1" ]; then
+ COVER_DIR=${FILES_COVER_DIR:-$OUT/coverage}
+ mkdir -p "$COVER_DIR"
+ export GOCOVERDIR=$(cd "$COVER_DIR" && pwd)
+ BUILD_FLAGS=(-cover -covermode=atomic -coverpkg=./...)
+fi
+{
+ go build "${BUILD_FLAGS[@]}" -o "$OUT/sandboxd" ./cmd/sandboxd
+ go build "${BUILD_FLAGS[@]}" -o "$OUT/sandboxctl" ./cmd/sandboxctl
+ go build "${BUILD_FLAGS[@]}" -o "$OUT/go-files" ./scripts/file-e2e
+ go build "${BUILD_FLAGS[@]}" -o "$OUT/memory-files" ./scripts/file-e2e/memory
+} >"$OUT/build.log" 2>&1
 (cd sandbox-ts && npm ci && npm run build && npm run check) >"$OUT/typescript-build.log" 2>&1
 "$OUT/sandboxd" -addr "127.0.0.1:$PORT" -owner "$OWNER" >"$OUT/sandboxd.log" 2>&1 &
 SERVER_PID=$!
@@ -38,7 +50,7 @@ for _ in $(seq 1 100); do
 done
 if [ "$READY" -ne 1 ]; then cat "$OUT/sandboxd.log" >&2; exit 1; fi
 "${PYTHON:-python3}" scripts/file-e2e/run.py 2>&1 | tee "$OUT/runner.log"
-go run ./scripts/file-e2e/memory "$OUT" >"$OUT/memory-results.json" 2>"$OUT/memory-server.log"
+"$OUT/memory-files" "$OUT" >"$OUT/memory-results.json" 2>"$OUT/memory-server.log"
 git rev-parse HEAD >"$OUT/source-revision.txt"
 git show -m --format=fuller --binary HEAD >"$OUT/source.patch"
 git diff >"$OUT/worktree.patch"

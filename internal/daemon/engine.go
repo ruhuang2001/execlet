@@ -360,15 +360,20 @@ func (s *Sandboxes) run(sb *sandbox, ex *execution) {
 		exitCode = -1
 	}
 
+	// Completion and the sandbox's release happen under one sandbox lock.
+	// finish makes the execution visible as completed, and a client that
+	// sees that may start the next command at once; if running were cleared
+	// only afterwards, that start would find the sandbox busy. The lock order
+	// (sandbox, then execution) allows finish to run inside it.
 	now := s.now()
+	sb.mu.Lock()
 	if ex.finish(now, exitCode, outcome) {
-		sb.mu.Lock()
 		if sb.running == ex {
 			sb.running = nil
 		}
 		sb.lastActivity = now
-		sb.mu.Unlock()
 	}
+	sb.mu.Unlock()
 
 	if outcome.SandboxLost {
 		sb.mu.Lock()

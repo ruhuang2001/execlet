@@ -3,12 +3,22 @@
 Status: normative. Contract for `sandbox-go` (package `sandbox`). The SDK speaks the contract in [api.md](api.md).
 
 For the synchronous Python client, see [sdk-python.md](sdk-python.md), including
-its differences in zero-retry configuration, callback errors, and automatic
-cancellation confirmation.
+its differences in zero-retry configuration, callback errors, error matching,
+and automatic cancellation confirmation.
 
 The [TypeScript SDK](sdk-typescript.md) uses the same HTTP contract with async
 iteration, AbortSignal and discriminated outcomes. Its additions do not change
 the Go interfaces or outcome/error behavior documented here.
+
+## Installation
+
+```sh
+go get github.com/ruhuang2001/tiny-sandbox/sandbox-go@latest
+```
+
+`@latest` selects a published module version. For unreleased server features,
+use the matching commit instead of `latest`. This guide describes the current
+checkout; see [versioning](versioning.md) for compatibility.
 
 ## Configuration
 
@@ -50,6 +60,9 @@ Exec(ctx, sandboxID, command []string) (*Execution, error)                      
 ExecStream(ctx, sandboxID, command []string, onEvent func(Event) error) (*Execution, error)
 
 // files
+ListFiles(ctx, sandboxID, path string, options ListFilesOptions) (*FileList, error)
+ReadArchive(ctx, sandboxID, path string) ([]byte, error)
+WriteArchive(ctx, sandboxID, path string, data []byte) error
 ReadFile(ctx, sandboxID, path string) ([]byte, error)
 WriteFile(ctx, sandboxID, path string, data []byte) error
 ```
@@ -61,6 +74,7 @@ so that "unset" and an explicit zero value are distinct.
 
 | Field | Type | Default and accepted values |
 |---|---|---|
+| `MaxConcurrentExecutions` | `*int` | 1; range 1–8 |
 | `MemoryMB` | `*int` | 512 MB; minimum 16 |
 | `PidsLimit` | `*int` | 1024 tasks, including threads; minimum 64 |
 | `NanoCPUs` | `*int64` | `0` means unlimited; `1000000000` is one CPU |
@@ -69,13 +83,16 @@ so that "unset" and an explicit zero value are distinct.
 These values are fixed at creation and returned on `Sandbox`. See the
 [HTTP contract](api.md#sandbox) for the remaining fields and timeout defaults.
 
-`ExecuteRequest` also carries the execution's environment and working
-directory:
+## Execution requests
+
+`ExecuteRequest` also carries the execution's environment, working directory,
+and one-shot input:
 
 | Field | Type | Accepted values |
 |---|---|---|
-| `Env` | `map[string]string` | at most 64 entries; 64-byte names, 8192-byte values, 32768 bytes in total; names must be non-empty and contain no `=`, NUL or newline; values contain no NUL |
+| `Env` | `map[string]string` | at most 64 entries; 64-byte names, 8192-byte values, 32768 bytes total including one `=` byte per entry; names must be non-empty and contain no `=`, NUL or newline; values contain no NUL |
 | `Cwd` | `string` | empty for the image's working directory, else an absolute path of at most 4096 bytes |
+| `Stdin` | `string` | UTF-8 text, at most 1 MiB; empty means EOF |
 
 `Env` is additive. A name here overrides the same name from the image, every
 other image variable stays visible, and a later execution does not inherit it.
@@ -108,6 +125,43 @@ remove it if it cannot confirm process termination. A sandbox lifetime timeout
 with action `kill` removes the sandbox instead.
 
 `Exec` and `ExecStream` are `StartExecution` followed by `StreamExecution`. When execution completes, they return its Execution together with an error: `nil` only when `termination_reason` is `exited` and `exit_code` is 0.
+
+### One-shot stdin
+
+`ExecuteRequest.Stdin` sends UTF-8 text once, followed by EOF; omitted or empty input
+means EOF. The limit is 1 MiB of decoded bytes, including NULs. Execution-start JSON has
+a separate 8 MiB limit; command metadata remains limited to 1 MiB. Set input on the
+request to `StartExecution`, then stream the returned execution. This is not interactive
+input. The server does not return stdin in execution metadata, but a command can print
+it to output. See the [input contract](api.md#one-shot-stdin) for image requirements and
+cleanup behavior. Use compatible client and server revisions; older servers can ignore
+unsupported request fields.
+
+### Concurrent executions
+
+Set `CreateSandboxRequest.MaxConcurrentExecutions` when creating a sandbox: the default
+is 1 and the accepted range is 1–8. Start each execution separately and stream its ID. A
+full sandbox returns `busy`. Cancellation normally affects one execution; pause/resume
+applies to all work, and container-removal fallback can terminate siblings. With a
+configured limit above one, an unexplained exit 137 is `unknown`: `Exec` returns
+`ErrUnknown`. See the [concurrency policy](api.md#concurrent-execution-policy).
+
+## Files
+
+`ListFiles(ctx, sandboxID, path, ListFilesOptions{Limit: 100})` returns a `FileList`
+page. Pass `NextCursor` as the next call's `Cursor`; a zero `Limit` uses the server
+default. Entries describe immediate children with name, size, mode, modification time,
+and directory status. Follow the returned cursor until it is empty or absent. Pages are
+name-ordered, not a filesystem snapshot. The default page size is 100, with a maximum of
+1000; bounded scans can fail with HTTP 413. See [directory listing](api.md#directory-listing) for cursor and metadata semantics.
+
+`ReadArchive` returns tar `[]byte`; `WriteArchive` uploads tar `[]byte`. Downloads are
+rooted at the selected path's basename; uploads extract beneath an existing directory.
+Archive downloads retry normally. Uploads make one attempt because extraction can be
+partial: stop in-container filesystem writers and inspect remote state after a failed or
+ambiguous upload. Only relative link targets without `..` are accepted; hard links must
+target an earlier regular member. See the [tar contract](api.md#tar-transfer) for
+validation and transfer limits.
 
 ## Errors
 
@@ -144,7 +198,7 @@ The sentinels are mutually exclusive. An execution matches the sentinel for its 
 ## Retries
 
 - Retry candidates: transport errors before a complete response, truncated response bodies, and status 429, 500, 502, 503, 504.
-- Only requests that are safe to repeat are retried: `GET`, `DELETE`, `PUT` (files), pause, resume, cancel, and execution starts carrying an idempotency key. `POST /v1/sandboxes` is attempted exactly once.
+- Only requests that are safe to repeat are retried: `GET`, `DELETE`, `PUT` (ordinary files, excluding archives), pause, resume, cancel, and execution starts carrying an idempotency key. `POST /v1/sandboxes` is attempted exactly once.
 - Backoff cap: `min(2s, 200ms * 2^attempt)`. The delay is sampled uniformly from half the cap to the cap. For ordinary requests, a positive integer `Retry-After` value in seconds overrides the delay; zero, HTTP-date values, and invalid values use the calculated backoff.
 - Retries stop as soon as the context is done.
 
@@ -155,7 +209,8 @@ The sentinels are mutually exclusive. An execution matches the sentinel for its 
 3. Send the start request, retrying as above with the same key.
 4. If the context ends while the start is in flight, the SDK cannot know whether the server accepted it. Using a fresh context with a 5-second deadline, it repeats the start with the same key (the server returns the existing execution, or creates one if the original request was never accepted), then cancels that execution. Result: `ErrCanceled` with the Execution. If this recovery fails, return `ErrCancelUnconfirmed` with `IdempotencyKey` set, so the caller can clean up.
 
-Reusing a retained key with the same command returns the original execution.
+Reusing a retained key with the same command, environment, directory, and stdin
+returns the original execution.
 Changing `TimeoutSeconds` on that replay does not update its deadline; use a
 new key to start a new execution with a different timeout.
 
@@ -187,11 +242,9 @@ These are implementation limits, not additional guarantees:
   was discarded; reconnecting cannot recover it.
 - Output is treated as UTF-8 text. Bytes that are not valid UTF-8 arrive as
   U+FFFD, because output events carry JSON strings.
-- One SSE line is capped at 16 MiB. That covers the largest `complete` event
-  the server can send: `command` comes from a request body of up to 1 MiB, the
-  retained output is 1 MiB, and JSON escaping can expand each byte to six
-  characters, so the two parts together can approach 12 MiB. A server that sent
-  a larger single event would end the stream with a `stream` error.
+- One SSE line is capped at 16 MiB. Command metadata and retained output are
+  each bounded at 1 MiB; stdin is excluded from execution snapshots. The frame
+  budget accommodates JSON escaping. A larger line ends with a `stream` error.
 
 ## Dependencies
 
@@ -203,62 +256,3 @@ Standard library only. Minimum Go version is the `go` directive in `go.mod`.
 - [Execution start and recovery](../sandbox-go/exec.go).
 - [SSE reconnects and context cancellation](../sandbox-go/stream.go).
 - [Error matching and outcomes](../sandbox-go/errors.go).
-
-## Directory listing
-
-Use client.ListFiles(ctx, sandboxID, "/work", sandbox.ListFilesOptions{Limit: 100})
-for one FileList page. Entries expose Name, Size, Mode, Mtime and IsDir. Pass
-NextCursor into the next call's Cursor until it is empty. Limit zero omits
-the query parameter and uses the server default. Names sort bytewise; changes
-between pages are not a snapshot. Server scan limits can return 413.
-
-## One-shot stdin
-
-The ExecuteRequest stdin field sends UTF-8 text once, followed by EOF. At most
-1 MiB of decoded bytes (including NULs) is accepted; omitted and empty mean
-EOF. Oversized input is 413 payload_too_large. Execution-start JSON bodies are separately
-bounded at 8 MiB to accommodate escaping. This is not interactive input.
-Set stdin on ExecuteRequest and pass it to StartExecution, then stream the
-returned execution. Older servers ignore this field; require a server that
-implements the input contract.
-
-A keyed replay must match command, env, cwd and stdin. Input is staged in a
-private temporary directory, opened and unlinked before the command runs,
-with a bounded best-effort cleanup after startup failure or completion. If the
-runtime is unreachable, paused, or cannot start a cleanup process, container
-removal is the final cleanup boundary. Execution history retains only an input
-fingerprint. List responses never contain input or output. Get and complete-SSE
-snapshots only contain input when the command prints it. Runtime administrators can inspect live input; this is not a secret vault.
-
-Non-empty stdin requires writable /tmp and /bin/mkdir, /bin/rm and /bin/rmdir
-in the image. Missing staging tools cause backend_error before user execution.
-
-Command metadata remains limited to 1 MiB total UTF-8 bytes, counting one
-separator byte per argv element. Larger commands return 413 payload_too_large;
-this keeps complete SSE events within the SDK framing limits even when stdin
-uses the larger execution-request JSON budget.
-
-## Tar transfer
-
-ReadArchive(ctx, id, path) returns uncompressed tar bytes rooted at path's
-basename. WriteArchive(ctx, id, destination, data) extracts a validated archive
-under an existing directory. Upload is attempted once; callers must inspect
-remote state after transport failure because extraction is not transactional.
-Limits are 32 MiB encoded, 16 MiB payload and 4096 entries. Safe internal links
-are supported; the HTTP contract specifies validation and concurrent-writer requirements.
-
-Archive upload callers must quiesce in-container filesystem writers and inspect
-remote state after any failed or ambiguous upload, because extraction can be partial.
-The aggregate path/link text limit is 1 MiB, in addition to the byte/member limits.
-
-## Concurrent executions
-
-Set max_concurrent_executions when creating a sandbox (1–8, default 1).
-Go uses CreateSandboxRequest.MaxConcurrentExecutions; Python and TypeScript use
-max_concurrent_executions; the CLI uses --max-concurrent-executions. Sandbox views
-return the limit. Start executions separately and stream each ID; cancellation
-normally affects only its selected execution. Pause/resume applies to all work.
-Container-removal fallback affects siblings, as described in the HTTP contract.
-Above one configured slot, unexplained exit 137 has termination_reason unknown,
-which is never a successful SDK outcome (Go ErrUnknown; Python error code unknown;
-TypeScript reason unknown with terminationReason unknown).

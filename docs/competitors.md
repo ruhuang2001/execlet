@@ -128,9 +128,9 @@ command), a server-side event log with `Last-Event-ID`, and a
    termination — `DaytonaSpotEvictedError`, for a spot instance going away —
    but not OOM. The inspected exception names alone do not establish what runtime
    diagnostics either service makes available. We classify `canceled`, `timeout`, `oom`,
-   `evicted`, `exited` on the server, in a fixed precedence, because the exit
+   `evicted`, `exited`, and `unknown` on the server, in a fixed precedence, because the exit
    code alone cannot distinguish them. This is the sharpest difference in the
-   comparison and the one this project exists to make.
+   comparison. With multiple configured execution slots, container-wide OOM counters cannot identify an individual process, so unexplained exit 137 is `unknown`.
 5. **Idempotency on the execution, not the create.** E2B's `idempotency_key`
    protects sandbox creation. The dangerous retry, though, is the one that runs
    a command twice. Our SDK always supplies a key for execution starts, so a

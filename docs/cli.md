@@ -21,10 +21,13 @@ Status: normative. Contract for `sandboxctl`. It is a thin layer over the [Go SD
 | `inspect SANDBOX` | print the sandbox |
 | `list` | print sandboxes, one per line: `ID STATE IMAGE CREATED` |
 | `pause SANDBOX`, `resume SANDBOX`, `kill SANDBOX` | lifecycle operations; print the resulting sandbox |
+| `files list SANDBOX PATH [flags]` | list one directory page as JSON |
+| `files archive upload SANDBOX PATH LOCAL_TAR` | validate and extract a tar into an existing directory |
+| `files archive download SANDBOX PATH LOCAL_TAR` | download a validated tar with an atomic local save |
 | `version` | print the build version (injected with `-ldflags`) |
 | `help` | usage |
 
-`run` flags: `--sandbox ID`, `--image`, `--memory MB`, `--max-concurrent-executions N`, `--pids-limit N`, `--nano-cpus N`, `--network bridge|none`, `--timeout S`, `--timeout-action kill|pause`, `--idle-timeout S`, `--idle-action kill|pause`, `--exec-timeout S`, `--env NAME=VALUE`, `--cwd DIR`, `--stdin-file FILE`, `--rm` (request cleanup of a sandbox created by this invocation). --max-concurrent-executions is a creation-only flag (1–8, default 1). Creation flags together with `--sandbox` are an error. `--rm` does not remove a sandbox supplied through `--sandbox`. Cleanup errors are currently ignored; verify remote state when cleanup must be confirmed.
+`run` flags: `--sandbox ID`, `--image`, `--memory MB`, `--max-concurrent-executions N`, `--pids-limit N`, `--nano-cpus N`, `--network bridge|none`, `--timeout S`, `--timeout-action kill|pause`, `--idle-timeout S`, `--idle-action kill|pause`, `--exec-timeout S`, `--env NAME=VALUE`, `--cwd DIR`, `--stdin-file FILE`, `--rm` (request cleanup of a sandbox created by this invocation). `--max-concurrent-executions` is a creation-only flag (1–8, default 1). Creation flags together with `--sandbox` are an error. `--rm` does not remove a sandbox supplied through `--sandbox`. Cleanup errors are currently ignored; verify remote state when cleanup must be confirmed.
 
 `--env` and `--cwd` apply to the execution, not to the sandbox, so they are
 valid together with `--sandbox`. Repeat `--env` to set more than one variable;
@@ -109,16 +112,9 @@ Exit 0 only if all applicable checks passed.
 4. `docker`: only for a local domain (loopback or `localhost`); `docker info` reachable.
 5. `sandbox`: create a sandbox, run `echo doctor-ok`, check the output, kill the sandbox.
 
-## Implementation references
-
-- [Global flags, output, and exit codes](../cmd/sandboxctl/main.go).
-- [Run flags and cleanup](../cmd/sandboxctl/run.go).
-- [Attach, logs, and lifecycle commands](../cmd/sandboxctl/ops.go).
-- [Doctor checks](../cmd/sandboxctl/doctor.go).
-
 ## Directory listing
 
-sandboxctl files list SANDBOX /work [--limit 100] [--cursor TOKEN] prints one
+`sandboxctl files list SANDBOX /work [--limit 100] [--cursor TOKEN]` prints one
 JSON page to stdout, including entry metadata and next_cursor when more
 entries exist. Flags follow the two positional arguments. Limit is 1–1000.
 Use the cursor with the same path; ordering is bytewise and not a snapshot.
@@ -126,17 +122,19 @@ Failures use normal CLI error reporting and exit status.
 
 ## One-shot input
 
-Use --stdin-file PATH to send a local UTF-8 file, or --stdin-file - to read
+Use `--stdin-file PATH` to send a local UTF-8 file, or `--stdin-file -` to read
 standard input once. Both enforce a 1 MiB limit before creating a sandbox.
-For example: printf hello | sandboxctl run --rm --stdin-file - -- cat
+```sh
+printf hello | sandboxctl run --rm --stdin-file - -- cat
+```
 
 ## Tar transfer
 
-sandboxctl files archive upload SANDBOX /destination local.tar uploads an
+`sandboxctl files archive upload SANDBOX /destination local.tar` uploads an
 uncompressed tar (32 MiB encoded limit enforced locally) into an existing container directory. The whole archive is
-validated before extraction. sandboxctl files archive download SANDBOX /work
-local.tar saves a validated tar containing work/ and descendants with mode
-0600 after an atomic temporary-file save and rename. Download/save errors
+validated before extraction. `sandboxctl files archive download SANDBOX /work local.tar`
+saves a validated tar containing `work/` and descendants with mode
+`0600` after an atomic temporary-file save and rename. Download/save errors
 leave an existing destination intact;
 the CLI never extracts the tar on the host. Upload accepts only regular local
 files and is attempted once. Quiesce destination writers before upload and
@@ -144,12 +142,11 @@ inspect remote state after failure; runtime errors can leave partial extraction.
 
 ## Concurrent executions
 
-Set max_concurrent_executions when creating a sandbox (1–8, default 1).
-Go uses CreateSandboxRequest.MaxConcurrentExecutions; Python and TypeScript use
-max_concurrent_executions; the CLI uses --max-concurrent-executions. Sandbox views
-return the limit. Start executions separately and stream each ID; cancellation
-normally affects only its selected execution. Pause/resume applies to all work.
-Container-removal fallback affects siblings, as described in the HTTP contract.
-Above one configured slot, unexplained exit 137 has termination_reason unknown,
-which is never a successful SDK outcome (Go ErrUnknown; Python error code unknown;
-TypeScript reason unknown with terminationReason unknown).
+Use `--max-concurrent-executions N` when creating a sandbox (1–8, default 1). Start commands in separate invocations with `--sandbox ID`; canceling one normally leaves siblings running. Pause and resume affect every execution. Container-removal fallback affects siblings. Above one configured slot, unexplained exit 137 is `unknown`, a failure reported by the CLI as exit 1. See the [HTTP policy](api.md#concurrent-execution-policy).
+
+## Implementation references
+
+- [Global flags, output, and exit codes](../cmd/sandboxctl/main.go).
+- [Run flags and cleanup](../cmd/sandboxctl/run.go).
+- [Attach, logs, and lifecycle commands](../cmd/sandboxctl/ops.go).
+- [Doctor checks](../cmd/sandboxctl/doctor.go).

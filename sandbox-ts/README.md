@@ -5,7 +5,15 @@ bounded retries, idempotent starts and confirmed AbortSignal cancellation.
 ESM, Node 22+ or modern browsers, no runtime dependencies.
 
 This package is built from the repository; npm publication is a separate step.
-Run npm ci and npm pack here, then install the emitted .tgz in your application.
+From this directory, build the package:
+
+```sh
+npm ci
+npm pack
+```
+
+Install the emitted `.tgz` in your application with `npm install /path/to/package.tgz`.
+Use client and server builds from compatible revisions.
 
 ~~~ts
 import { Client, SandboxError } from '@tiny-sandbox/sdk';
@@ -30,16 +38,21 @@ try {
 }
 ~~~
 
-Pass { signal: controller.signal } as the final method argument to abort.
+Pass `{ signal: controller.signal }` as the final method argument to abort.
 Aborting streams cancels remote work with fresh five-second recovery; breaking
 iteration or throwing from callbacks only closes the stream. Inspect
-cancel_unconfirmed errors before assuming work stopped. Completed nonzero
+`cancel_unconfirmed` errors before assuming work stopped. Completed nonzero
 commands resolve outcomes; transport/API/cancellation failures reject.
 
-See the repository's docs/sdk-typescript.md for the complete method, error,
+See the [SDK guide](../docs/sdk-typescript.md) for the complete method, error,
 retry and compatibility contract. Browser usage requires same-origin hosting
 or a CORS-configured proxy; sandboxd does not itself enable CORS. Do not bundle
 privileged bearer credentials.
 
-From the repository root, run bash scripts/e2e-typescript.sh for real Docker
-verification with evidence under artifacts/typescript-e2e.
+From the repository root, verify against real Docker:
+
+```sh
+bash scripts/e2e-typescript.sh artifacts/typescript-e2e
+```
+
+Evidence is retained under `artifacts/typescript-e2e`.

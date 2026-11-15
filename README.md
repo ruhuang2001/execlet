@@ -3,23 +3,24 @@
 Docker-backed code execution for AI agents, with Go, Python, and TypeScript SDKs,
 a command-line client, and HTTP API.
 
-- **Sandbox lifecycle** — create, pause, resume, and remove containers with
-  memory limits and configurable lifetime and idle timeouts.
-- **Streaming output** — consume stdout and stderr over SSE, with event IDs
-  for reconnecting and replaying retained output.
-- **Execution control** — cancel process groups and retry execution starts
-  safely with idempotency keys.
-- **Explicit outcomes** — distinguish command exits, timeouts, cancellation,
-  OOM kills, and external eviction.
+- **Lifecycle:** create, pause, resume, and remove sandboxes with resource limits
+  and configurable lifetime and idle timeouts.
+- **Execution:** argv commands, per-command environment and working directory,
+  one-shot stdin, deadlines, process-group cancellation, and idempotent starts.
+- **Output:** stdout/stderr over SSE, bounded retention, and reconnect/replay by
+  event ID. Outcomes distinguish exits, cancellation, timeout, OOM, eviction,
+  and unknown termination.
+- **Files:** binary reads/writes, paginated directory listings, and validated tar
+  upload/download.
+- **Concurrency:** 1–8 execution slots per sandbox; default 1. Pause freezes all
+  processes. Concurrent sandboxes report ambiguous exit 137 as `unknown`.
+- **Operations:** structured logs, request IDs, process liveness at `/healthz`,
+  and Docker readiness at `/readyz`.
 
-## Execution and file capabilities
-
-- Per-execution environment overrides and working directory.
-- Bounded directory listing with cursor pagination.
-- Structured request/completion logs and Docker readiness checks.
-- Bounded one-shot stdin, followed by EOF.
-- Bounded tar upload/download for directory transfer.
-- Opt-in concurrent executions (1–8 slots; default 1), with independent cancellation.
+Documentation on `main` describes the current source. Published binaries can
+lag behind it; use the documentation at your release tag for that contract.
+Build from this checkout to use all capabilities listed above. New SDK fields
+may be silently ignored by older servers; see [versioning](docs/versioning.md).
 
 ## Install
 
@@ -50,7 +51,8 @@ cd tiny-sandbox
 make build
 ```
 
-Start the service with `./bin/sandboxd`, then use `./bin/sandboxctl` from a
+Select the Docker Unix socket as shown in the [quick start](docs/quickstart.md#2-start-the-server-terminal-a),
+then start `./bin/sandboxd` and use `./bin/sandboxctl` from a
 second terminal. See the [CLI reference](docs/cli.md) for commands.
 
 ## Integrate
@@ -60,11 +62,9 @@ Use the [Go SDK](docs/sdk.md), [Python SDK](docs/sdk-python.md), or
 commands from your application, or connect directly through the
 [HTTP API](docs/api.md) and [OpenAPI specification](api/openapi.yaml).
 
-Add the Go SDK to your module with:
-
-```sh
-go get github.com/ruhuang2001/tiny-sandbox/sandbox-go@latest
-```
+The SDK references include installation instructions. A Go `@latest` dependency
+selects a published version; use a matching commit when developing against
+unreleased server features.
 
 Install the synchronous, standard-library-only Python SDK (Python 3.10+)
 from this checkout:
@@ -82,9 +82,12 @@ the SDK as a `run_python` tool with structured results and error handling.
 ## Scope
 
 The server uses Docker container isolation and keeps its state in memory.
-It does not provide hardened isolation or multi-tenant access controls, and
-sandboxes do not survive server restarts. See [design and
-limitations](docs/design.md) and [future directions](docs/future.md).
+It does not provide hardened isolation or multi-tenant access controls. Server
+restarts lose execution history; owner-label cleanup reclaims its containers,
+best effort when Docker is unavailable. Archive uploads require coordinated
+writers and are not transactional once extraction begins. See [design and
+limitations](docs/design.md), the [archive contract](docs/api.md#tar-transfer),
+and [unimplemented future directions](docs/future.md).
 
 ## Documentation
 

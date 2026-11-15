@@ -10,6 +10,11 @@ This walkthrough supports macOS and Linux on amd64 and arm64, with a reachable
 Docker Unix socket. Windows is not supported, and no Windows binaries are
 published. WSL2 is not a tested or supported environment.
 
+The installer downloads published binaries, while documentation on `main`
+describes current source. Check `./sandboxctl version` and `./sandboxctl help`
+for the installed build; use the matching release-tag documentation. Build
+from source below to try unreleased stdin, file-transfer or concurrency features.
+
 ## 1. Install
 
 Download and install the latest release:
@@ -95,9 +100,12 @@ the execution deadline stopped the program.
 
 ## Finish and troubleshoot
 
-The examples request cleanup with `--rm`. If cleanup failed, run
-`./sandboxctl list` and remove the relevant sandbox with
-`./sandboxctl kill SANDBOX_ID`. Stop the server with Ctrl+C in its terminal.
+The examples request cleanup with `--rm`. Use `./sandboxctl list` and
+`./sandboxctl kill SANDBOX_ID` for any sandbox still running or paused. A
+`killed` record does not prove Docker removal succeeded, and repeating `kill`
+does not retry it. The reaper retries failed removal; startup cleanup with the
+same owner label is the fallback. Check Docker directly when cleanup must be
+confirmed. Stop the server with Ctrl+C in its terminal.
 
 - If `docker info` fails, start Docker and check access to its daemon.
 - If `doctor` fails, follow its printed hint and check `SANDBOX_DOMAIN`.
@@ -115,6 +123,7 @@ Requires Go 1.27+, Make, and a reachable Docker daemon.
 git clone https://github.com/ruhuang2001/tiny-sandbox.git
 cd tiny-sandbox
 make build
+export DOCKER_HOST="${DOCKER_HOST:-$(docker context inspect --format '{{.Endpoints.docker.Host}}')}"
 cd bin
 ./sandboxd
 ```
@@ -126,4 +135,6 @@ repository's `bin` directory instead of the download directory shown there.
 
 - [CLI reference](cli.md): sandbox reuse, lifecycle controls, and logs.
 - [Go SDK](sdk.md): integrate execution into your application.
+- [Python SDK](sdk-python.md) and [TypeScript SDK](sdk-typescript.md).
+- [HTTP API](api.md): per-execution input, file transfer, concurrency and limits.
 - [Agent tool example](../examples/agent-tool/README.md): expose Python execution as an agent tool.

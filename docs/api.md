@@ -20,7 +20,7 @@ response uses the readiness object documented below. Router-level errors for
 unknown paths or unsupported methods may use plain text:
 
 ```json
-{"code": "busy", "message": "sandbox sbx_123 is already running execution exe_456"}
+{"code": "busy", "message": "sandbox sbx_123 has reached its execution limit"}
 ```
 
 | Status | `code` | When | Retryable |
@@ -53,6 +53,7 @@ Creation is never automatically retried; see the respective SDK contracts.
 | `state` | string | `pending`, `running`, `paused`, `killed` |
 | `image` | string | default `alpine:3.20` |
 | `memory_mb` | int | memory limit, default 512, minimum 16 |
+| `max_concurrent_executions` | int | immutable execution slot limit, 1–8, default 1 |
 | `pids_limit` | int | task limit, default 1024, minimum 64 |
 | `nano_cpus` | int | CPU limit in units of 1e-9 CPUs, default `0` (unlimited) |
 | `network` | string | `bridge` (default, outbound access) or `none` |
@@ -88,9 +89,10 @@ container liveness, and finally the exit code:
 |---|---|
 | `canceled` | the server terminated it because of a cancel request or sandbox deletion |
 | `timeout` | the server terminated it because a deadline expired: the sandbox lifetime with action `kill`, or the execution's own `timeout_seconds` |
-| `oom` | the kernel OOM killer acted in the sandbox's cgroup during the execution |
+| `oom` | positive cgroup OOM evidence during an execution in a sandbox configured for one slot |
 | `evicted` | the container stopped or disappeared without the server asking for it |
-| `exited` | the process exited on its own, with any exit code, including 137 |
+| `exited` | the process exited without a higher-priority reason; unexplained 137 is included only with one configured slot |
+| `unknown` | unexplained exit 137 with multiple configured slots; a non-success SDK outcome |
 
 `canceled` and `timeout` are intents the server records before it acts; a later intent does not replace the first. The periodic eviction sweep can also finalize an execution directly as `evicted` when the container is gone. Exit code 137 alone never implies `oom`.
 
@@ -162,6 +164,22 @@ If the container stops or disappears without the server asking, the sandbox beco
 
 Timeout transitions are applied by a periodic reaper configured to tick at most one second apart; backend calls and lock contention can delay observation. Ordinary reads do not apply timeouts. File reads can resume a paused sandbox, and requests may detect external eviction.
 
+### Concurrent execution policy
+
+Create accepts max_concurrent_executions (integer 1–8, default 1); Sandbox views
+return it. Pause freezes every execution and resume resumes every execution.
+Cancel and execution deadlines normally affect only their selected process group.
+If escalation must remove the container, siblings also end as canceled or timeout
+respectively, unless an earlier recorded intent applies. Delete cancels every
+active execution; external eviction completes every active execution as evicted unless an earlier explicit intent applies.
+All active records are protected from retention pruning. Idle starts only after
+all executions and streams finish.
+
+When configured above one slot, container-wide OOM counters cannot attribute an
+individual process: no execution is labeled oom from those counters. After explicit
+intent and container-loss checks, exit 137 is unknown; other exits are exited.
+Unknown is a non-success SDK outcome. The default one-slot policy is unchanged.
+
 ## Endpoints
 
 ### Request correlation
@@ -197,6 +215,8 @@ Request (all fields optional):
 - `pids_limit` defaults to 1024 and must be at least 64. It bounds tasks, not
   processes: threads count. It is what stops a fork bomb at the container
   boundary instead of at the host's PID table.
+- `max_concurrent_executions` defaults to 1 and accepts 1–8. It is immutable;
+  see the [concurrency policy](#concurrent-execution-policy).
 - `nano_cpus` is a CPU limit in units of 1e-9 CPUs; `0`, the default, means no
   limit. `1000000000` is one CPU.
 - `network` is `bridge` (default) or `none`. `bridge` gives the sandbox its own
@@ -228,10 +248,11 @@ No body. `200` Sandbox. Idempotent per the transition table.
 {"command": ["python3", "-c", "print(1)"], "idempotency_key": "6f1c..."}
 ```
 
-- `command` is required and non-empty.
+- `command` is required and non-empty, with at most 1 MiB of UTF-8 bytes plus
+  one separator byte per argument. Larger commands return `413 payload_too_large`.
 - `idempotency_key` is optional, at most 128 characters, scoped to the sandbox.
 - `timeout_seconds` is optional and bounds this execution. Omitted or `0` means no deadline of its own. The sandbox lifetime deadline still applies, and whichever comes first wins. See [execution timeout](#execution-timeout).
-- `env` is optional and sets environment variables for this execution only. It is additive: a name here overrides the container's value, and every other container variable stays visible. A later execution does not inherit it. Limits: 64 entries, 64 bytes per name, 8192 bytes per value, 32768 bytes in total. A name must be non-empty and must not contain `=`, a NUL byte, or a newline; a value must not contain a NUL byte. Exceeding a limit is `400 invalid_request`. Values are never echoed in a response. Execution records retain only an environment entry count and a process-keyed HMAC-SHA256 fingerprint, not raw environment names or values.
+- `env` is optional and sets environment variables for this execution only. It is additive: a name here overrides the container's value, and every other container variable stays visible. A later execution does not inherit it. Limits: 64 entries, 64 bytes per name, 8192 bytes per value, 32768 bytes in total, counting each name, one equals-sign byte, and its value. A name must be non-empty and must not contain `=`, a NUL byte, or a newline; a value must not contain a NUL byte. Exceeding a limit is `400 invalid_request`. Environment fields are never echoed in a response; commands may print their environment. Execution records retain only an environment entry count and a process-keyed HMAC-SHA256 fingerprint, not raw environment names or values.
 
   The environment is applied through the `env` utility, so accepted names such as `MY-VAR` and `CONFIG.KEY` are not filtered by the wrapper shell. An image must provide `env` at `/usr/bin/env` or `/bin/env`; without one the execution completes with `exit_code: 126` and `sandbox: this image has no env utility, so the requested environment cannot be applied` on stderr rather than silently dropping entries. Both paths exist in the images this project uses (Alpine, Debian, the official Python images) and in `postgres:16`.
 
@@ -242,6 +263,32 @@ No body. `200` Sandbox. Idempotent per the transition table.
 - Same key and the same invocation as an existing execution: `200` with that execution, in whatever state it is now. No new process starts; a different `timeout_seconds` on the replay does not change its deadline. The comparison covers `command`, `cwd`, `env`, and `stdin`, so a replay cannot silently return an execution that ran with a different environment.
 - Same key with a different command, `cwd`, `env`, or `stdin`: `409 idempotency_conflict`.
 - Execution slots are full: `409 busy`. The immutable create-time max_concurrent_executions accepts 1–8 and defaults to 1. Identical keyed replays do not consume slots.
+
+#### One-shot stdin
+
+The ExecuteRequest stdin field sends UTF-8 text once, followed by EOF. At most
+1 MiB of decoded bytes (including NULs) is accepted; omitted and empty mean
+EOF. Oversized input is 413 payload_too_large. Execution-start JSON bodies are separately
+bounded at 8 MiB to accommodate escaping. This is not interactive input.
+Set stdin on ExecuteRequest and pass it to the execution start endpoint, then stream the
+returned execution. Older servers ignore this field; require a server that
+implements the input contract.
+
+A keyed replay must match command, env, cwd and stdin. Input is staged in a
+private temporary directory, opened and unlinked before the command runs,
+with a bounded best-effort cleanup after startup failure or completion. If the
+runtime is unreachable, paused, or cannot start a cleanup process, container
+removal is the final cleanup boundary. Execution history retains only an input
+fingerprint. List responses never contain input or output. Get and complete-SSE
+snapshots only contain input when the command prints it. Runtime administrators can inspect live input; this is not a secret vault.
+
+Non-empty stdin requires writable /tmp and /bin/mkdir, /bin/rm and /bin/rmdir
+in the image. Missing staging tools cause backend_error before user execution.
+
+Command metadata remains limited to 1 MiB total UTF-8 bytes, counting one
+separator byte per argv element. Larger commands return 413 payload_too_large;
+this keeps complete SSE events within the SDK framing limits even when stdin
+uses the larger execution-request JSON budget.
 
 ### `GET /v1/sandboxes/{sandbox_id}/executions`
 
@@ -266,6 +313,74 @@ Server-sent events; see below.
 ### `PUT /v1/sandboxes/{sandbox_id}/files?path=/abs/path`
 
 Raw bytes in the body; creates parent directories; replaces existing files. `204`. Idempotent.
+
+### Directory listing
+
+### `GET /v1/sandboxes/{sandbox_id}/files/list`
+
+Query `path=/work&limit=100&cursor=TOKEN` returns
+`entries` with `name`, `size` (regular-file bytes, symlink target-path bytes,
+zero for directories), `mode` (POSIX permission bits), `mtime` (UTC
+RFC3339), and `is_dir`, plus `next_cursor` when another page exists. Only immediate
+children appear; child symlinks are not followed. Results sort by UTF-8 name
+bytes. Limits are 1–1000 (default 100); reuse the opaque cursor with the same
+path. Concurrent mutations do not provide snapshot consistency. Empty
+directories return entries: []; missing paths are 404 and files are 400.
+
+Paths must be absolute UTF-8, at most 4096 bytes, without NUL or parent
+traversal. Repeated/unknown parameters, invalid limits, and malformed or
+path-mismatched cursors return 400. Paused sandboxes resume first. Each page
+scans Docker's recursive tar stream, capped at 64 MiB, 10000 entries and
+30 seconds, retaining at most limit+1 page records and 10000 bounded
+name/size/link-target records to resolve hardlink sizes. Large nested files
+or trees can therefore return 413 even when immediate children are few;
+this API is not a constant-time filesystem index. Runtime deadline failures
+are 502. No archive is extracted on the host.
+
+### Tar transfer
+
+### `GET /v1/sandboxes/{sandbox_id}/files/archive?path=/abs/path`
+
+Returns `application/x-tar`. The archive contains the selected file/directory
+basename as its root, so downloading `/work` produces `work/` and its descendants.
+Both directions use uncompressed tar, bounded to 32 MiB encoded, 4096 entries
+and 16 MiB total regular-file payload. Download validates before sending bytes.
+Malformed or unsupported content is intentionally 400 for both directions;
+on download this means the selected content cannot be represented by the
+supported safe archive subset, not that the Docker runtime failed. A symlink
+selected alone is rejected when its target is outside that selected archive;
+download a parent directory containing both instead. Limits are 413. Paused sandboxes
+resume first; runtime operations have a 30-second deadline.
+
+### `PUT /v1/sandboxes/{sandbox_id}/files/archive?path=/abs/directory`
+
+The body is tar (application/x-tar or application/octet-stream). A 204 means
+extraction finished beneath the existing directory. Missing destinations are
+404 and nondirectories are 400. Every header and payload is validated before
+any filesystem mutation. Invalid later members cannot leave earlier members
+written. Names are relative UTF-8, at most 4096 bytes each, with a 1 MiB
+aggregate member/link path-text limit. NUL, backslash, absolute paths and parent
+traversal components are rejected. Duplicate names, nondirectory
+ancestors, device/FIFO/sparse members and extended attributes are rejected.
+Only regular files, directories, symlinks and hardlinks are supported.
+The supported symlink subset uses relative targets with no parent traversal
+components, even when normalization would keep them inside the archive. Targets
+must be regular-file or directory members in the archive; hardlinks must refer
+to an earlier regular member by its archive-root-relative name. Unsupported
+PAX fields are rejected. UID/GID/owner names and special permission bits are
+not imported; ordinary permission bits, mtime and bytes are preserved.
+
+Existing destination/ancestor symlinks return `400 invalid_request` before
+extraction. Entries cannot create symlink ancestors for later writes. Container path checks
+use sh as container root (matching Docker extraction privileges) with positional
+arguments in bounded 256 KiB batches. This protects against supplied archive
+escapes, but is not hardened isolation: an independently running container
+process can change its filesystem between preflight and Docker extraction.
+Callers must quiesce filesystem writers during upload. Runtime failure or
+cancellation can leave partial extraction; there is no filesystem transaction.
+SDKs therefore send archive PUT exactly once, unlike ordinary file PUT.
+No uploaded data is extracted on the daemon host. The directory/archive path
+and query validation rules are the same as directory listing.
 
 ## Event stream
 
@@ -302,26 +417,28 @@ data: {"id":"exe_456","state":"completed","exit_code":0,"termination_reason":"ex
 |---|---|---|
 | Retained output per execution (stdout + stderr) | 1 MiB | further output is discarded, one `truncated` event is sent, `output_truncated: true`; the process keeps running |
 | Output events per execution | 4096 | same as above |
-| Executions retained per sandbox | 200 | the oldest completed execution is dropped, including its retained output and its idempotency key; the running execution and the newest completed one are never dropped. `404 not_found` afterwards |
+| Executions retained per sandbox | 200 | eligible completed records are dropped with their output and idempotency keys; all active executions and the most recently completed one are protected. `404 not_found` afterwards |
 | Live sandboxes | 64 | `POST /v1/sandboxes` returns `429 rate_limited` and starts no container. A killed sandbox does not count |
 | Retained sandbox records | 64 killed sandboxes | the oldest killed record is dropped whole, including its execution history. `404 not_found` afterwards. Live sandboxes are never dropped |
-| Retained output, all sandboxes | 64 MiB | the oldest completed executions are dropped, across sandboxes, until the total fits. The running execution and each sandbox's newest completed one survive |
+| Retained output, all sandboxes | 64 MiB target | eligible completed records are dropped, oldest sandbox first. All active executions and each sandbox's most recently completed one survive, so protected output can exceed this target |
 | JSON request body | 1 MiB (execution starts: 8 MiB) | `413 payload_too_large` |
 | Directory listing archive scan | 64 MiB / 10000 headers | `413 payload_too_large` |
 | Directory listing runtime | 30 seconds | `502 backend_error` |
-| Tar transfer | 32 MiB encoded / 16 MiB payload / 4096 members / 4096-byte names / 1 MiB total path text | `413 payload_too_large` |
+| Tar transfer size/count | 32 MiB encoded / 16 MiB payload / 4096 members / 1 MiB total path text | `413 payload_too_large` |
+| Tar member/link name | 4096 bytes | `400 invalid_request` |
+| Decoded stdin | 1 MiB | `413 payload_too_large` |
+| Command metadata | 1 MiB, counting one separator byte per argument | `413 payload_too_large` |
 | File upload | 10 MiB | `413 payload_too_large` |
 | File download through Docker | 10 MiB | currently `502 backend_error` from archive extraction |
 
 The stored output is exactly the data delivered in events, so a replay from ID 0 reproduces `stdout` and `stderr`. The events are the server's only copy: `stdout` and `stderr` in an execution response and in the `complete` event are assembled from them.
 
-The first three limits are enforced by the server's periodic reaper, nominally once a second, so a store can briefly exceed the totals above. The live-sandbox limit is checked when the sandbox is created and is not subject to that delay.
+Per-execution output and event limits are enforced as output arrives. Execution-history pruning runs on admission and completion; live-sandbox admission is checked at creation. Killed-record and aggregate-output pruning run on the periodic reaper, nominally once a second, and can lag under load. The aggregate output target cannot override protected active or most recently completed records.
 
-Because retention is bounded, an idempotency key is remembered only while its
-execution is retained. A start that reuses a key older than the 200 most recent
-executions is treated as a new start and runs the command again; clients that
-need a longer window must track execution IDs themselves. The same is true of a
-record dropped by the retained-record limit.
+An idempotency key is remembered only while its execution record is retained.
+History, aggregate-output, or killed-record pruning can remove it. Reusing a
+forgotten key starts a new command; there is no guaranteed time-based or
+200-start replay window. Keep results externally when they must outlive retention.
 
 ## Implementation limits
 
@@ -349,7 +466,7 @@ cleanup with the same owner label is the fallback.
 
 - Listens on `127.0.0.1:8080` by default (`-addr` flag). Refuses to start on a non-loopback address unless `SANDBOX_API_KEY` is set.
 - Each container is labeled `tiny-sandbox.owner=<owner>`, where `<owner>` is the `-owner` flag and defaults to the listen address. On startup the server attempts to remove containers carrying its own label and logs cleanup failures.
-- An ordinary stop (SIGINT, SIGTERM) ends open event streams, waits for in-flight requests up to 10 seconds, then removes every container it created. Containers therefore do not outlive a clean shutdown.
+- An ordinary stop (SIGINT, SIGTERM) ends open event streams, waits for in-flight requests up to 10 seconds, then attempts container removal within a separate ten-second sweep budget. Removal is best effort; runtime failures can leave containers for owner-label cleanup on a later startup.
 - State is in memory and is lost on restart. A crash skips the shutdown sweep, so startup cleanup is the fallback. It matches the owner label: pin `-owner` when the listen address can change, or a restart on a different port will not clean up the previous process's containers.
 
 ## Implementation references
@@ -359,114 +476,3 @@ cleanup with the same owner label is the fallback.
 - [Execution engine](../internal/daemon/engine.go): idempotency, cancellation, and file access.
 - [Reaper](../internal/daemon/reaper.go): timeout and eviction checks.
 - [Server entry point](../cmd/sandboxd/main.go): startup cleanup and HTTP shutdown.
-
-## Directory listing
-
-### `GET /v1/sandboxes/{sandbox_id}/files/list`
-
-Query path=/work&limit=100&cursor=TOKEN returns
-entries with name, size (regular-file bytes, symlink target-path bytes,
-zero for directories), mode (POSIX permission bits), mtime (UTC
-RFC3339), and is_dir, plus next_cursor when another page exists. Only immediate
-children appear; child symlinks are not followed. Results sort by UTF-8 name
-bytes. Limits are 1–1000 (default 100); reuse the opaque cursor with the same
-path. Concurrent mutations do not provide snapshot consistency. Empty
-directories return entries: []; missing paths are 404 and files are 400.
-
-Paths must be absolute UTF-8, at most 4096 bytes, without NUL or parent
-traversal. Repeated/unknown parameters, invalid limits, and malformed or
-path-mismatched cursors return 400. Paused sandboxes resume first. Each page
-scans Docker's recursive tar stream, capped at 64 MiB, 10000 entries and
-30 seconds, retaining at most limit+1 page records and 10000 bounded
-name/size/link-target records to resolve hardlink sizes. Large nested files
-or trees can therefore return 413 even when immediate children are few;
-this API is not a constant-time filesystem index. Runtime deadline failures
-are 502. No archive is extracted on the host.
-
-## One-shot stdin
-
-The ExecuteRequest stdin field sends UTF-8 text once, followed by EOF. At most
-1 MiB of decoded bytes (including NULs) is accepted; omitted and empty mean
-EOF. Oversized input is 413 payload_too_large. Execution-start JSON bodies are separately
-bounded at 8 MiB to accommodate escaping. This is not interactive input.
-Set stdin on ExecuteRequest and pass it to the execution start endpoint, then stream the
-returned execution. Older servers ignore this field; require a server that
-implements the input contract.
-
-A keyed replay must match command, env, cwd and stdin. Input is staged in a
-private temporary directory, opened and unlinked before the command runs,
-with a bounded best-effort cleanup after startup failure or completion. If the
-runtime is unreachable, paused, or cannot start a cleanup process, container
-removal is the final cleanup boundary. Execution history retains only an input
-fingerprint. List responses never contain input or output. Get and complete-SSE
-snapshots only contain input when the command prints it. Runtime administrators can inspect live input; this is not a secret vault.
-
-Non-empty stdin requires writable /tmp and /bin/mkdir, /bin/rm and /bin/rmdir
-in the image. Missing staging tools cause backend_error before user execution.
-
-Command metadata remains limited to 1 MiB total UTF-8 bytes, counting one
-separator byte per argv element. Larger commands return 413 payload_too_large;
-this keeps complete SSE events within the SDK framing limits even when stdin
-uses the larger execution-request JSON budget.
-
-## Tar transfer
-
-### `GET /v1/sandboxes/{sandbox_id}/files/archive?path=/abs/path`
-
-Returns application/x-tar. The archive contains the selected file/directory
-basename as its root, so downloading /work produces work/ and its descendants.
-Both directions use uncompressed tar, bounded to 32 MiB encoded, 4096 entries
-and 16 MiB total regular-file payload. Download validates before sending bytes.
-Malformed or unsupported content is intentionally 400 for both directions;
-on download this means the selected content cannot be represented by the
-supported safe archive subset, not that the Docker runtime failed. A symlink
-selected alone is rejected when its target is outside that selected archive;
-download a parent directory containing both instead. Limits are 413. Paused sandboxes
-resume first; runtime operations have a 30-second deadline.
-
-### `PUT /v1/sandboxes/{sandbox_id}/files/archive?path=/abs/directory`
-
-The body is tar (application/x-tar or application/octet-stream). A 204 means
-extraction finished beneath the existing directory. Missing destinations are
-404 and nondirectories are 400. Every header and payload is validated before
-any filesystem mutation. Invalid later members cannot leave earlier members
-written. Names are relative UTF-8, at most 4096 bytes (1 MiB aggregate member/link path text), with no NUL,
-backslash,
-absolute path or parent traversal component. Duplicate names, nondirectory
-ancestors, device/FIFO/sparse members and extended attributes are rejected.
-Only regular files, directories, symlinks and hardlinks are supported.
-The supported symlink subset uses relative targets with no parent traversal
-components, even when normalization would keep them inside the archive. They must refer to
-a regular-file or directory member in the archive; hardlinks must refer
-to an earlier regular member by its archive-root-relative name. Unsupported
-PAX fields are rejected. UID/GID/owner names and special permission bits are
-not imported; ordinary permission bits, mtime and bytes are preserved.
-
-Existing destination/ancestor symlinks are rejected with 400 invalid_request
-before extraction; archive
-entries cannot create symlink ancestors for later writes. Container path checks
-use sh as container root (matching Docker extraction privileges) with positional
-arguments in bounded 256 KiB batches. This protects against supplied archive
-escapes, but is not hardened isolation: an independently running container
-process can change its filesystem between preflight and Docker extraction.
-Callers must quiesce filesystem writers during upload. Runtime failure or
-cancellation can leave partial extraction; there is no filesystem transaction.
-SDKs therefore send archive PUT exactly once, unlike ordinary file PUT.
-No uploaded data is extracted on the daemon host. The directory/archive path
-and query validation rules are the same as directory listing.
-
-## Concurrent execution policy
-
-Create accepts max_concurrent_executions (integer 1–8, default 1); Sandbox views
-return it. Pause freezes every execution and resume resumes every execution.
-Cancel and execution deadlines normally affect only their selected process group.
-If escalation must remove the container, siblings also end as canceled or timeout
-respectively, unless an earlier recorded intent applies. Delete cancels every
-active execution; external eviction completes every active execution as evicted.
-All active records are protected from retention pruning. Idle starts only after
-all executions and streams finish.
-
-When configured above one slot, container-wide OOM counters cannot attribute an
-individual process: no execution is labeled oom from those counters. After explicit
-intent and container-loss checks, exit 137 is unknown; other exits are exited.
-Unknown is a non-success SDK outcome. The default one-slot policy is unchanged.

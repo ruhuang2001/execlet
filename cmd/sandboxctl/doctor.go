@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -114,19 +115,48 @@ func (in *invocation) effectiveDomain() string {
 	return "http://localhost:8080"
 }
 
+// dockerInfoTimeout bounds the Docker CLI probe. It is generous because the
+// failure this catches is "no daemon", not "slow daemon": a shared CI runner
+// can take seconds to answer the first call, and a short bound turns that into
+// a false failure while every real Docker check in the suite still passes.
+const dockerInfoTimeout = 30 * time.Second
+
 // checkDocker asks the Docker CLI whether a daemon is reachable. Docker is a
 // host dependency of a local server, not of the CLI, so this is a check rather
 // than a requirement.
+//
+// The error carries why the probe failed. "docker info failed" alone cannot
+// distinguish a missing CLI from an unreachable daemon or a timeout, which is
+// the difference between a broken machine and a slow one.
 func checkDocker() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), dockerInfoTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "docker", "info")
 	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("docker info failed")
+	// The CLI writes the reason to stderr: a permission error on the socket, or
+	// a connection refusal. It is a few short lines, so the message can carry
+	// it as-is.
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	switch err := cmd.Run(); {
+	case ctx.Err() != nil:
+		return fmt.Errorf("docker info timed out after %s", dockerInfoTimeout)
+	case errors.Is(err, exec.ErrNotFound):
+		return fmt.Errorf("docker CLI is not installed")
+	case err != nil:
+		if reason := strings.TrimSpace(stderr.String()); reason != "" {
+			return fmt.Errorf("docker info failed: %s", firstLine(reason))
+		}
+		return fmt.Errorf("docker info failed: %w", err)
 	}
 	return nil
+}
+
+// firstLine keeps a multi-line command error to the line that names the cause,
+// so the doctor table stays one line per check.
+func firstLine(s string) string {
+	line, _, _ := strings.Cut(s, "\n")
+	return line
 }
 
 // checkSandbox creates a sandbox, runs echo, verifies the output, and kills it.

@@ -3,7 +3,7 @@ package daemon
 import (
 	"context"
 	"io"
-	"log"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -40,6 +40,7 @@ type execution struct {
 	exitCode *int
 	reason   *Reason
 	log      *eventLog
+	logger   *slog.Logger
 
 	// intent is the recorded termination intent: canceled or timeout. It is
 	// set before the daemon acts and never cleared, so it wins over whatever
@@ -107,6 +108,11 @@ func (ex *execution) finish(at time.Time, exitCode int, outcome ExecOutcome) boo
 		FinishedAt:        ex.finished,
 	})
 	close(ex.done)
+	logger := ex.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.Info("execution completed", "sandbox_id", ex.sandboxID, "execution_id", ex.id, "exit_code", ex.exitCode, "reason", *ex.reason)
 	return true
 }
 
@@ -247,8 +253,7 @@ func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req Ex
 	// from afterwards.
 	baseline, oomErr := s.readOOMBaseline(ctx, sb.container)
 	if oomErr != nil {
-		log.Printf("daemon: oom baseline for %s unavailable, oom detection disabled for this execution: %v",
-			sb.id, oomErr)
+		contextLogger(ctx).WarnContext(ctx, "oom baseline unavailable", "sandbox_id", sandboxID)
 	}
 
 	// The start call is bounded so a hung runtime cannot hold sb.mu forever:
@@ -279,6 +284,7 @@ func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req Ex
 		startedAt:   s.now(),
 		state:       ExecRunning,
 		log:         newEventLog(),
+		logger:      contextLogger(ctx),
 		proc:        proc,
 		oomBaseline: baseline,
 		done:        make(chan struct{}),
@@ -299,7 +305,8 @@ func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req Ex
 	out := ex.snapshotLocked()
 	sb.mu.Unlock()
 
-	go s.run(sb, ex)
+	contextLogger(ctx).InfoContext(ctx, "execution started", "sandbox_id", sandboxID, "execution_id", ex.id)
+	go s.run(context.WithoutCancel(ctx), sb, ex)
 	return out, true, nil
 }
 
@@ -325,17 +332,14 @@ func (s *Sandboxes) readOOMBaseline(ctx context.Context, containerID string) (in
 
 // run pumps output, waits for the process, classifies the exit, and finishes
 // the execution. It is the only writer of the terminal state.
-func (s *Sandboxes) run(sb *sandbox, ex *execution) {
+func (s *Sandboxes) run(ctx context.Context, sb *sandbox, ex *execution) {
 	var pumps sync.WaitGroup
-	pumps.Add(2)
-	go func() {
-		defer pumps.Done()
+	pumps.Go(func() {
 		pump(ex.log, EventStdout, ex.proc.Stdout())
-	}()
-	go func() {
-		defer pumps.Done()
+	})
+	pumps.Go(func() {
 		pump(ex.log, EventStderr, ex.proc.Stderr())
-	}()
+	})
 
 	exitCode, waitErr := ex.proc.Wait()
 	pumps.Wait()
@@ -350,8 +354,7 @@ func (s *Sandboxes) run(sb *sandbox, ex *execution) {
 		// One line per ambiguous 137: the observed liveness sequence and how
 		// long it took to settle. This is the evidence a machine we cannot
 		// reproduce on leaves behind for a misclassification.
-		log.Printf("daemon: execution %s exit 137: liveness %v settled after %s -> %s",
-			ex.id, outcome.sampled, outcome.elapsed.Round(time.Millisecond), outcome.Reason)
+		contextLogger(ctx).InfoContext(ctx, "execution liveness settled", "sandbox_id", ex.sandboxID, "execution_id", ex.id, "samples", outcome.sampled, "duration_ms", outcome.elapsed.Milliseconds(), "reason", outcome.Reason)
 	}
 	if waitErr != nil && intent == nil && !outcome.SandboxLost {
 		// The runtime failed to report an exit status. Keep the reason the

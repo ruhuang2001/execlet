@@ -47,6 +47,15 @@ system. Prefer end-to-end coverage for new behavior; do not add unit tests after
 writing the implementation. See the [Python SDK contract](docs/sdk-python.md)
 and [failure model](sandbox-python/e2e/FAILURES.md).
 
+The observability gate uses a private Unix-socket proxy around real Docker to
+verify readiness failures, bounded probes, request IDs, structured log privacy,
+and SSE flushing. It retains JSON reports, responses, logs, and cleanup evidence:
+
+    bash scripts/e2e-observability.sh artifacts/observability-e2e
+
+Its failure model is in scripts/observability-FAILURES.md. CI runs this gate in
+the e2e job; faults affect only the private proxy and teardown uses a unique owner.
+
 The Docker-backed Go tests are opt-in:
 
 ```sh

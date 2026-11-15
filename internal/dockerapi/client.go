@@ -64,6 +64,32 @@ func Dial(ctx context.Context, socketPath string) (*Client, error) {
 	return c, nil
 }
 
+// Ping checks Docker's unversioned endpoint with the caller's deadline.
+func (c *Client) Ping(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/_ping", nil)
+	if err != nil {
+		return err
+	}
+	probe := *c.http
+	probe.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := probe.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("dockerapi: ping status %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 3))
+	if err != nil {
+		return err
+	}
+	if string(body) != "OK" {
+		return errors.New("dockerapi: invalid ping response")
+	}
+	return nil
+}
+
 // Version returns the negotiated API version, such as "1.52", or an empty
 // string before negotiation.
 func (c *Client) Version() string { return strings.TrimPrefix(c.version, "/v") }

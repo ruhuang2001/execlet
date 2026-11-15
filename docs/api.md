@@ -11,11 +11,12 @@ Status: normative. [OpenAPI specification](../api/openapi.yaml) must describe ex
   that a newer default or capability took effect. See the [Python SDK](sdk-python.md).
 - Timestamps are RFC 3339 in UTC. Durations are integer seconds and their field names end in `_seconds`.
 - IDs are opaque strings. Clients must not parse them.
-- Authentication: if the server was started with `SANDBOX_API_KEY` set, every `/v1` request must carry `Authorization: Bearer <key>`, otherwise `401 unauthorized`. `/healthz` never requires authentication. The key is compared in constant time.
+- Authentication: if the server was started with `SANDBOX_API_KEY` set, every `/v1` request must carry `Authorization: Bearer <key>`, otherwise `401 unauthorized`. `/healthz` and `/readyz` never require authentication. The key is compared in constant time.
 
 ## Errors
 
-Errors emitted by the API handlers use this body. Router-level errors for
+Errors emitted by the API handlers use this body, except /readyz, whose 503
+response uses the readiness object documented below. Router-level errors for
 unknown paths or unsupported methods may use plain text:
 
 ```json
@@ -162,6 +163,24 @@ If the container stops or disappears without the server asking, the sandbox beco
 Timeout transitions are applied by a periodic reaper configured to tick at most one second apart; backend calls and lock contention can delay observation. Ordinary reads do not apply timeouts. File reads can resume a paused sandbox, and requests may detect external eviction.
 
 ## Endpoints
+
+### Request correlation
+
+Every handled response includes X-Request-ID. A single incoming value of
+1–128 ASCII letters, digits, dots, underscores, or hyphens is preserved; missing,
+invalid, duplicate, or longer values are replaced with a UUID. The response ID
+correlates JSON access/error records and execution lifecycle records. Logs use
+route templates and safe error codes, without commands, environment values,
+authorization headers, query values, or raw runtime error messages.
+
+### `GET /readyz`
+
+Public Docker readiness probe, bounded to two seconds. It calls Docker's
+unversioned /_ping and requires HTTP 200 with body OK. Success returns 200
+with {"status":"ok","version":"<build version>","docker":"ok"}. Failure returns 503
+with {"status":"unavailable","version":"<build version>","docker":"unreachable"};
+version is the daemon build version. A backend without readiness support is
+unavailable. Readiness checks connectivity, not image availability or capacity.
 
 ### `GET /healthz`
 

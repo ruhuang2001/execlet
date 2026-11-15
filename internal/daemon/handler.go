@@ -8,7 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -43,7 +43,7 @@ func NewHandler(store *Sandboxes, version string) *Handler {
 	return h
 }
 
-// WithAPIKey enables bearer authentication for /v1 routes. /healthz stays
+// WithAPIKey enables bearer authentication for /v1 routes. Health probes stay
 // public, as the contract says.
 func (h *Handler) WithAPIKey(key string) *Handler {
 	h.apiKey = key
@@ -67,11 +67,48 @@ func (h *Handler) Handler(req *http.Request) (http.Handler, string) {
 
 // ServeHTTP dispatches with authentication applied.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if h.apiKey != "" && r.URL.Path != "/healthz" && !h.authorized(r) {
+	started := time.Now()
+	id := requestID(r.Header.Values("X-Request-ID"))
+	w.Header().Set("X-Request-ID", id)
+	_, pattern := h.mux.Handler(r)
+	// ServeMux may return a cleaned request path for redirects. Log only
+	// templates from our own route table, never a path supplied by a caller.
+	registered := false
+	for _, route := range routes {
+		if pattern == routeKey(route.Method, route.Path) {
+			registered = true
+			break
+		}
+	}
+	if !registered {
+		pattern = "unmatched"
+	}
+	logger := slog.Default().With("request_id", id, "method", r.Method, "route", pattern)
+	r = r.WithContext(context.WithValue(r.Context(), requestLoggerKey{}, logger))
+	recorded := &responseRecorder{ResponseWriter: w}
+	var response http.ResponseWriter = recorded
+	if _, ok := w.(http.Flusher); ok {
+		response = &flushingResponse{responseRecorder: recorded}
+	}
+	w = response
+	completed := false
+	defer func() {
+		status := recorded.status
+		if status == 0 {
+			status = http.StatusOK
+			if !completed {
+				status = http.StatusInternalServerError
+			}
+		}
+		logger.InfoContext(r.Context(), "http request", "status", status, "duration_ms", float64(time.Since(started).Microseconds())/1000, "bytes", recorded.bytes, "completed", completed)
+	}()
+	if h.apiKey != "" && r.URL.Path != "/healthz" && r.URL.Path != "/readyz" && !h.authorized(r) {
 		writeError(w, http.StatusUnauthorized, string(CodeUnauthorized), "missing or wrong API key")
+		completed = true
 		return
 	}
 	h.mux.ServeHTTP(w, r)
+	completed = true
 }
 
 // authorized compares the bearer token in constant time.
@@ -117,9 +154,10 @@ func (h *Handler) createSandbox(w http.ResponseWriter, r *http.Request) {
 	}
 	sb, err := h.store.Create(r.Context(), req)
 	if err != nil {
-		writeDaemonError(w, err)
+		writeDaemonError(r.Context(), w, err)
 		return
 	}
+	contextLogger(r.Context()).InfoContext(r.Context(), "sandbox created", "sandbox_id", sb.ID, "state", sb.State)
 	w.Header().Set("Location", "/v1/sandboxes/"+sb.ID)
 	writeJSON(w, http.StatusCreated, sb)
 }
@@ -137,7 +175,7 @@ func (h *Handler) getSandbox(w http.ResponseWriter, r *http.Request) {
 	h.store.Touch(id)
 	sb, err := h.store.Get(id)
 	if err != nil {
-		writeDaemonError(w, err)
+		writeDaemonError(r.Context(), w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, sb)
@@ -146,9 +184,10 @@ func (h *Handler) getSandbox(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) deleteSandbox(w http.ResponseWriter, r *http.Request) {
 	sb, err := h.store.Delete(r.Context(), r.PathValue("sandbox_id"))
 	if err != nil {
-		writeDaemonError(w, err)
+		writeDaemonError(r.Context(), w, err)
 		return
 	}
+	contextLogger(r.Context()).InfoContext(r.Context(), "sandbox deleted", "sandbox_id", sb.ID, "state", sb.State)
 	writeJSON(w, http.StatusOK, sb)
 }
 
@@ -164,9 +203,10 @@ func (h *Handler) resumeSandbox(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) lifecycle(w http.ResponseWriter, r *http.Request, op func(context.Context, string) (Sandbox, error)) {
 	sb, err := op(r.Context(), r.PathValue("sandbox_id"))
 	if err != nil {
-		writeDaemonError(w, err)
+		writeDaemonError(r.Context(), w, err)
 		return
 	}
+	contextLogger(r.Context()).InfoContext(r.Context(), "sandbox state changed", "sandbox_id", sb.ID, "state", sb.State)
 	writeJSON(w, http.StatusOK, sb)
 }
 
@@ -179,7 +219,7 @@ func (h *Handler) startExecution(w http.ResponseWriter, r *http.Request) {
 	}
 	ex, created, err := h.store.StartExecution(r.Context(), r.PathValue("sandbox_id"), req)
 	if err != nil {
-		writeDaemonError(w, err)
+		writeDaemonError(r.Context(), w, err)
 		return
 	}
 	status := http.StatusOK
@@ -192,7 +232,7 @@ func (h *Handler) startExecution(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) listExecutions(w http.ResponseWriter, r *http.Request) {
 	list, err := h.store.ListExecutions(r.PathValue("sandbox_id"))
 	if err != nil {
-		writeDaemonError(w, err)
+		writeDaemonError(r.Context(), w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"executions": list})
@@ -201,7 +241,7 @@ func (h *Handler) listExecutions(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) getExecution(w http.ResponseWriter, r *http.Request) {
 	ex, err := h.store.GetExecution(r.PathValue("sandbox_id"), r.PathValue("execution_id"))
 	if err != nil {
-		writeDaemonError(w, err)
+		writeDaemonError(r.Context(), w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, ex)
@@ -210,7 +250,7 @@ func (h *Handler) getExecution(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) cancelExecution(w http.ResponseWriter, r *http.Request) {
 	ex, err := h.store.CancelExecution(r.Context(), r.PathValue("sandbox_id"), r.PathValue("execution_id"))
 	if err != nil {
-		writeDaemonError(w, err)
+		writeDaemonError(r.Context(), w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, ex)
@@ -226,7 +266,7 @@ func (h *Handler) readFile(w http.ResponseWriter, r *http.Request) {
 	}
 	data, err := h.store.ReadFile(r.Context(), r.PathValue("sandbox_id"), path)
 	if err != nil {
-		writeDaemonError(w, err)
+		writeDaemonError(r.Context(), w, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
@@ -250,7 +290,7 @@ func (h *Handler) writeFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.store.WriteFile(r.Context(), r.PathValue("sandbox_id"), path, data); err != nil {
-		writeDaemonError(w, err)
+		writeDaemonError(r.Context(), w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -286,7 +326,7 @@ func (h *Handler) streamEvents(w http.ResponseWriter, r *http.Request) {
 
 	stream, err := h.store.Events(sandboxID, executionID, lastID)
 	if err != nil {
-		writeDaemonError(w, err)
+		writeDaemonError(r.Context(), w, err)
 		return
 	}
 	defer stream.Close()
@@ -440,20 +480,16 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
-// writeDaemonError maps a domain error to its contract status.
-// writeDaemonError maps a domain error to its contract status. A backend
-// failure is also logged with its cause: the client gets "container runtime
-// failed", but an operator reading the server log needs the reason, and a
-// failure that leaves no trace in the log is undiagnosable from the outside.
-func writeDaemonError(w http.ResponseWriter, err error) {
-	var e *Error
-	if !errors.As(err, &e) {
-		log.Printf("daemon: unexpected error: %v", err)
+// writeDaemonError logs only safe codes; runtime error text can contain secrets.
+func writeDaemonError(ctx context.Context, w http.ResponseWriter, err error) {
+	e, ok := errors.AsType[*Error](err)
+	if !ok {
+		contextLogger(ctx).ErrorContext(ctx, "request failed", "code", CodeInternal)
 		writeError(w, http.StatusInternalServerError, string(CodeInternal), "unexpected server error")
 		return
 	}
 	if e.Code == CodeBackendError || e.Code == CodeInternal {
-		log.Printf("daemon: %s: %v", e.Code, e)
+		contextLogger(ctx).ErrorContext(ctx, "request failed", "code", e.Code)
 	}
 	writeError(w, statusFor(e.Code), string(e.Code), e.Message)
 }

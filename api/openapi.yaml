@@ -7,6 +7,10 @@ info:
     Normative HTTP contract for the tiny-sandbox reference server.
     docs/api.md is the prose source of this contract; when the two disagree,
     fix one of them in the same change.
+    Every handled response includes X-Request-ID. A single incoming value with
+    1-128 ASCII letters, digits, dots, underscores, or hyphens is preserved;
+    otherwise the server generates a UUID. Access logs use route templates and
+    never record query values, request bodies, or authorization headers.
 servers:
   - url: http://localhost:8080
     description: Default base URL; override with SANDBOX_DOMAIN.
@@ -25,7 +29,7 @@ paths:
       summary: Liveness probe and build version
       description: >-
         Reports whether the server is up and which version it runs. This is the
-        only endpoint that never requires authentication.
+        liveness endpoint never requires authentication.
       security: []
       responses:
         '200':
@@ -34,6 +38,28 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Health'
+  /readyz:
+    get:
+      tags: [health]
+      operationId: getReadiness
+      summary: Docker runtime readiness
+      description: >-
+        Public probe of Docker's unversioned /_ping, bounded to two seconds.
+        Requires HTTP 200 and body OK; no runtime details are exposed on failure.
+      security: []
+      responses:
+        '200':
+          description: Docker is ready.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Readiness'
+        '503':
+          description: Docker is unreachable or did not answer a valid probe.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Readiness'
   /v1/sandboxes:
     post:
       tags: [sandboxes]
@@ -475,7 +501,7 @@ components:
       scheme: bearer
       description: >-
         Required on every /v1 request when the server runs with
-        SANDBOX_API_KEY set. The key is compared in constant time. /healthz
+        SANDBOX_API_KEY set. The key is compared in constant time. /healthz and /readyz
         never requires it.
   parameters:
     SandboxID:
@@ -612,6 +638,18 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
   schemas:
+    Readiness:
+      type: object
+      required: [status, version, docker]
+      properties:
+        status:
+          type: string
+          enum: [ok, unavailable]
+        version:
+          type: string
+        docker:
+          type: string
+          enum: [ok, unreachable]
     Health:
       type: object
       required: [status, version]

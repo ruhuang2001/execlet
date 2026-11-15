@@ -113,6 +113,26 @@ func (h *harness) waitCompleted(sandboxID, executionID string) daemon.Execution 
 	return daemon.Execution{}
 }
 
+// spinCompleted is waitCompleted without the sleep. It returns the moment the
+// execution reads as completed, the way a client polling in a loop sees it,
+// so a test can check what that client may do next. A sleep would hide any
+// state the engine updates only after completion becomes visible.
+func (h *harness) spinCompleted(sandboxID, executionID string) daemon.Execution {
+	h.t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		ex, err := h.s.GetExecution(sandboxID, executionID)
+		if err != nil {
+			h.t.Fatalf("get execution: %v", err)
+		}
+		if ex.State == daemon.ExecCompleted {
+			return ex
+		}
+	}
+	h.t.Fatal("execution did not complete")
+	return daemon.Execution{}
+}
+
 // memEcho prints its arguments, one per line.
 func memEcho(_ context.Context, args []string) (string, string, int) {
 	out := ""

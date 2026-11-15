@@ -2,6 +2,7 @@ package daemon_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -136,6 +137,17 @@ func TestCwdIsEchoedAndEnvIsNot(t *testing.T) {
 	wantNoError(t, err)
 	if len(list) != 1 || list[0].Cwd == nil || *list[0].Cwd != "/work" {
 		t.Errorf("summary cwd = %+v, want /work", list)
+	}
+
+	// The wire form is what a client or a log sees, so check it rather than
+	// the struct: neither an env field nor the value may appear in any of
+	// the three views.
+	for name, view := range map[string]any{"start": started, "completed": done, "summary": list[0]} {
+		raw, err := json.Marshal(view)
+		wantNoError(t, err)
+		if strings.Contains(string(raw), `"env"`) || strings.Contains(string(raw), "hunter2") {
+			t.Errorf("%s response exposes the environment: %s", name, raw)
+		}
 	}
 }
 

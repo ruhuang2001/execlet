@@ -183,6 +183,25 @@ def retention_idle_unknown():
     return {"sequential_successes": 310, "pid_files": int(probe["stdout"].strip()), "retained": len(records), "after_output_pressure": len(after_pressure), "unknown": out}
 
 
+def concurrent_stdin():
+    sb = create()
+    command = ["sh", "-c", "cat; echo ready; sleep 60"]
+    a = start(sb, command, stdin="first-input-世界\n")
+    b = start(sb, command, stdin="second-input-🌍\n")
+    deadline = time.monotonic() + 5
+    while "ready" not in get(sb, a)["stdout"] or "ready" not in get(sb, b)["stdout"]:
+        assert time.monotonic() < deadline
+        time.sleep(.02)
+    assert get(sb, a)["stdout"] == "first-input-世界\nready\n"
+    assert get(sb, b)["stdout"] == "second-input-🌍\nready\n"
+    cancel(sb, a)
+    assert get(sb, b)["state"] == "running"
+    cancel(sb, b)
+    probe = finish(sb, start(sb, ["sh", "-c", "find /tmp -maxdepth 1 -name 'tiny-sandbox-stdin.*'; find /run/tiny-sandbox -type f | wc -l"]))
+    assert probe["exit_code"] == 0 and probe["stdout"].strip() == "1", probe
+    return {"first": a["id"], "second": b["id"], "remaining_pid_files": 1, "stdin_directories": 0}
+
+
 def paused_missing_cancel():
     sb = create()
     a, b = start(sb), start(sb)
@@ -238,6 +257,7 @@ try:
     check("active-retention-idle-unknown137", retention_idle_unknown)
     check("lifetime-and-container-removal-fallback", lifetime_and_fallback)
     check("paused-missing-container-cancel", paused_missing_cancel)
+    check("concurrent-stdin-isolation-and-cleanup", concurrent_stdin)
     report["passed"] = True
 except Exception as error:
     report["passed"] = False

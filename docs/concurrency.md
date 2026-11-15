@@ -100,3 +100,12 @@ cannot read a removed or recycled PID. Cleanup must be bounded and best effort
 if the container has already vanished. Verify more than 300 successful sequential
 executions, a fresh execution afterward, and near-zero completed PID files while
 an older sibling stays active. Existing cancellation/fallback probes must still pass.
+
+## Combined stdin failure model
+
+Two active executions must consume different staged stdin payloads without sharing
+file paths or data. Canceling one must leave the other running with its original
+input. Both completion paths retain their own stdin fingerprint and must remove
+staging directories and completed PID files. A subsequent probe should find no
+stdin directories and only its own PID file. The standalone stdin gate continues
+to exercise EOF, size limits, binary/UTF-8 input and startup-failure cleanup.

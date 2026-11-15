@@ -218,17 +218,21 @@ func (b *Backend) RemoveOwned(ctx context.Context, labelKey, owner string) (int,
 
 // ---------------------------------------------------------------- executions
 
-// Exec starts command inside the container. The command is wrapped in a shell
-// that records its PID and then execs the real argv, so the PID file names the
-// process group leader and the command itself still runs without a shell.
-func (b *Backend) Exec(ctx context.Context, containerID string, command []string) (daemon.Process, error) {
-	if len(command) == 0 {
+// Exec starts spec.Command inside the container. The command is wrapped in a
+// shell that records its PID, changes directory, and then execs the real argv,
+// so the PID file names the process group leader and the command itself still
+// runs without a shell.
+func (b *Backend) Exec(ctx context.Context, containerID string, spec daemon.ExecSpec) (daemon.Process, error) {
+	if len(spec.Command) == 0 {
 		return nil, errors.New("dockerbackend: empty command")
 	}
 	pidPath := b.nextPidPath()
-	wrapped := wrapCommand(pidPath, command)
+	wrapped := wrapCommand(pidPath, spec.Dir, spec.Command)
 
-	execID, err := b.api.ExecCreate(ctx, containerID, wrapped)
+	execID, err := b.api.ExecCreate(ctx, containerID, dockerapi.ExecConfig{
+		Cmd: wrapped,
+		Env: spec.Env,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("dockerbackend: exec create: %w", err)
 	}
@@ -323,7 +327,7 @@ func (b *Backend) WriteFile(ctx context.Context, containerID, path string, data 
 
 // capture runs a command and returns its stdout, for the cgroup read.
 func (b *Backend) capture(ctx context.Context, containerID string, command []string) ([]byte, error) {
-	execID, err := b.api.ExecCreate(ctx, containerID, command)
+	execID, err := b.api.ExecCreate(ctx, containerID, dockerapi.ExecConfig{Cmd: command})
 	if err != nil {
 		return nil, err
 	}
@@ -370,17 +374,30 @@ func (b *Backend) waitInspect(ctx context.Context, execID string) (dockerapi.Exe
 	}
 }
 
-// execWrapper records the process group leader's PID and then becomes the
-// command, without a shell around the command itself: $0 is the PID file and
-// "$@" is the argv passed after it, so no argument is ever parsed as shell
-// syntax.
-const execWrapper = `printf %s $$ > "$0" || exit 125; exec "$@"`
+// execWrapper records the process group leader's PID, changes directory, and
+// then becomes the command, without a shell around the command itself: $0 is
+// the PID file, $1 the directory, and "$@" after the shift the argv, so no
+// argument is ever parsed as shell syntax.
+//
+// The PID is written first. Signal kills the process group through this file,
+// so everything that can fail after it fails where a cancel still reaches the
+// process.
+//
+// The directory is handled here rather than through Docker's exec WorkingDir
+// so a bad directory stays an ordinary outcome: exit 126 with our own message
+// on stderr. WorkingDir reports 127 on stdout instead, which reads like the
+// program's own output and collides with a missing command. Exit 126 is this
+// wrapper's own code, so it is distinguishable from a missing command (127).
+const execWrapper = `printf %s $$ > "$0" || exit 125
+if [ -n "$1" ]; then cd -- "$1" 2>/dev/null || { printf 'sandbox: cwd is not a usable directory: %s\n' "$1" >&2; exit 126; }; fi
+shift
+exec "$@"`
 
-// wrapCommand builds the argv an exec runs for command. Writing the PID before
-// the exec matters: the PID of the shell equals the PID of the process group
-// that Docker created for the exec, and the exec keeps that PID and group.
-func wrapCommand(pidPath string, command []string) []string {
-	return append([]string{"/bin/sh", "-c", execWrapper, pidPath}, command...)
+// wrapCommand builds the argv an exec runs. Writing the PID before the exec
+// matters: the PID of the shell equals the PID of the process group that
+// Docker created for the exec, and the exec keeps that PID and group.
+func wrapCommand(pidPath, dir string, command []string) []string {
+	return append([]string{"/bin/sh", "-c", execWrapper, pidPath, dir}, command...)
 }
 
 // nextPidPath returns a unique PID-file path. The counter keeps it unique per

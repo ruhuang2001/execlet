@@ -65,6 +65,29 @@ so that "unset" and an explicit zero value are distinct.
 These values are fixed at creation and returned on `Sandbox`. See the
 [HTTP contract](api.md#sandbox) for the remaining fields and timeout defaults.
 
+`ExecuteRequest` also carries the execution's environment and working
+directory:
+
+| Field | Type | Accepted values |
+|---|---|---|
+| `Env` | `map[string]string` | at most 64 entries; 128-byte names, 8192-byte values, 32768 bytes in total; no `=`, NUL or newline in a name, no NUL in a value |
+| `Cwd` | `string` | empty for the image's working directory, else an absolute path of at most 4096 bytes |
+
+`Env` is additive. A name here overrides the same name from the image, every
+other image variable stays visible, and a later execution does not inherit it.
+The server never echoes `Env` back, because it may carry credentials.
+`Execution.Cwd` is nullable and repeats the directory only when the request set
+one.
+
+A `Cwd` that does not exist, or is not a directory, does not fail the start: the
+execution completes with `ExitCode` 126 and
+`sandbox: cwd is not a usable directory: <path>` on stderr, which stays
+distinguishable from a missing command (`127`). The server rejects a relative
+`Cwd` with `400 invalid_request`.
+
+Idempotency covers the whole invocation, not just the command: replaying a key
+with a different `Command`, `Cwd`, or `Env` is `409 idempotency_conflict`.
+
 `ExecuteRequest.TimeoutSeconds` bounds one execution. `Exec` and `ExecStream`
 take no timeout argument, so a caller that needs one calls `StartExecution`
 directly and then `StreamExecution`. Inspect the returned

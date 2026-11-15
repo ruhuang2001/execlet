@@ -48,6 +48,9 @@ type Backend struct {
 	// ExecErr, if set, is returned by the next Exec.
 	ExecErr error
 
+	// lastExec is the spec of the most recent Exec, for LastExecSpec.
+	lastExec daemon.ExecSpec
+
 	// createBlock, when non-nil, makes Create wait for it. Tests use it to
 	// observe the pending state, which is otherwise only concurrent.
 	createBlock chan struct{}
@@ -65,10 +68,15 @@ type container struct {
 type process struct {
 	container string
 	command   []string
-	outW      *io.PipeWriter
-	errW      *io.PipeWriter
-	outR      *io.PipeReader
-	errR      *io.PipeReader
+	// env and dir are what the execution asked for. Nothing in this backend
+	// interprets them; they exist so a test can observe that Exec received
+	// them rather than dropping them on the floor.
+	env  []string
+	dir  string
+	outW *io.PipeWriter
+	errW *io.PipeWriter
+	outR *io.PipeReader
+	errR *io.PipeReader
 
 	mu         sync.Mutex
 	signals    []daemon.Signal
@@ -169,10 +177,15 @@ func (b *Backend) Unpause(_ context.Context, id string) error {
 	return nil
 }
 
-// Exec starts a program in the container.
-func (b *Backend) Exec(ctx context.Context, id string, command []string) (daemon.Process, error) {
+// Exec starts a program in the container. The environment and directory are
+// recorded rather than applied: this backend runs Go functions, not processes,
+// and the contract test only needs the fields to be accepted and observable
+// instead of silently dropped.
+func (b *Backend) Exec(ctx context.Context, id string, spec daemon.ExecSpec) (daemon.Process, error) {
+	command := spec.Command
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.lastExec = spec
 	if b.ExecErr != nil {
 		err := b.ExecErr
 		b.ExecErr = nil
@@ -197,6 +210,8 @@ func (b *Backend) Exec(ctx context.Context, id string, command []string) (daemon
 	p := &process{
 		container: id,
 		command:   append([]string(nil), command...),
+		env:       append([]string(nil), spec.Env...),
+		dir:       spec.Dir,
 		outR:      outR,
 		errR:      errR,
 		outW:      outW,
@@ -369,6 +384,19 @@ type Process struct{ proc *process }
 
 // Signals returns the signals the process received, in order.
 func (p *Process) Signals() []daemon.Signal { return p.proc.Signals() }
+
+// LastExecSpec returns the spec of the most recent Exec, so a test can prove
+// that the environment and directory reach the backend instead of being
+// dropped between the request and the process.
+func (b *Backend) LastExecSpec() daemon.ExecSpec {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return daemon.ExecSpec{
+		Command: append([]string(nil), b.lastExec.Command...),
+		Env:     append([]string(nil), b.lastExec.Env...),
+		Dir:     b.lastExec.Dir,
+	}
+}
 
 // State returns a container's liveness, for assertions.
 func (b *Backend) State(id string) daemon.Liveness {

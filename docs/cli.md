@@ -24,7 +24,17 @@ Status: normative. Contract for `sandboxctl`. It is a thin layer over the [Go SD
 | `version` | print the build version (injected with `-ldflags`) |
 | `help` | usage |
 
-`run` flags: `--sandbox ID`, `--image`, `--memory MB`, `--pids-limit N`, `--nano-cpus N`, `--network bridge|none`, `--timeout S`, `--timeout-action kill|pause`, `--idle-timeout S`, `--idle-action kill|pause`, `--exec-timeout S`, `--rm` (request cleanup of a sandbox created by this invocation). Creation flags together with `--sandbox` are an error. `--rm` does not remove a sandbox supplied through `--sandbox`. Cleanup errors are currently ignored; verify remote state when cleanup must be confirmed.
+`run` flags: `--sandbox ID`, `--image`, `--memory MB`, `--pids-limit N`, `--nano-cpus N`, `--network bridge|none`, `--timeout S`, `--timeout-action kill|pause`, `--idle-timeout S`, `--idle-action kill|pause`, `--exec-timeout S`, `--env NAME=VALUE`, `--cwd DIR`, `--rm` (request cleanup of a sandbox created by this invocation). Creation flags together with `--sandbox` are an error. `--rm` does not remove a sandbox supplied through `--sandbox`. Cleanup errors are currently ignored; verify remote state when cleanup must be confirmed.
+
+`--env` and `--cwd` apply to the execution, not to the sandbox, so they are
+valid together with `--sandbox`. Repeat `--env` to set more than one variable;
+a value that already contains `=` is split on the first one, and an argument
+without `=` is a usage error (exit 2). The environment is additive to the
+image's, and it is not stored on the sandbox, so a second `run` does not inherit
+it. `--cwd` must be an absolute path; the server rejects anything else. A
+directory that does not exist does not fail the invocation: the command exits
+126 with `sandbox: cwd is not a usable directory: <path>` on stderr, and the CLI
+exits with that same status.
 
 `--exec-timeout` bounds the command this invocation starts, not the sandbox. It
 is forwarded on the execution request, so unlike the creation flags it is valid

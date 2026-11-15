@@ -70,6 +70,7 @@ type Execution struct {
 	ID                string   `json:"id"`
 	SandboxID         string   `json:"sandbox_id"`
 	Command           []string `json:"command"`
+	Cwd               *string  `json:"cwd"`
 	State             string   `json:"state"`
 	ExitCode          *int     `json:"exit_code"`
 	TerminationReason *Reason  `json:"termination_reason"`
@@ -107,10 +108,18 @@ type CreateSandboxRequest struct {
 //
 // TimeoutSeconds bounds one execution: nil or 0 means no deadline of its own.
 // The sandbox lifetime policy still applies: it can kill or pause the sandbox.
+//
+// Env is this execution's environment. It is additive: a name here overrides
+// the container's value and every other container variable stays visible. Cwd
+// is the directory the command runs in; empty means the image's working
+// directory. A directory that does not exist does not fail the start: the
+// execution completes with exit code 126 and the reason on stderr.
 type ExecuteRequest struct {
-	Command        []string `json:"command"`
-	IdempotencyKey string   `json:"idempotency_key,omitempty"`
-	TimeoutSeconds *int     `json:"timeout_seconds,omitempty"`
+	Command        []string          `json:"command"`
+	IdempotencyKey string            `json:"idempotency_key,omitempty"`
+	TimeoutSeconds *int              `json:"timeout_seconds,omitempty"`
+	Env            map[string]string `json:"env,omitempty"`
+	Cwd            string            `json:"cwd,omitempty"`
 }
 
 // EventType is an SSE event type.

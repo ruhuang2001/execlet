@@ -378,7 +378,8 @@ Recorded because earlier builds hit them, not as hypotheticals:
 8. **A backend call must not be unbounded under a lock.** The reaper skips a sandbox whose lock is held, so a runtime call that never returns under `sb.mu` would disable that sandbox's timeouts permanently. Start-execution calls and the OOM baseline read are bounded by `BackendCallTimeout`; the process still outlives them.
 9. **Shutdown needs to tell streams.** `http.Server.Shutdown` waits for handlers but does not cancel their contexts, so an open SSE stream would hold the shutdown until its deadline and the container would outlive the process. The handler ends streams when the shutdown signal closes, and the store then removes every container it created.
 10. **Pause must be measured, not asserted.** Prove it with a counter that advances across pause and resume, not with the state field.
-11. **Documentation bloat.** Evidence goes in `artifacts/`; prose stays readable.
+11. **A working directory must not go through Docker's exec `WorkingDir`.** The runtime applies it before the wrapper shell runs, so an unusable directory produces a startup failure rather than a command. Measured against a real daemon, for `cwd: /does-not-exist`: Docker's field gives exit `127` and the runtime message on **stdout**, where it reads like the program's own output and collides with a missing command; chdir inside the wrapper gives exit `126` with a marker on **stderr**. Only the second is a usable contract. A missing directory did *not* make a later cancel escalate to removing the container, so cancellation is not the reason for the wrapper; the reason is the exit code and the stream. The wrapper still writes the PID before the chdir, and a test pins that order, because everything after the PID write fails somewhere cancel still works.
+12. **Documentation bloat.** Evidence goes in `artifacts/`; prose stays readable.
 
 ## Further reading
 

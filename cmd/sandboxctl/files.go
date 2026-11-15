@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json/v2"
 	"errors"
 	"flag"
@@ -8,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	sandbox "github.com/ruhuang2001/tiny-sandbox/sandbox-go"
 )
@@ -69,41 +71,32 @@ func (in *invocation) archive(args []string) int {
 	ctx, cancel := contextWithSignals()
 	defer cancel()
 	if args[0] == "upload" {
-		f, err := os.Open(args[3])
+		data, err := readLocalArchive(ctx, args[3])
 		if err != nil {
 			return in.fail(err)
-		}
-		data, readErr := io.ReadAll(io.LimitReader(f, (32<<20)+1))
-		closeErr := f.Close()
-		if err := errors.Join(readErr, closeErr); err != nil {
-			return in.fail(err)
-		}
-		if len(data) > 32<<20 {
-			return in.fail(fmt.Errorf("archive exceeds 32 MiB encoded limit"))
 		}
 		if err := c.WriteArchive(ctx, args[1], args[2], data); err != nil {
 			return in.fail(err)
 		}
 		return 0
 	}
+	file, err := os.CreateTemp(filepath.Dir(args[3]), ".sandbox-archive-*")
+	if err != nil {
+		return in.fail(err)
+	}
+	defer func() { _ = file.Close(); _ = os.Remove(file.Name()) }()
 	data, err := c.ReadArchive(ctx, args[1], args[2])
 	if err != nil {
 		return in.fail(err)
 	}
-	if err := saveArchive(args[3], data); err != nil {
+	if err := saveArchive(file, args[3], data); err != nil {
 		return in.fail(err)
 	}
 	return 0
 }
 
 // saveArchive replaces the destination only after a complete local save.
-func saveArchive(destination string, data []byte) error {
-	file, err := os.CreateTemp(filepath.Dir(destination), ".sandbox-archive-*")
-	if err != nil {
-		return err
-	}
-	temporary := file.Name()
-	defer func() { _ = os.Remove(temporary) }()
+func saveArchive(file *os.File, destination string, data []byte) error {
 	if _, err := file.Write(data); err != nil {
 		return errors.Join(err, file.Close())
 	}
@@ -113,5 +106,45 @@ func saveArchive(destination string, data []byte) error {
 	if err := file.Close(); err != nil {
 		return err
 	}
-	return os.Rename(temporary, destination)
+	return os.Rename(file.Name(), destination)
+}
+
+func readLocalArchive(ctx context.Context, name string) ([]byte, error) {
+	info, err := os.Stat(name)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("archive input must be a regular file")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, sandbox.ErrCanceled
+	}
+	// Nonblocking open prevents a raced-in FIFO from blocking between stat and open.
+	file, err := os.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	info, err = file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		_ = file.Close()
+		if err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("archive input must be a regular file")
+	}
+	stop := context.AfterFunc(ctx, func() { _ = file.Close() })
+	defer stop()
+	data, readErr := io.ReadAll(io.LimitReader(file, (32<<20)+1))
+	closeErr := file.Close()
+	if ctx.Err() != nil {
+		return nil, sandbox.ErrCanceled
+	}
+	if err := errors.Join(readErr, closeErr); err != nil {
+		return nil, err
+	}
+	if len(data) > 32<<20 {
+		return nil, fmt.Errorf("archive exceeds 32 MiB encoded limit")
+	}
+	return data, nil
 }

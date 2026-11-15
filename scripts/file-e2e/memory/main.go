@@ -85,6 +85,11 @@ func main() {
 	if h.Typeflag != tar.TypeReg || h.Size != 9<<20 {
 		panic("outside-subtree link not materialized")
 	}
+	materialized, err := io.ReadAll(r)
+	must(err)
+	if !bytes.Equal(materialized, bytes.Repeat([]byte("x"), 9<<20)) {
+		panic("materialized hardlink payload mismatch")
+	}
 	var conflict bytes.Buffer
 	cw := tar.NewWriter(&conflict)
 	must(cw.WriteHeader(&tar.Header{Name: "tree", Typeflag: tar.TypeReg, Mode: 0o644, Size: 1}))

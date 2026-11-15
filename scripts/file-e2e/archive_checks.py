@@ -106,6 +106,11 @@ def check_archives(client, sid, out):
     call(tar_bytes([(str(i)+'x'*300,tarfile.REGTYPE,b'','') for i in range(3500)]),status=413)
     assert client.list_files(sid,'/archives/reject').entries==[]
     client.pause_sandbox(sid)
+    fifo=out/'input.fifo';os.mkfifo(fifo)
+    rejected=subprocess.run([str(out/'sandboxctl'),'files','archive','upload',sid,'/archives/cli',str(fifo)],capture_output=True,text=True,timeout=5)
+    assert rejected.returncode!=0 and 'regular file' in rejected.stderr
+    failed_destination=subprocess.run([str(out/'sandboxctl'),'files','archive','download',sid,'/archives/source/tree',str(out/'missing-directory'/'archive.tar')],capture_output=True,text=True,timeout=5)
+    assert failed_destination.returncode!=0 and client.get_sandbox(sid).state=='paused'
     call(tar_bytes([safe,hostile[0]]))
     assert client.get_sandbox(sid).state=='paused'
     assert client.read_archive(sid,'/archives/source/tree')

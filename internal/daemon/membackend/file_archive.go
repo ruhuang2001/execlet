@@ -121,6 +121,9 @@ func (b *Backend) ReadArchive(_ context.Context, id, p string) ([]byte, error) {
 	if err := w.Close(); err != nil {
 		return nil, err
 	}
+	if buf.Len() > filearchive.MaxBytes {
+		return nil, &daemon.Error{Code: daemon.CodePayloadTooLarge, Message: "archive exceeds encoded limit"}
+	}
 	return buf.Bytes(), nil
 }
 

@@ -36,3 +36,4 @@ These failure cases precede the repair implementation and exercise real HTTP plu
 - Retain the downloaded tar and JSON summary for repeatable verification; no new unit tests.
 - Reject a regular archive member replacing an existing directory before mutation, including implicit directories. Count archive-backed memory files once when listing.
 - Bound aggregate archive path text to 1 MiB so destination preflight uses at most a few bounded exec batches; perform those checks as container root to match Docker extraction privileges.
+- Reject FIFO/nonregular local uploads promptly without resuming a paused sandbox; fail unwritable/missing local download destinations before remote access. Confirm materialized hardlink bytes, not only headers.

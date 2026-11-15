@@ -138,4 +138,6 @@ validated before extraction. sandboxctl files archive download SANDBOX /work
 local.tar saves a validated tar containing work/ and descendants with mode
 0600 after an atomic temporary-file save and rename. Download/save errors
 leave an existing destination intact;
-the CLI never extracts the tar on the host. Upload is attempted once.
+the CLI never extracts the tar on the host. Upload accepts only regular local
+files and is attempted once. Quiesce destination writers before upload and
+inspect remote state after failure; runtime errors can leave partial extraction.

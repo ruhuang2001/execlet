@@ -14,3 +14,11 @@
 Run E2E_PORT=<unused-port> bash scripts/e2e.sh artifacts/e2e. The real HTTP/Docker
 probe writes env-contract.json; the existing suite records logs and owner-scoped
 cleanup. Evidence excludes request bodies containing synthetic secrets.
+
+## Go SDK recovery (before its implementation)
+
+After the real server accepts a start, discard its response, mutate the caller's
+command/env, and cancel the request. Recovery must replay the originally sent
+invocation, confirm cancellation, and leave exactly one terminal execution.
+Without owned copies the replay conflicts and returns cancel_unconfirmed.
+The live test uses a transport fault after a real HTTP response, not a fake server.

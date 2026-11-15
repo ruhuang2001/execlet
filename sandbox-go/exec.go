@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 )
 
 // StartExecution starts a command and returns the new execution. A start is
@@ -20,6 +22,9 @@ func (c *Client) StartExecution(ctx context.Context, sandboxID string, req Execu
 	if len(req.Command) == 0 {
 		return nil, &Error{Code: "invalid_request", Message: "sandbox: command must not be empty"}
 	}
+	// Own the invocation across dispatch and cancellation recovery.
+	req.Command = slices.Clone(req.Command)
+	req.Env = maps.Clone(req.Env)
 	if req.IdempotencyKey == "" {
 		req.IdempotencyKey = newIdempotencyKey()
 	}

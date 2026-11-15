@@ -347,6 +347,9 @@ func TestRealEnvironmentSurvivesTheShell(t *testing.T) {
 		"SHLVL":      "42",
 		"IFS":        "connector",
 		"NORMAL":     "kept",
+		// A name starting with "-" is accepted by the contract and would be
+		// read as an option by env without "--" in front of the entries.
+		"-X": "dash",
 	}
 	ex := h.run(sb.ID, daemon.ExecuteRequest{Command: []string{"env"}, Env: want})
 	if ex.ExitCode == nil || *ex.ExitCode != 0 {
@@ -427,8 +430,8 @@ func TestRealCommandPathWithEqualsIsNotAnAssignment(t *testing.T) {
 	}
 }
 
-// TestRealWrapperDoesNotShadowImageVariables runs the real wrapper inside a
-// container whose shell already exports n and e.
+// TestRealWrapperDoesNotShadowImageVariables runs the real wrapper in a shell
+// that already exports n and e.
 //
 // A shell assignment to a name that is already exported replaces that value,
 // and the wrapper is a shell. An earlier version read its argument count into
@@ -438,8 +441,15 @@ func TestRealCommandPathWithEqualsIsNotAnAssignment(t *testing.T) {
 // The variables come from the shell that starts the wrapper rather than from
 // the image, because a request-level entry is supposed to win and so cannot
 // express "the image already sets this". Exporting them first is exactly the
-// environment an image produces, and the wrapper text under test is the one
-// the backend sends.
+// environment an image produces.
+//
+// The outer shell is a launcher, not part of the subject: it exports the
+// names, then execs the wrapper with the wrapper's own argument layout —
+// $0 the PID path, $1 the directory, $2 the count, then the entries and the
+// command. Passing the wrapper text through a positional parameter and
+// forwarding the rest keeps every argument where the wrapper expects it; an
+// earlier version of this test shifted them, so the wrapper ran against the
+// wrong layout and passed for the wrong reason.
 func TestRealWrapperDoesNotShadowImageVariables(t *testing.T) {
 	h := newRealHarness(t)
 	sb := h.create()
@@ -454,12 +464,14 @@ func TestRealWrapperDoesNotShadowImageVariables(t *testing.T) {
 		{"one unrelated entry", "1", []string{"EXTRA=value"}, []string{"/usr/bin/env"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			// $0 is the wrapper source for the outer shell, which exports the
-			// names an image would have set and then runs the wrapper exactly
-			// as the backend does.
-			argv := append([]string{"sh", "-c",
-				`export n=image-n e=image-e; exec /bin/sh -c "$1" /tmp/shadow-pid "" "$2"`,
-				"sandbox", execWrapper, tc.count}, tc.env...)
+			// $0 is the launcher source, $1 the wrapper text to run, $2 the
+			// count, and "$@" after the shift the rest of the wrapper's argv.
+			launcher := `export n=image-n e=image-e
+wrapper=$1
+count=$2
+shift 2
+exec /bin/sh -c "$wrapper" /tmp/shadow-pid "" "$count" "$@"`
+			argv := append([]string{"sh", "-c", launcher, "sandbox", execWrapper, tc.count}, tc.env...)
 			argv = append(argv, tc.cmd...)
 
 			proc, err := h.be.Exec(context.Background(), h.containerID(sb.ID), daemon.ExecSpec{Command: argv})
@@ -470,11 +482,12 @@ func TestRealWrapperDoesNotShadowImageVariables(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read stdout: %v", err)
 			}
-			if _, err := io.ReadAll(proc.Stderr()); err != nil {
+			stderr, err := io.ReadAll(proc.Stderr())
+			if err != nil {
 				t.Fatalf("read stderr: %v", err)
 			}
 			if code, err := proc.Wait(); err != nil || code != 0 {
-				t.Fatalf("wait: code %d, err %v", code, err)
+				t.Fatalf("wait: code %d, err %v, stderr %q", code, err, stderr)
 			}
 
 			got := map[string]string{}
@@ -482,6 +495,12 @@ func TestRealWrapperDoesNotShadowImageVariables(t *testing.T) {
 				if name, value, ok := strings.Cut(line, "="); ok {
 					got[name] = value
 				}
+			}
+			// The probe must have produced an environment at all: an empty map
+			// would make the two checks below pass without the wrapper ever
+			// reaching env.
+			if len(got) == 0 {
+				t.Fatalf("the probe printed no environment, so it never ran (stderr %q)", stderr)
 			}
 			if got["n"] != "image-n" {
 				t.Errorf("n = %q, want image-n: the wrapper overwrote a variable "+

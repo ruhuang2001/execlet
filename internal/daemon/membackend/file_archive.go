@@ -21,9 +21,6 @@ func (b *Backend) ReadArchive(_ context.Context, id, p string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(c.files)+len(c.archiveHeaders) > daemon.MaxFileScanEntries {
-		return nil, &daemon.Error{Code: daemon.CodePayloadTooLarge, Message: "archive exceeds scan entry limit"}
-	}
 	headers := map[string]tar.Header{}
 	base := path.Base(p)
 	if p == "/" {
@@ -38,7 +35,13 @@ func (b *Backend) ReadArchive(_ context.Context, id, p string) ([]byte, error) {
 			continue
 		}
 		headers[name] = tar.Header{Name: path.Join(base, strings.TrimPrefix(name, prefix)), Typeflag: tar.TypeReg, Mode: 0o644, Size: int64(len(data))}
+		if len(headers) > filearchive.MaxEntries {
+			return nil, &daemon.Error{Code: daemon.CodePayloadTooLarge, Message: "archive exceeds entry limit"}
+		}
 		for parent := path.Dir(name); parent != p && parent != "/"; parent = path.Dir(parent) {
+			if len(headers) >= filearchive.MaxEntries {
+				return nil, &daemon.Error{Code: daemon.CodePayloadTooLarge, Message: "archive exceeds entry limit"}
+			}
 			headers[parent] = tar.Header{Name: path.Join(base, strings.TrimPrefix(parent, prefix)), Typeflag: tar.TypeDir, Mode: 0o755}
 		}
 	}
@@ -55,6 +58,9 @@ func (b *Backend) ReadArchive(_ context.Context, id, p string) ([]byte, error) {
 				h.Size = int64(len(c.files[name]))
 			}
 			headers[name] = h
+			if len(headers) > filearchive.MaxEntries {
+				return nil, &daemon.Error{Code: daemon.CodePayloadTooLarge, Message: "archive exceeds entry limit"}
+			}
 		}
 	}
 	if len(headers) == 0 && p != "/" {
@@ -127,9 +133,6 @@ func (b *Backend) WriteArchive(_ context.Context, id, p string, archive *filearc
 	}
 	if !exists {
 		return daemon.ErrNotFound
-	}
-	if len(c.files)+len(c.archiveHeaders) > daemon.MaxFileScanEntries {
-		return &daemon.Error{Code: daemon.CodePayloadTooLarge, Message: "destination exceeds scan entry limit"}
 	}
 	for _, entry := range archive.Entries {
 		for current := path.Join(p, entry.Header.Name); current != "/"; current = path.Dir(current) {

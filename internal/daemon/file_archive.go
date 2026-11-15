@@ -69,11 +69,11 @@ func archiveError(err error) error {
 func archivePath(w http.ResponseWriter, r *http.Request) (string, bool) {
 	q, err := strictFileQuery(r, "path")
 	if err != nil {
-		writeDaemonError(w, err)
+		writeDaemonError(r.Context(), w, err)
 		return "", false
 	}
 	if err := ValidateFilePath(q["path"]); err != nil {
-		writeDaemonError(w, err)
+		writeDaemonError(r.Context(), w, err)
 		return "", false
 	}
 	return q["path"], true
@@ -85,7 +85,7 @@ func (h *Handler) readArchive(w http.ResponseWriter, r *http.Request) {
 	}
 	data, err := h.store.ReadArchive(r.Context(), r.PathValue("sandbox_id"), p)
 	if err != nil {
-		writeDaemonError(w, err)
+		writeDaemonError(r.Context(), w, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/x-tar")
@@ -100,14 +100,14 @@ func (h *Handler) writeArchive(w http.ResponseWriter, r *http.Request) {
 	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, filearchive.MaxBytes))
 	if err != nil {
 		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
-			writeDaemonError(w, errorf(CodePayloadTooLarge, "archive exceeds 32 MiB encoded limit"))
+			writeDaemonError(r.Context(), w, errorf(CodePayloadTooLarge, "archive exceeds 32 MiB encoded limit"))
 		} else {
-			writeDaemonError(w, errorf(CodeInvalidRequest, "cannot read archive body: %v", err))
+			writeDaemonError(r.Context(), w, errorf(CodeInvalidRequest, "cannot read archive body: %v", err))
 		}
 		return
 	}
 	if err := h.store.WriteArchive(r.Context(), r.PathValue("sandbox_id"), p, data); err != nil {
-		writeDaemonError(w, err)
+		writeDaemonError(r.Context(), w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

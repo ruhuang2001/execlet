@@ -198,6 +198,24 @@ try {
     return { exitCodes: [ok.execution.exit_code, nonzero.execution.exit_code], timeoutReason: timeoutOutcome.reason };
   });
 
+  await run('concurrent executions cancel independently and unknown is preserved', async () => {
+    const sb = await create({ max_concurrent_executions: 2 });
+    assert.equal(sb.max_concurrent_executions, 2);
+    const a = await client.startExecution(sb.id, { command: ['sleep', '30'] });
+    const b = await client.startExecution(sb.id, { command: ['sleep', '30'] });
+    assert.equal((await client.getExecution(sb.id, a.id)).state, 'running');
+    assert.equal((await client.getExecution(sb.id, b.id)).state, 'running');
+    await rejected(client.startExecution(sb.id, { command: ['true'] }), 'busy');
+    await client.cancelExecution(sb.id, a.id);
+    assert.equal((await client.getExecution(sb.id, b.id)).state, 'running');
+    const outcome = await client.exec(sb.id, ['sh', '-c', 'exit 137']);
+    assert.equal(outcome.reason, 'unknown');
+    assert.equal(outcome.terminationReason, 'unknown');
+    assert.equal(outcome.execution.exit_code, 137);
+    await client.cancelExecution(sb.id, b.id);
+    return { first: a.id, sibling: b.id, outcome };
+  });
+
   await run('env and cwd reach the process and env is never echoed', async () => {
     const sb = await create();
     const finish = async (request) => {

@@ -3,7 +3,7 @@
 // the HTTP handler tests and the contract tests share it so all three exercise
 // the same semantics without Docker.
 //
-// It models one container per sandbox, a single running process per container,
+// It models one container per sandbox, concurrent running processes per container,
 // a monotonically increasing oom_kill counter, and a file map. Tests drive it
 // through methods such as Kill (simulate an external stop), SetOOMKills
 // (simulate the kernel OOM killer), and Program (decide what a command does).
@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"sync"
 
@@ -65,6 +66,7 @@ type container struct {
 	files          map[string][]byte
 	archiveHeaders map[string]tar.Header
 	proc           *process
+	procs          []*process
 }
 
 type process struct {
@@ -136,11 +138,13 @@ func (b *Backend) Remove(_ context.Context, id string) error {
 	if c != nil {
 		c.state = daemon.LivenessMissing
 	}
+	if c != nil {
+		c.stopProcess()
+	}
 	b.mu.Unlock()
 	if c == nil {
 		return fmt.Errorf("membackend: container %s: %w", id, daemon.ErrNotFound)
 	}
-	c.stopProcess()
 	return nil
 }
 
@@ -202,9 +206,7 @@ func (b *Backend) Exec(ctx context.Context, id string, spec daemon.ExecSpec) (da
 	if c.state != daemon.LivenessRunning {
 		return nil, fmt.Errorf("membackend: container %s is %s", id, c.state)
 	}
-	if c.proc != nil && !c.proc.finished() {
-		return nil, errors.New("membackend: container already has a running process")
-	}
+
 	if len(command) == 0 {
 		return nil, errors.New("membackend: empty command")
 	}
@@ -221,6 +223,8 @@ func (b *Backend) Exec(ctx context.Context, id string, spec daemon.ExecSpec) (da
 		done:      make(chan struct{}),
 	}
 	c.proc = p
+	c.procs = slices.DeleteFunc(c.procs, func(existing *process) bool { return existing.finished() })
+	c.procs = append(c.procs, p)
 
 	if streamer, ok := b.Streamers[command[0]]; ok {
 		go p.runStreamer(context.WithoutCancel(ctx), streamer)
@@ -306,10 +310,10 @@ func (b *Backend) Kill(id string) {
 	if c != nil {
 		c.state = daemon.LivenessStopped
 	}
-	b.mu.Unlock()
 	if c != nil {
 		c.stopProcess()
 	}
+	b.mu.Unlock()
 }
 
 // Disappear removes the container record without stopping anything, modelling
@@ -321,10 +325,10 @@ func (b *Backend) Disappear(id string) {
 	if c != nil {
 		c.state = daemon.LivenessMissing
 	}
-	b.mu.Unlock()
 	if c != nil {
 		c.stopProcess()
 	}
+	b.mu.Unlock()
 }
 
 // IgnoreTerm makes the container's process ignore SIGTERM, so a cancel falls
@@ -555,10 +559,9 @@ func (p *process) finish(code int, waitErr error) {
 
 // stopProcess ends a container's process, as removing or killing it would.
 func (c *container) stopProcess() {
-	if c.proc == nil {
-		return
+	for _, p := range c.procs {
+		p.finish(137, nil)
 	}
-	c.proc.finish(137, nil)
 }
 
 // ---------------------------------------------------------------- helpers

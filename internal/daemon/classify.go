@@ -45,6 +45,10 @@ type ExecOutcome struct {
 // window, and the last observation decides: the state has had time to settle
 // in both directions.
 func classify(ctx context.Context, s sampler, containerID string, oomBaseline int64, exitCode int, intent *intentRecord, sleep SleepFunc) ExecOutcome {
+	return classifyWithAttribution(ctx, s, containerID, oomBaseline, exitCode, intent, sleep, true)
+}
+
+func classifyWithAttribution(ctx context.Context, s sampler, containerID string, oomBaseline int64, exitCode int, intent *intentRecord, sleep SleepFunc, attributeOOM bool) ExecOutcome {
 	if intent != nil {
 		switch intent.reason {
 		case ReasonCanceled:
@@ -57,8 +61,10 @@ func classify(ctx context.Context, s sampler, containerID string, oomBaseline in
 	// A positive delta attributes the kill to the OOM killer whatever the exit
 	// code says. A failed read is treated as no delta: claiming oom on a
 	// failed read would be a guess.
-	if current, err := s.OOMKillCount(ctx, containerID); err == nil && oomBaseline >= 0 && current > oomBaseline {
-		return ExecOutcome{Reason: ReasonOOM, ExitCode: exitCode}
+	if attributeOOM && oomBaseline >= 0 {
+		if current, err := s.OOMKillCount(ctx, containerID); err == nil && current > oomBaseline {
+			return ExecOutcome{Reason: ReasonOOM, ExitCode: exitCode}
+		}
 	}
 
 	ambiguous := exitCode == 137
@@ -128,5 +134,8 @@ func classify(ctx context.Context, s sampler, containerID string, oomBaseline in
 	// The process exited on its own while its container still lives. This is
 	// the ordinary case, and it includes exit 137 from an in-sandbox
 	// `kill -9`: no intent, no OOM delta, container alive.
+	if !attributeOOM && exitCode == 137 {
+		return withTrace(ExecOutcome{Reason: ReasonUnknown, ExitCode: exitCode})
+	}
 	return withTrace(ExecOutcome{Reason: ReasonExited, ExitCode: exitCode})
 }

@@ -22,7 +22,7 @@ This project answers those questions with working code and tests rather than pro
 
 1. **Lifecycle**: create, pause, resume, and kill sandboxes; a lifetime timeout and an idle timeout, each able to kill or pause.
 2. **Execution and streaming**: executions as resources with IDs, output over SSE, lossless reconnect with `Last-Event-ID`, and command-level cancellation.
-3. **Errors and retries**: five typed termination reasons and a retry policy that never replays a command.
+3. **Errors and retries**: typed termination reasons and a retry policy that never replays a command.
 4. **Developer experience**: a CLI that gets a new user from zero to a first command and helps debug a failing one.
 
 ## Non-goals
@@ -129,7 +129,7 @@ the `none` network mode.
 ### Executions and streaming
 
 - An execution is a resource under a sandbox: `/v1/sandboxes/{id}/executions/{execution_id}`. Its ID is what makes replay and cancellation possible.
-- A sandbox runs one execution at a time; an overlapping start returns `409 busy`. This keeps container-wide OOM evidence attributable to a single execution.
+- A sandbox defaults to one execution slot and accepts up to eight at creation. Full admission returns `409 busy`. See [concurrency](concurrency.md) for locking, retention and OOM attribution.
 - An execution may carry its own `timeout_seconds`. It normally ends the command
   and keeps the sandbox: a runaway command should cost one result, not the
   working directory. The deadline is fixed at start and counts wall time, so a

@@ -135,7 +135,7 @@ const (
 
 // Reason is an execution termination reason. If several apply, the first in
 // this order wins: canceled, timeout, oom, evicted, exited. Exit code 137
-// alone never implies oom.
+// alone never implies oom. With concurrent slots, unexplained 137 is unknown.
 type Reason string
 
 // Termination reasons, in the precedence order of api.md.
@@ -145,6 +145,7 @@ const (
 	ReasonOOM      Reason = "oom"
 	ReasonEvicted  Reason = "evicted"
 	ReasonExited   Reason = "exited"
+	ReasonUnknown  Reason = "unknown"
 )
 
 // ExecState is an execution state: running or completed.
@@ -158,20 +159,21 @@ const (
 
 // Sandbox is the contract view of a sandbox.
 type Sandbox struct {
-	ID                 string      `json:"id"`
-	State              State       `json:"state"`
-	Image              string      `json:"image"`
-	MemoryMB           int         `json:"memory_mb"`
-	PidsLimit          int         `json:"pids_limit"`
-	NanoCPUs           int64       `json:"nano_cpus"`
-	Network            NetworkMode `json:"network"`
-	TimeoutSeconds     int         `json:"timeout_seconds"`
-	TimeoutAction      Action      `json:"timeout_action"`
-	IdleTimeoutSeconds int         `json:"idle_timeout_seconds"`
-	IdleTimeoutAction  Action      `json:"idle_timeout_action"`
-	CreatedAt          time.Time   `json:"created_at"`
-	ExpiresAt          *time.Time  `json:"expires_at"`
-	KillReason         *KillReason `json:"kill_reason"`
+	MaxConcurrentExecutions int         `json:"max_concurrent_executions"`
+	ID                      string      `json:"id"`
+	State                   State       `json:"state"`
+	Image                   string      `json:"image"`
+	MemoryMB                int         `json:"memory_mb"`
+	PidsLimit               int         `json:"pids_limit"`
+	NanoCPUs                int64       `json:"nano_cpus"`
+	Network                 NetworkMode `json:"network"`
+	TimeoutSeconds          int         `json:"timeout_seconds"`
+	TimeoutAction           Action      `json:"timeout_action"`
+	IdleTimeoutSeconds      int         `json:"idle_timeout_seconds"`
+	IdleTimeoutAction       Action      `json:"idle_timeout_action"`
+	CreatedAt               time.Time   `json:"created_at"`
+	ExpiresAt               *time.Time  `json:"expires_at"`
+	KillReason              *KillReason `json:"kill_reason"`
 }
 
 // Execution is the contract view of an execution, including retained output.
@@ -224,15 +226,16 @@ func (e Execution) Summary() ExecutionSummary {
 // CreateRequest carries the optional fields of POST /v1/sandboxes. A nil
 // pointer means "use the default"; a pointer to zero is an explicit zero.
 type CreateRequest struct {
-	Image              *string      `json:"image,omitempty"`
-	MemoryMB           *int         `json:"memory_mb,omitempty"`
-	PidsLimit          *int         `json:"pids_limit,omitempty"`
-	NanoCPUs           *int64       `json:"nano_cpus,omitempty"`
-	Network            *NetworkMode `json:"network,omitempty"`
-	TimeoutSeconds     *int         `json:"timeout_seconds,omitempty"`
-	TimeoutAction      *Action      `json:"timeout_action,omitempty"`
-	IdleTimeoutSeconds *int         `json:"idle_timeout_seconds,omitempty"`
-	IdleTimeoutAction  *Action      `json:"idle_timeout_action,omitempty"`
+	MaxConcurrentExecutions *int         `json:"max_concurrent_executions,omitempty"`
+	Image                   *string      `json:"image,omitempty"`
+	MemoryMB                *int         `json:"memory_mb,omitempty"`
+	PidsLimit               *int         `json:"pids_limit,omitempty"`
+	NanoCPUs                *int64       `json:"nano_cpus,omitempty"`
+	Network                 *NetworkMode `json:"network,omitempty"`
+	TimeoutSeconds          *int         `json:"timeout_seconds,omitempty"`
+	TimeoutAction           *Action      `json:"timeout_action,omitempty"`
+	IdleTimeoutSeconds      *int         `json:"idle_timeout_seconds,omitempty"`
+	IdleTimeoutAction       *Action      `json:"idle_timeout_action,omitempty"`
 }
 
 // ExecuteRequest is the body of POST /v1/sandboxes/{id}/executions.
@@ -275,29 +278,37 @@ func (r ExecuteRequest) envPairs() []string {
 
 // sandboxOptions is a CreateRequest resolved against the defaults.
 type sandboxOptions struct {
-	image              string
-	memoryMB           int
-	pidsLimit          int
-	nanoCPUs           int64
-	network            NetworkMode
-	timeoutSeconds     int
-	timeoutAction      Action
-	idleTimeoutSeconds int
-	idleTimeoutAction  Action
+	maxConcurrentExecutions int
+	image                   string
+	memoryMB                int
+	pidsLimit               int
+	nanoCPUs                int64
+	network                 NetworkMode
+	timeoutSeconds          int
+	timeoutAction           Action
+	idleTimeoutSeconds      int
+	idleTimeoutAction       Action
 }
 
 // resolve applies defaults and validates the request.
 func (r CreateRequest) resolve() (sandboxOptions, error) {
 	opts := sandboxOptions{
-		image:              DefaultImage,
-		memoryMB:           DefaultMemoryMB,
-		pidsLimit:          DefaultPidsLimit,
-		nanoCPUs:           0, // no CPU limit, as Docker's own default
-		network:            DefaultNetwork,
-		timeoutSeconds:     DefaultTimeoutSeconds,
-		timeoutAction:      ActionKill,
-		idleTimeoutSeconds: 0,
-		idleTimeoutAction:  ActionKill,
+		maxConcurrentExecutions: 1,
+		image:                   DefaultImage,
+		memoryMB:                DefaultMemoryMB,
+		pidsLimit:               DefaultPidsLimit,
+		nanoCPUs:                0, // no CPU limit, as Docker's own default
+		network:                 DefaultNetwork,
+		timeoutSeconds:          DefaultTimeoutSeconds,
+		timeoutAction:           ActionKill,
+		idleTimeoutSeconds:      0,
+		idleTimeoutAction:       ActionKill,
+	}
+	if r.MaxConcurrentExecutions != nil {
+		if *r.MaxConcurrentExecutions < 1 || *r.MaxConcurrentExecutions > 8 {
+			return sandboxOptions{}, errorf(CodeInvalidRequest, "max_concurrent_executions must be between 1 and 8")
+		}
+		opts.maxConcurrentExecutions = *r.MaxConcurrentExecutions
 	}
 	if r.Image != nil {
 		if *r.Image == "" {

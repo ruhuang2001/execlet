@@ -281,6 +281,7 @@ func TestExecRunsWrappedCommandAndDemuxes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("exec: %v", err)
 	}
+	cmd := f.lastExecCommand() // Wait now issues a separate PID cleanup exec.
 	stdout, _ := io.ReadAll(proc.Stdout())
 	stderr, _ := io.ReadAll(proc.Stderr())
 	code, err := proc.Wait()
@@ -294,7 +295,6 @@ func TestExecRunsWrappedCommandAndDemuxes(t *testing.T) {
 		t.Errorf("exit code = %d, want 3", code)
 	}
 
-	cmd := f.lastExecCommand()
 	pidPath, _, _, actual, ok := unwrap(cmd)
 	if !ok {
 		t.Fatalf("command was not wrapped: %v", cmd)

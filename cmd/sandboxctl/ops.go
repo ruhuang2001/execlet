@@ -89,6 +89,7 @@ func (in *invocation) inspect(args []string) int {
 	_, _ = fmt.Fprintf(in.stdout, "timeout_action: %s\n", sb.TimeoutAction)
 	_, _ = fmt.Fprintf(in.stdout, "idle_timeout_seconds: %d\n", sb.IdleTimeoutSeconds)
 	_, _ = fmt.Fprintf(in.stdout, "idle_timeout_action: %s\n", sb.IdleTimeoutAction)
+	_, _ = fmt.Fprintf(in.stdout, "max_concurrent_executions: %d\n", sb.MaxConcurrentExecutions)
 	_, _ = fmt.Fprintf(in.stdout, "created_at: %s\n", sb.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"))
 	if sb.ExpiresAt != nil {
 		_, _ = fmt.Fprintf(in.stdout, "expires_at: %s\n", sb.ExpiresAt.UTC().Format("2006-01-02T15:04:05Z"))

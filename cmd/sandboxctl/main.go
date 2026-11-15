@@ -46,6 +46,7 @@ run flags:
   --sandbox ID          use an existing sandbox instead of creating one
   --image NAME          image for a new sandbox
   --memory MB           memory limit
+  --max-concurrent-executions N  execution slots (default 1, maximum 8)
   --pids-limit N        task limit (default 1024, minimum 64)
   --nano-cpus N         CPU limit in units of 1e-9 CPUs (0 is unlimited)
   --network MODE        bridge (default) or none

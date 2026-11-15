@@ -1,7 +1,7 @@
 /** Open response enums let older clients preserve values from newer servers. */
 export type OpenString<T extends string> = T | (string & {});
 export type Action = 'kill' | 'pause';
-export type TerminationReason = 'exited' | 'canceled' | 'timeout' | 'oom' | 'evicted';
+export type TerminationReason = 'exited' | 'canceled' | 'timeout' | 'oom' | 'evicted' | 'unknown';
 
 export interface Sandbox {
   id: string;
@@ -9,6 +9,7 @@ export interface Sandbox {
   image: string;
   memory_mb: number;
   /** Additive controls can be absent on older development servers. */
+  max_concurrent_executions?: number;
   pids_limit?: number;
   nano_cpus?: number;
   network?: OpenString<'bridge' | 'none'>;
@@ -44,11 +45,11 @@ export type CompletedExecution = Execution & { state: 'completed' };
 
 /** New wire reasons map to unknown, keeping consumer switches exhaustive. */
 export type ExecutionOutcome = {
-  [R in TerminationReason]: {
+  [R in Exclude<TerminationReason, 'unknown'>]: {
     reason: R;
     execution: CompletedExecution & { termination_reason: R };
   }
-}[TerminationReason] | {
+}[Exclude<TerminationReason, 'unknown'>] | {
   reason: 'unknown';
   terminationReason: string | null;
   execution: CompletedExecution;
@@ -57,6 +58,7 @@ export type ExecutionOutcome = {
 export interface CreateSandboxRequest {
   image?: string;
   memory_mb?: number;
+  max_concurrent_executions?: number;
   pids_limit?: number;
   nano_cpus?: number;
   network?: 'bridge' | 'none';

@@ -17,6 +17,7 @@ var (
 	ErrNonZeroExit       = errors.New("sandbox: command exited with a nonzero code")
 	ErrTimeout           = errors.New("sandbox: execution timed out")
 	ErrCanceled          = errors.New("sandbox: execution canceled")
+	ErrUnknown           = errors.New("sandbox: execution termination cause is unknown")
 	ErrOOM               = errors.New("sandbox: killed by the kernel OOM killer")
 	ErrEvicted           = errors.New("sandbox: container was stopped externally")
 	ErrCancelUnconfirmed = errors.New("sandbox: could not confirm the server stopped the work")
@@ -72,6 +73,8 @@ func (e *Error) Is(target error) bool {
 		return e.Code == string(ReasonCanceled) || e.Code == "canceled"
 	case ErrTimeout:
 		return e.Code == string(ReasonTimeout)
+	case ErrUnknown:
+		return e.Code == string(ReasonUnknown)
 	case ErrOOM:
 		return e.Code == string(ReasonOOM)
 	case ErrEvicted:
@@ -124,10 +127,15 @@ func outcomeError(ex *Execution) error {
 		// so the message must not claim the sandbox expired when a command
 		// simply ran too long.
 		return &Error{Code: string(ReasonTimeout), Message: "sandbox: execution timed out", Execution: ex}
+	case ReasonUnknown:
+		return &Error{Code: string(ReasonUnknown), Message: "sandbox: execution termination cause is unknown", Execution: ex}
 	case ReasonOOM:
 		return &Error{Code: string(ReasonOOM), Message: "sandbox: killed by the kernel OOM killer", Execution: ex}
 	case ReasonEvicted:
 		return &Error{Code: string(ReasonEvicted), Message: "sandbox: container was stopped externally", Execution: ex}
+	}
+	if *ex.TerminationReason != ReasonExited {
+		return &Error{Code: string(*ex.TerminationReason), Message: "sandbox: unrecognized termination reason", Execution: ex}
 	}
 	if ex.ExitCode == nil {
 		return &Error{Code: "nonzero_exit", Message: "sandbox: the runtime reported no exit code", Execution: ex}

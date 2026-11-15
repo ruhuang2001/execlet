@@ -287,3 +287,15 @@ boundaries are documented in the HTTP contract.
 Archive upload callers must quiesce in-container filesystem writers and inspect
 remote state after any failed or ambiguous upload, because extraction can be partial.
 The aggregate path/link text limit is 1 MiB, in addition to the byte/member limits.
+
+## Concurrent executions
+
+Set max_concurrent_executions when creating a sandbox (1–8, default 1).
+Go uses CreateSandboxRequest.MaxConcurrentExecutions; Python and TypeScript use
+max_concurrent_executions; the CLI uses --max-concurrent-executions. Sandbox views
+return the limit. Start executions separately and stream each ID; cancellation
+normally affects only its selected execution. Pause/resume applies to all work.
+Container-removal fallback affects siblings, as described in the HTTP contract.
+Above one configured slot, unexplained exit 137 has termination_reason unknown,
+which is never a successful SDK outcome (Go ErrUnknown; Python error code unknown;
+TypeScript reason unknown with terminationReason unknown).

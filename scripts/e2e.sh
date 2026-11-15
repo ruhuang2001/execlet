@@ -109,6 +109,19 @@ check "env-contract" "bounds, replay identity, secrecy and isolation; see $OUT/e
 (cd "$ROOT" && go test -race -tags live ./sandbox-go -run '^TestLiveEnvRecoverySnapshotsInvocation$' -count=1 -v) >"$OUT/go-env-recovery.log" 2>&1
 check "go-env-recovery" "caller mutation preserves accepted invocation; see $OUT/go-env-recovery.log" "$?" "0"
 contains "go-env-recovery ran" "test ran without skipping" "$OUT/go-env-recovery.log" "--- PASS: TestLiveEnvRecoverySnapshotsInvocation"
+python3 "$ROOT/scripts/e2e-concurrency/run.py" "$SANDBOX_DOMAIN" "$OUT/concurrency.json" >"$OUT/concurrency.log" 2>&1
+check "concurrency" "admission, lifecycle, retention and outcomes; see $OUT/concurrency.log" "$?" "0"
+
+(cd "$ROOT" && go test -race -tags live ./sandbox-go -run '^TestLiveConcurrency$' -count=1 -v) >"$OUT/go-concurrency.log" 2>&1
+check "go-concurrency" "SDK overlap, cancel and unknown outcome; see $OUT/go-concurrency.log" "$?" "0"
+contains "go-concurrency ran" "test ran without skipping" "$OUT/go-concurrency.log" "--- PASS: TestLiveConcurrency"
+
+"$BIN/sandboxctl" run --max-concurrent-executions 2 -- true >"$OUT/concurrency-cli.out" 2>"$OUT/concurrency-cli.err"
+check "concurrency-cli-create" "CLI accepts concurrency limit" "$?" "0"
+concurrency_sb=$(sed -n 's/^sandbox: \(sbx_[a-z0-9]*\).*/\1/p' "$OUT/concurrency-cli.err" | head -1)
+"$BIN/sandboxctl" inspect "$concurrency_sb" >"$OUT/concurrency-cli-inspect.txt" 2>&1
+contains "concurrency-cli-inspect" "CLI reports concurrency limit" "$OUT/concurrency-cli-inspect.txt" "max_concurrent_executions: 2"
+"$BIN/sandboxctl" kill "$concurrency_sb" >/dev/null 2>&1
 
 # ---------------------------------------------------------------- doctor
 

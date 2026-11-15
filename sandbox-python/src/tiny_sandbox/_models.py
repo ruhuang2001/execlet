@@ -55,6 +55,7 @@ class Sandbox(_Model):
     state: str
     image: str = ""
     memory_mb: int | None = None
+    max_concurrent_executions: int | None = None
     pids_limit: int | None = None
     nano_cpus: int | None = None
     network: str | None = None
@@ -107,6 +108,7 @@ class _Request:
 class CreateSandboxRequest(_Request):
     image: str | None = None
     memory_mb: int | None = None
+    max_concurrent_executions: int | None = None
     pids_limit: int | None = None
     nano_cpus: int | None = None
     network: str | None = None

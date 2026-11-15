@@ -1,5 +1,7 @@
 package daemon
 
+import "time"
+
 // Retention bounds the memory the store keeps after sandboxes are gone.
 //
 // Three separate bounds apply, because they fail differently:
@@ -109,18 +111,27 @@ func (sb *sandbox) retainedBytesLocked() int {
 }
 
 // oldestDroppable returns the oldest execution retention may drop, or nil. The
-// running execution and the newest completed one are never dropped: the running
-// one is producing output, and the newest completed one is the result a caller
+// active executions and the most recently finished one are never dropped: active
+// executions produce output, and the most recently finished one is the result a caller
 // is about to fetch. Callers hold sb.mu.
 func (sb *sandbox) oldestDroppable() *execution {
-	if len(sb.executions) < 2 {
-		return nil
+	var newestCompleted *execution
+	var newestFinish time.Time
+	for _, ex := range sb.executions {
+		ex.mu.Lock()
+		if ex.finished != nil && (newestCompleted == nil || !ex.finished.Before(newestFinish)) {
+			newestCompleted = ex
+			newestFinish = *ex.finished
+		}
+		ex.mu.Unlock()
 	}
-	ex := sb.executions[0]
-	if ex == sb.running || !ex.completed() {
-		return nil
+
+	for _, ex := range sb.executions {
+		if ex != newestCompleted && sb.running[ex.id] == nil && ex.completed() {
+			return ex
+		}
 	}
-	return ex
+	return nil
 }
 
 // dropOldestLocked drops one completed execution and its idempotency key, and
@@ -135,7 +146,14 @@ func (sb *sandbox) dropOldestLocked() (int, bool) {
 	}
 	freed := ex.retained()
 	// Copy rather than reslice, so the dropped execution stays unreachable.
-	sb.executions = append([]*execution(nil), sb.executions[1:]...)
+	for i, candidate := range sb.executions {
+		if candidate == ex {
+			copy(sb.executions[i:], sb.executions[i+1:])
+			sb.executions[len(sb.executions)-1] = nil
+			sb.executions = sb.executions[:len(sb.executions)-1]
+			break
+		}
+	}
 	return freed, true
 }
 

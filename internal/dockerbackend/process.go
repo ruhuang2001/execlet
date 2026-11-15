@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"path"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,6 +25,8 @@ type process struct {
 	stderr *bufferedStream
 	done   chan struct{} // closed when the output stream has ended
 
+	signalMu sync.Mutex
+	exited   bool
 	mu       sync.Mutex
 	demuxErr error
 }
@@ -53,6 +57,7 @@ func (p *process) Wait() (int, error) {
 	if err != nil {
 		return -1, err
 	}
+	p.cleanupPID()
 	if inspect.ExitCode == nil {
 		return -1, nil
 	}
@@ -66,6 +71,11 @@ func (p *process) Wait() (int, error) {
 // A missing PID file means the process has not started yet or has already
 // been reaped; the first is retried briefly, the second is a success.
 func (p *process) Signal(sig daemon.Signal) error {
+	p.signalMu.Lock()
+	defer p.signalMu.Unlock()
+	if p.exited {
+		return nil
+	}
 	name := "TERM"
 	if sig == daemon.SignalKill {
 		name = "KILL"
@@ -84,6 +94,27 @@ func (p *process) Signal(sig daemon.Signal) error {
 		return err
 	}
 	return nil
+}
+
+// cleanupPID runs only after waitInspect confirms the exec stopped. The signal
+// lock prevents unlinking a PID while a cancellation helper is using it.
+func (p *process) cleanupPID() {
+	p.signalMu.Lock()
+	defer p.signalMu.Unlock()
+	if p.exited {
+		return
+	}
+	p.exited = true
+	name := path.Base(p.pidPath)
+	if path.Dir(p.pidPath) != PidDir || name == "." || name == ".." || name == "" {
+		return
+	}
+	if strings.ContainsAny(name, "/\\\x00") {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, _ = p.b.capture(ctx, p.containerID, []string{"/bin/rm", "-f", "--", p.pidPath})
 }
 
 // pid reads the wrapper's PID file, retrying while the exec is still starting.

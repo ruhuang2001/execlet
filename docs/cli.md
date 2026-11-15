@@ -141,3 +141,15 @@ leave an existing destination intact;
 the CLI never extracts the tar on the host. Upload accepts only regular local
 files and is attempted once. Quiesce destination writers before upload and
 inspect remote state after failure; runtime errors can leave partial extraction.
+
+## Concurrent executions
+
+Set max_concurrent_executions when creating a sandbox (1–8, default 1).
+Go uses CreateSandboxRequest.MaxConcurrentExecutions; Python and TypeScript use
+max_concurrent_executions; the CLI uses --max-concurrent-executions. Sandbox views
+return the limit. Start executions separately and stream each ID; cancellation
+normally affects only its selected execution. Pause/resume applies to all work.
+Container-removal fallback affects siblings, as described in the HTTP contract.
+Above one configured slot, unexplained exit 137 has termination_reason unknown,
+which is never a successful SDK outcome (Go ErrUnknown; Python error code unknown;
+TypeScript reason unknown with terminationReason unknown).

@@ -101,6 +101,10 @@ done
 curl -fsS "$SANDBOX_DOMAIN/healthz" >"$OUT/healthz.json" 2>&1
 check "healthz" "health endpoint answers" "$(grep -c '"status":"ok"' "$OUT/healthz.json")" "1"
 
+# Real Docker environment boundaries and identity; included in CI artifacts.
+python3 "$ROOT/scripts/e2e-env/run.py" "$SANDBOX_DOMAIN" "$OUT/env-contract.json" >"$OUT/env-contract.log" 2>&1
+check "env-contract" "bounds, replay identity, secrecy and isolation" "$?" "0"
+
 # ---------------------------------------------------------------- doctor
 
 note "doctor"

@@ -26,6 +26,7 @@ export DOCKER_HOST="$DOCKER_ENDPOINT"
 export SANDBOX_DOMAIN="http://127.0.0.1:$PORT" SANDBOX_API_KEY="file-e2e-$OWNER" E2E_ARTIFACT_DIR="$OUT"
 export PYTHONPATH="$ROOT/sandbox-python/src${PYTHONPATH:+:$PYTHONPATH}"
 docker info >"$OUT/docker-info.txt" 2>&1
+"${PYTHON:-python3}" scripts/file-e2e/prepare_image.py "$OUT"
 BUILD_FLAGS=()
 if [ "${E2E_COVERAGE:-0}" = "1" ]; then
  COVER_DIR=${FILES_COVER_DIR:-$OUT/coverage}

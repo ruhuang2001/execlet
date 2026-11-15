@@ -302,6 +302,17 @@ cleanup behavior when the runtime fails.
 - The CLI writes command output to stdout and its own status to stderr, mirrors the command's exit code, returns 130 on Ctrl+C, and attaches a suggested fix to common errors.
 - `sandboxctl doctor` checks configuration, server health, authentication, and Docker, then creates a sandbox, runs a command, and removes it.
 
+### Operational visibility
+
+sandboxd writes JSON logs through log/slog. Each handled HTTP request receives
+a validated or generated X-Request-ID echoed in the response; its context carries
+the same logger through execution start and completion. Access records contain
+method, route template, status, duration_ms, and bytes. Runtime errors expose only
+safe error codes in logs, because raw runtime text can contain user payloads.
+Public /healthz answers independently of Docker; public /readyz bounds a Docker
+/_ping check to two seconds and reports 503 when the runtime is unavailable.
+Readiness is an optional backend capability, leaving the execution interface stable.
+
 ### Server state
 
 State lives in memory, and it is bounded on four axes so a long-running agent cannot grow it without limit:

@@ -563,7 +563,7 @@ for _ in $(seq 1 50); do
 done
 reclaimed=$(docker ps -a --filter "name=^${crash_container}$" --format '{{.ID}}' | wc -l | tr -d ' ')
 check "startup sweep" "the next start reclaims the orphan by owner label" "$reclaimed" "0"
-contains "startup sweep log" "startup cleanup is reported" "$SERVER_LOG.restart" "startup cleanup removed 1 leftover container"
+contains "startup sweep log" "startup cleanup is reported" "$SERVER_LOG.restart" '"msg":"startup cleanup completed","removed":1'
 
 # ---------------------------------------------------------------- summary
 

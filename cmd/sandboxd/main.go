@@ -6,7 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -22,6 +22,7 @@ import (
 var version = "dev"
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 	addr := flag.String("addr", "127.0.0.1:8080", "listen address")
 	dockerHost := flag.String("docker", defaultDockerSocket(), "Docker socket path")
 	owner := flag.String("owner", "", "container ownership label; defaults to the listen address")
@@ -34,7 +35,8 @@ func main() {
 	}
 
 	if !isLoopback(*addr) && os.Getenv("SANDBOX_API_KEY") == "" {
-		log.Fatalf("sandboxd: refusing to listen on non-loopback %s without SANDBOX_API_KEY", *addr)
+		slog.Error("refusing non-loopback listener without authentication", "addr", *addr)
+		os.Exit(1)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -42,7 +44,8 @@ func main() {
 
 	backend, err := dockerbackend.Dial(ctx, *dockerHost)
 	if err != nil {
-		log.Fatalf("sandboxd: connect to docker at %s: %v", *dockerHost, err)
+		slog.Error("docker connection failed")
+		os.Exit(1)
 	}
 
 	// State is in memory, so containers from a previous process are orphans.
@@ -54,9 +57,9 @@ func main() {
 		*owner = *addr
 	}
 	if removed, err := backend.RemoveOwned(ctx, daemon.OwnerLabelKey, *owner); err != nil {
-		log.Printf("sandboxd: startup cleanup removed %d containers, some failed: %v", removed, err)
+		slog.Warn("startup cleanup incomplete", "removed", removed)
 	} else if removed > 0 {
-		log.Printf("sandboxd: startup cleanup removed %d leftover containers", removed)
+		slog.Info("startup cleanup completed", "removed", removed)
 	}
 
 	store := daemon.New(backend, daemon.WithOwnerLabel(*owner))
@@ -88,16 +91,18 @@ func main() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
-			log.Printf("sandboxd: shutdown: %v", err)
+			slog.Warn("http shutdown incomplete")
 		}
 		// Containers are this process's state, so they go with it. Startup
 		// cleanup covers a crash; this covers the ordinary stop.
 		store.Shutdown(context.Background())
+		slog.Info("shutdown completed")
 	}()
 
-	log.Printf("sandboxd %s listening on %s", version, *addr)
+	slog.Info("server listening", "version", version, "addr", *addr, "owner", *owner)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatalf("sandboxd: %v", err)
+		slog.Error("http server failed")
+		os.Exit(1)
 	}
 	// ListenAndServe returns as soon as Shutdown begins. Wait for the drain and
 	// the container sweep before exiting.
@@ -112,7 +117,7 @@ func defaultDockerSocket() string {
 		if after, ok := strings.CutPrefix(host, prefix); ok {
 			return after
 		}
-		log.Printf("sandboxd: ignoring non-unix DOCKER_HOST %q", host)
+		slog.Warn("ignoring non-unix DOCKER_HOST")
 	}
 	return "/var/run/docker.sock"
 }

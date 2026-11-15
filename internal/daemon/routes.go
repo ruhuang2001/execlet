@@ -1,8 +1,10 @@
 package daemon
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"time"
 )
 
 // Operation is one endpoint of the HTTP contract: a method and an
@@ -30,6 +32,7 @@ type Route struct {
 // The mux, the handler lookup, and the contract tests all work from it.
 var routes = []Route{
 	{Operation{http.MethodGet, "/healthz"}, (*Handler).handleHealth},
+	{Operation{http.MethodGet, "/readyz"}, (*Handler).handleReady},
 
 	{Operation{http.MethodPost, "/v1/sandboxes"}, (*Handler).createSandbox},
 	{Operation{http.MethodGet, "/v1/sandboxes"}, (*Handler).listSandboxes},
@@ -64,6 +67,22 @@ func Routes() []Operation {
 // Docker is briefly unreachable.
 func (h *Handler) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": h.version})
+}
+
+// ReadinessBackend optionally verifies runtime health without changing Backend.
+// A backend without a probe cannot establish readiness and returns unavailable.
+type ReadinessBackend interface{ Ping(context.Context) error }
+
+func (h *Handler) handleReady(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	status, state, docker := http.StatusServiceUnavailable, "unavailable", "unreachable"
+	if h.store != nil {
+		if backend, ok := h.store.backend.(ReadinessBackend); ok && backend.Ping(ctx) == nil {
+			status, state, docker = http.StatusOK, "ok", "ok"
+		}
+	}
+	writeJSON(w, status, map[string]string{"status": state, "version": h.version, "docker": docker})
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

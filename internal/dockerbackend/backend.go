@@ -89,6 +89,9 @@ func Dial(ctx context.Context, socketPath string) (*Backend, error) {
 	return New(api), nil
 }
 
+// Ping reports whether Docker answers its health probe.
+func (b *Backend) Ping(ctx context.Context) error { return b.api.Ping(ctx) }
+
 // ---------------------------------------------------------------- containers
 
 // Create creates and starts the sandbox container. It returns only once the

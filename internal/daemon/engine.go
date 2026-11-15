@@ -349,7 +349,7 @@ func (s *Sandboxes) readOOMBaseline(ctx context.Context, containerID string) (in
 }
 
 // run pumps output, waits for the process, classifies the exit, and finishes
-// the execution. It is the only writer of the terminal state.
+// the execution. Eviction may finish it first; finish admits one terminal writer.
 func (s *Sandboxes) run(ctx context.Context, sb *sandbox, ex *execution) {
 	var pumps sync.WaitGroup
 	pumps.Go(func() {

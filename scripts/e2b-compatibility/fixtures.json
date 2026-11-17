@@ -1,0 +1,14 @@
+{
+  "text": "hello 世界 🌍\nlast line\n",
+  "stdout": "out:世界🌍\n",
+  "stderr": "err:不同🙂\n",
+  "env_value": "two words $HOME $(touch /tmp/e2b-contract-injected)",
+  "shell": "[[ 'a b' == 'a b' ]] && printf '%s' 'alpha beta' | tr 'a-z' 'A-Z'",
+  "probe": "import json,os,pwd,platform; print(json.dumps({'user':pwd.getpwuid(os.getuid()).pw_name,'uid':os.getuid(),'home':os.environ['HOME'],'cwd':os.getcwd(),'python':platform.python_version()}))",
+  "output": "import os,time; out=('out:世界🌍\n'*200).encode(); err=('err:不同🙂\n'*117).encode(); [(os.write(1,out[i:i+5]),time.sleep(.0001)) for i in range(0,len(out),5)]; [(os.write(2,err[i:i+7]),time.sleep(.0001)) for i in range(0,len(err),7)]; raise SystemExit(37)",
+  "late": "import pathlib,time; pathlib.Path('/tmp/started').write_text('yes'); print('started',flush=True); time.sleep(3); pathlib.Path('/tmp/late').write_text('continued')",
+  "env": "import json,os,pathlib; print(json.dumps({'A':os.environ.get('CONTRACT_A'),'value':os.environ.get('CONTRACT_VALUE'),'injected':pathlib.Path('/tmp/e2b-contract-injected').exists()}))",
+  "listing": "import pathlib; p=pathlib.Path('/home/user/list-case'); p.mkdir(); [(p/f'item-{i:04}').write_text('x') for i in range(1007)]; (p/'directory').mkdir(); (p/'link').symlink_to('item-0000'); (p/'item-0000').chmod(0o640)",
+  "artifact": "import pathlib; p=pathlib.Path('/home/user/task'); nums=[int(x) for x in (p/'input.txt').read_text().splitlines()]; (p/'result.txt').write_text(str(sum(nums))+'\n'); (p/'copy.bin').write_bytes((p/'input.bin').read_bytes()[::-1]); print('artifact-ready')",
+  "counter": "import pathlib,time; p=pathlib.Path('/tmp/counter'); p.write_text(str(int(p.read_text())+1) if p.exists() else '1'); [(print(f'item-{i:02}',flush=True),time.sleep(.08)) for i in range(24)]"
+}

@@ -48,6 +48,7 @@ class FaultProxy:
             do_POST = do_GET
             do_DELETE = do_GET
             do_PUT = do_GET
+            do_PATCH = do_GET
 
             def disconnect(self):
                 self.close_connection = True

@@ -4,6 +4,7 @@ The current implementation covers sandbox lifecycle, execution, streaming, error
 
 | Capability | Next design step | Main cost or risk |
 |---|---|---|
+| E2B migration subset | Follow the [pinned subset and acceptance plan](e2b-compatibility.md) for Python and TypeScript basic Sandbox workflows | Shell, timeouts, errors and cleanup must match tested behavior; no full protocol compatibility claim |
 | Templates and snapshots | Immutable, versioned images; separate filesystem snapshots from memory checkpoints; record runtime compatibility | Storage, cold-start time, misleading "restore" semantics |
 | Persistent volumes | Define mount ownership, quota, and cleanup independently of the sandbox lifetime | Data isolation, orphaned storage |
 | Secret injection | Short-lived, narrowly scoped credentials; redaction in logs and server-side audit | Leakage through logs, environment variables, or untrusted code |

@@ -1,0 +1,417 @@
+{
+  "baseline": "2.64.0",
+  "reference_kind": "source-derived contract, not a cloud capture",
+  "derived_from": [
+    {
+      "what": "Python SDK 2.64.0 published wheel",
+      "where": "pypi e2b==2.64.0",
+      "sha256": "a5fff266802661796539574878d82dbb8a17823be3013a6aeff1460b4cff1682",
+      "files": [
+        "sandbox_sync/main.py",
+        "sandbox_sync/commands/command.py",
+        "sandbox_sync/commands/command_handle.py",
+        "sandbox_sync/filesystem/filesystem.py",
+        "sandbox/commands/command_handle.py",
+        "exceptions.py"
+      ]
+    },
+    {
+      "what": "TypeScript SDK 2.64.0 published bundle",
+      "where": "npm e2b@2.64.0",
+      "integrity": "sha512-ywiGIEEXE9GsyQazWNORpMif1RMx1zIjjFJec4I5a8+G0HbFBn6ZpSypafwSxzjYl9ZZJ/p+sQMYQUUYnLi0ZA==",
+      "symbols": [
+        "CommandStartOpts",
+        "CommandResult",
+        "CommandExitError",
+        "WriteInfo",
+        "EntryInfo",
+        "FileType",
+        "timeoutToSeconds"
+      ]
+    },
+    {
+      "what": "shell contract",
+      "where": "docs.e2b.dev/commands.md"
+    },
+    {
+      "what": "lifetime",
+      "where": "docs.e2b.dev/sandbox.md, docs.e2b.dev/faq/sandbox-lifetime.md"
+    },
+    {
+      "what": "files",
+      "where": "docs.e2b.dev/filesystem/read-write.md"
+    },
+    {
+      "what": "connect TTL",
+      "where": "spec/openapi.yml /v2/sandboxes/{sandboxID}/connect, dated"
+    }
+  ],
+  "not_a_substitute_for": "a live cloud capture; that is an optional drift check, never the basis",
+  "cases": {
+    "A01": {
+      "kind": "parity",
+      "title": "Lifecycle and absent sandbox",
+      "budget": 120,
+      "checks": [
+        "id is opaque text",
+        "created sandbox is running",
+        "kill returns true",
+        "second kill is false",
+        "absent connect uses not-found",
+        "killed sandbox is gone"
+      ],
+      "expects": {
+        "kill first call": true,
+        "kill repeat": false,
+        "connect after kill": "sandbox_not_found",
+        "container after kill": "gone"
+      }
+    },
+    "A02": {
+      "kind": "parity",
+      "title": "Bash, user, home and cwd",
+      "budget": 120,
+      "checks": [
+        "bash pipeline output",
+        "exit zero is a normal result",
+        "login bash, not sh",
+        "non-root guest user",
+        "home is /home/user",
+        "default cwd is home",
+        "command cwd applies",
+        "command cwd does not persist"
+      ],
+      "expects": {
+        "shell": "/bin/bash -l -c",
+        "pipeline stdout": "ALPHA BETA",
+        "guest user": "non-root named user",
+        "home": "/home/user",
+        "default cwd": "/home/user",
+        "cwd scope": "per command"
+      }
+    },
+    "A03": {
+      "kind": "parity",
+      "title": "Environment isolation and fresh-client reconnect",
+      "budget": 180,
+      "checks": [
+        "create env is visible",
+        "env value is data only",
+        "command env overrides",
+        "override does not persist",
+        "env survives a new client",
+        "second sandbox has no shared env"
+      ],
+      "expects": {
+        "create env": "base",
+        "command env": "overrides for that call",
+        "after override": "base",
+        "new client": "base",
+        "other sandbox": "absent",
+        "env value": "data, never interpolated"
+      }
+    },
+    "A04": {
+      "kind": "parity",
+      "title": "Output, callbacks and nonzero exceptions",
+      "budget": 120,
+      "checks": [
+        "nonzero raises the command-exit family",
+        "exit 37 preserved",
+        "stdout preserved",
+        "stderr preserved",
+        "callbacks concatenate to stdout",
+        "callbacks concatenate to stderr",
+        "streams were delivered progressively",
+        "callbacks completed before return",
+        "success result carries output"
+      ],
+      "expects": {
+        "stdout": "out:世界🌍\\n x200",
+        "stderr": "err:不同🙂\\n x117",
+        "nonzero": "CommandExitException/CommandExitError",
+        "exit": 37,
+        "both streams retained": true,
+        "callbacks": "concatenation equals the stream"
+      }
+    },
+    "A05": {
+      "kind": "parity",
+      "title": "Wait deadline does not kill remote work",
+      "budget": 120,
+      "checks": [
+        "deadline raises timeout",
+        "marker written before the deadline",
+        "work continues after the wait",
+        "sandbox still healthy",
+        "zero disables only the local deadline",
+        "callback error is not retried",
+        "callback error does not kill the process"
+      ],
+      "expects": {
+        "wait deadline": "TimeoutException/TimeoutError",
+        "remote effect": "continues",
+        "wait 0": "no local deadline",
+        "callback error": "propagates without retry or kill"
+      }
+    },
+    "A06": {
+      "kind": "parity",
+      "title": "Lifetime shortening and extension",
+      "budget": 180,
+      "checks": [
+        "default duration applies",
+        "set_timeout shortens from now",
+        "shortened sandbox expires",
+        "expired sandbox cannot be revived",
+        "set_timeout extends from now",
+        {"language": "typescript", "any": ["1501 ms becomes 2 s"]}
+      ],
+      "expects": {
+        "default lifetime": 300,
+        "set_timeout": "now plus duration, may shorten",
+        "expired": "not revivable",
+        "ts 1501 ms": 2
+      }
+    },
+    "A07": {
+      "kind": "parity",
+      "title": "Connect extends but never shortens lifetime",
+      "budget": 430,
+      "checks": [
+        "short connect never shortens",
+        "files survive connect",
+        "long connect extends",
+        "omitted duration applies 300 s"
+      ],
+      "expects": {
+        "connect shorter": "never shortens",
+        "connect longer": "extends",
+        "omitted connect duration": 300,
+        "files": "survive"
+      }
+    },
+    "A08": {
+      "kind": "parity",
+      "title": "Text, bytes, empty and relative files",
+      "budget": 120,
+      "checks": [
+        "text round trip",
+        "bytes round trip",
+        "empty text stays empty",
+        "empty bytes stay empty",
+        "relative paths resolve in the guest",
+        "missing file is not empty"
+      ],
+      "expects": {
+        "text": "exact UTF-8",
+        "bytes": "bytearray / Uint8Array",
+        "empty": "empty, not missing",
+        "relative": "guest home",
+        "missing": "FileNotFoundException/FileNotFoundError"
+      }
+    },
+    "A09": {
+      "kind": "parity",
+      "title": "Overwrite, parents and write metadata",
+      "budget": 120,
+      "checks": [
+        "WriteInfo names the file",
+        "overwrite replaces the old suffix",
+        "guest metadata is real",
+        "owner is the guest user",
+        "failed write is an error",
+        "failed write changed nothing"
+      ],
+      "expects": {
+        "write returns": "WriteInfo",
+        "parents": "created",
+        "overwrite": "old suffix gone",
+        "metadata": "guest mode and owner"
+      }
+    },
+    "A10": {
+      "kind": "parity",
+      "title": "Directory metadata and complete pagination",
+      "budget": 180,
+      "checks": [
+        "empty directory is an array",
+        "1007-entry page is complete",
+        "no cursor envelope leaks",
+        "file mode is real",
+        "directory type",
+        "symlink type",
+        "symlink target",
+        "entry metadata",
+        "modified time is recent"
+      ],
+      "expects": {
+        "list returns": "EntryInfo array",
+        "page": "all 1007 plus 2",
+        "symlink": "type and target"
+      }
+    },
+    "A11": {
+      "kind": "parity",
+      "title": "Cleanup on success and application error",
+      "budget": 120,
+      "checks": [
+        "cleanup reports no application error",
+        "context removed the sandbox",
+        "application exception is re-raised",
+        "cleanup ran after the exception",
+        "no leftover containers"
+      ],
+      "expects": {
+        "context exit": "kills",
+        "exception": "re-raised after cleanup"
+      }
+    },
+    "A12": {
+      "kind": "local",
+      "title": "Reject unsupported options before side effects",
+      "budget": 180,
+      "checks": [
+        "deferred method fails explicitly",
+        "guard file unchanged",
+        "template rejected before side effects",
+        "user rejected before side effects",
+        "metadata rejected before side effects",
+        "stdin rejected before side effects",
+        "background rejected before side effects",
+        "retain rejected before side effects",
+        "depth rejected before side effects",
+        "misspelled rejected before side effects",
+        "no extra container was created",
+        "no container before the valid create"
+      ],
+      "expects": {
+        "deferred options": "invalid before any side effect"
+      }
+    },
+    "A13": {
+      "kind": "local",
+      "title": "File, output, event and scan bounds",
+      "budget": 240,
+      "checks": [
+        "exactly 10 MiB is accepted",
+        "over-limit upload fails",
+        "over-limit upload kept the old bytes",
+        "exactly 1 MiB output is normal",
+        "over-limit output is never a normal success",
+        "truncation is explicit with evidence",
+        "scan cap is never a short list",
+        {"any": ["event-capped success keeps every line", "event cap is explicit"]}
+      ],
+      "expects": {
+        "file 10 MiB": "accepted",
+        "over": "error, old bytes kept",
+        "output 1 MiB": "normal",
+        "over output": "explicit truncation error",
+        "scan over": "never a short list"
+      }
+    },
+    "A14": {
+      "kind": "local",
+      "title": "Accepted-start loss and SSE replay",
+      "budget": 180,
+      "checks": [
+        "accepted-start loss was injected",
+        "lost start response is not silent",
+        "side effect happened once",
+        "SSE cut was injected",
+        "reconnect resumes without gaps or duplicates",
+        "second run incremented once"
+      ],
+      "expects": {
+        "accepted start loss": "one side effect",
+        "SSE cut": "resumes with no gap or duplicate"
+      }
+    },
+    "A15": {
+      "kind": "local",
+      "title": "Unconfirmed Docker removal",
+      "budget": 180,
+      "checks": [
+        "removal failure was injected",
+        "unconfirmed removal is not success",
+        "uncertainty is reported",
+        "orphan container still exists while the retry is pending",
+        "observer can remove only its own container",
+        "no orphan remains"
+      ],
+      "expects": {
+        "failed removal": "not confirmed success"
+      }
+    },
+    "A16": {
+      "kind": "local",
+      "title": "Authentication, legacy server and restart",
+      "budget": 180,
+      "checks": [
+        "wrong key is an auth error",
+        "failed auth created nothing",
+        "server restart loses in-memory state",
+        "restart is not a silent reconnect",
+        "restart cleaned its containers",
+        "unknown request fields are additive",
+        "additive create is a real resource"
+      ],
+      "expects": {
+        "wrong key": "AuthenticationException/AuthenticationError",
+        "restart": "state lost, connect not_found",
+        "unknown fields": "additive"
+      }
+    },
+    "W01": {
+      "kind": "parity",
+      "title": "Upload, execute, inspect and download artifacts",
+      "budget": 180,
+      "checks": [
+        "task printed its marker",
+        "text artifact",
+        "binary artifact",
+        "task directory lists artifacts",
+        "deliberate failure is distinguishable",
+        "kill succeeds",
+        "sandbox is gone after the workflow"
+      ],
+      "expects": {
+        "workflow": "upload, run, list, download, inspect failure, kill"
+      }
+    },
+    "W02": {
+      "kind": "parity",
+      "title": "Multi-turn workspace in fresh client process",
+      "budget": 180,
+      "checks": [
+        "environment set for the workflow",
+        "create-time env visible",
+        "file written in process one",
+        "second task sees the workspace",
+        "renewal extends lifetime",
+        "kill succeeds"
+      ],
+      "expects": {
+        "workflow": "create with env, write, reconnect, second task, renew, kill"
+      }
+    },
+    "W03": {
+      "kind": "parity",
+      "title": "Long foreground task and explicit cleanup",
+      "budget": 180,
+      "checks": [
+        "long task completed",
+        "output arrives progressively",
+        "callback order is preserved",
+        "wait deadline raises timeout",
+        "work continues without a connect probe",
+        "explicit cleanup",
+        "no process survives cleanup"
+      ],
+      "expects": {
+        "workflow": "progressive output, wait deadline, continued work, explicit kill"
+      }
+    }
+  }
+}

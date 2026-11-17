@@ -1,0 +1,191 @@
+"""Private real sandboxd plus fault proxies. Only run-owned resources are touched."""
+from __future__ import annotations
+
+import importlib.util
+import json
+import os
+from pathlib import Path
+import secrets
+import select
+import socket
+import socketserver
+import subprocess
+import threading
+import time
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent.parent
+
+
+def _load(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class DockerFault:
+    """Unix-socket proxy; can fail one container removal without touching others."""
+
+    def __init__(self, path):
+        self.path = str(path)
+        self.lock = threading.Lock()
+        self.fail_remove = False
+        self.requests = []
+        upstream_path = os.environ.get('DOCKER_HOST') or subprocess.run(
+            ['docker', 'context', 'inspect', '--format', '{{.Endpoints.docker.Host}}'],
+            capture_output=True, text=True, check=True).stdout.strip()
+        if not upstream_path.startswith('unix://'):
+            raise RuntimeError('local guards require a unix Docker endpoint')
+        self.upstream = upstream_path.removeprefix('unix://')
+        outer = self
+
+        class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+            daemon_threads = True
+
+        class Handler(socketserver.BaseRequestHandler):
+            def handle(self):
+                data = b''
+                self.request.settimeout(15)
+                while b'\r\n\r\n' not in data:
+                    part = self.request.recv(65536)
+                    if not part:
+                        return
+                    data += part
+                line = data.split(b'\r\n', 1)[0].decode('latin-1')
+                # Docker is addressed with a negotiated version prefix such
+                # as /v1.52, so never match the path from the first byte.
+                path = line.split(' ')[1] if ' ' in line else ''
+                with outer.lock:
+                    outer.requests.append(line)
+                    fail = outer.fail_remove and line.startswith('DELETE ') and '/containers/' in path
+                if fail:
+                    body = b'{"message":"injected removal failure"}'
+                    self.request.sendall(
+                        b'HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\nContent-Length: '
+                        + str(len(body)).encode() + b'\r\nConnection: close\r\n\r\n' + body)
+                    return
+                with socket.socket(socket.AF_UNIX) as upstream:
+                    upstream.connect(outer.upstream)
+                    head, body = data.split(b'\r\n\r\n', 1)
+                    # A large upload arrives after its headers: forward the rest
+                    # as it comes, in both directions, until both sides close.
+                    length = None
+                    for line in head.split(b'\r\n'):
+                        name, _, value = line.partition(b':')
+                        if name.strip().lower() == b'content-length':
+                            length = int(value.strip())
+                    head = b'\r\n'.join(x for x in head.split(b'\r\n') if not x.lower().startswith(b'connection:'))
+                    upstream.sendall(head + b'\r\nConnection: close\r\n\r\n' + body)
+                    open_reads = 2
+                    while open_reads:
+                        reads = [upstream] if length is None or len(body) >= length else [upstream, self.request]
+                        ready, _, _ = select.select(reads, [], [], 30)
+                        if not ready:
+                            return
+                        for peer in ready:
+                            chunk = peer.recv(65536)
+                            if not chunk:
+                                open_reads -= 1
+                                if peer is self.request:
+                                    # Client finished its body; keep draining upstream.
+                                    try:
+                                        upstream.shutdown(socket.SHUT_WR)
+                                    except OSError:
+                                        pass
+                                continue
+                            (upstream if peer is self.request else self.request).sendall(chunk)
+
+        self.server = Server(self.path, Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def arm(self, fail):
+        with self.lock:
+            self.fail_remove = fail
+
+    def removals(self):
+        with self.lock:
+            return [r for r in self.requests if r.startswith('DELETE ') and '/containers/' in r]
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+        Path(self.path).unlink(missing_ok=True)
+
+
+class Local:
+    """One private server per case, addressed by a run-unique owner label."""
+
+    def __init__(self, out, owner, server, image):
+        if not owner.startswith('e2b-contract-'):
+            raise ValueError('refusing an owner label this runner did not mint')
+        self.out, self.owner, self.server_path, self.image = Path(out), owner, server, image
+        self.port = self._free_port()
+        self.api_key = secrets.token_hex(24)
+        self.process = None
+        self.faults = None
+        self.docker = None
+        self._started = False
+
+    @staticmethod
+    def _free_port():
+        with socket.socket() as s:
+            s.bind(('127.0.0.1', 0))
+            return s.getsockname()[1]
+
+    @property
+    def domain(self):
+        return self.faults.domain if self.faults else f'http://127.0.0.1:{self.port}'
+
+    def start(self):
+        if not self._started:
+            self._started = True
+            self.docker = DockerFault(self.out / 'docker.sock')
+            # Adapters talk to the fault proxy, so every guard sees real traffic.
+            self.faults = PROXY.FaultProxy(self.port, self.out / 'proxy.jsonl')
+        log = (self.out / 'sandboxd.log').open('w')
+        # sandboxd has no image flag: the adapter selects the compatibility
+        # image per create, from CONTRACT_OPTIONS below.
+        self.process = subprocess.Popen(
+            [self.server_path, '-addr', f'127.0.0.1:{self.port}', '-docker', self.docker.path,
+             '-owner', self.owner],
+            env={**os.environ, 'SANDBOX_API_KEY': self.api_key}, stdout=log, stderr=log)
+        import http.client
+        for _ in range(150):
+            if self.process.poll() is not None:
+                raise RuntimeError('sandboxd exited during startup; see sandboxd.log')
+            try:
+                conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=2)
+                conn.request('GET', '/healthz')
+                if conn.getresponse().status == 200:
+                    conn.close()
+                    return
+            except OSError:
+                time.sleep(.1)
+        raise RuntimeError('sandboxd never became healthy')
+
+    def environment(self, language):
+        """Adapter connection configuration. Native names, no E2B cloud fallback."""
+        return {'SANDBOX_DOMAIN': self.domain, 'SANDBOX_API_KEY': self.api_key,
+                'CONTRACT_OPTIONS': json.dumps({'endpoint': self.domain, 'api_key': self.api_key,
+                                                'image': self.image})}
+
+    def restart(self):
+        self.process.terminate()
+        self.process.wait(timeout=20)
+        self.start()
+
+    def close(self):
+        if self.process and self.process.poll() is None:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=20)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait()
+        if self.docker:
+            self.docker.close()
+
+
+PROXY = _load('e2b_fault_proxy', ROOT / 'sandbox-python/e2e/proxy.py')
+Fault = PROXY.Fault

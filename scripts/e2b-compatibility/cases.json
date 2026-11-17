@@ -1,0 +1,24 @@
+{
+  "baseline": "2.64.0",
+  "cases": [
+    {"id":"A01","kind":"parity","title":"Lifecycle and absent sandbox","budget":120},
+    {"id":"A02","kind":"parity","title":"Bash, user, home and cwd","budget":120},
+    {"id":"A03","kind":"parity","title":"Environment isolation and fresh-client reconnect","budget":180},
+    {"id":"A04","kind":"parity","title":"Output, callbacks and nonzero exceptions","budget":120},
+    {"id":"A05","kind":"parity","title":"Wait deadline does not kill remote work","budget":120},
+    {"id":"A06","kind":"parity","title":"Lifetime shortening and extension","budget":180},
+    {"id":"A07","kind":"parity","title":"Connect extends but never shortens lifetime","budget":430},
+    {"id":"A08","kind":"parity","title":"Text, bytes, empty and relative files","budget":120},
+    {"id":"A09","kind":"parity","title":"Overwrite, parents and write metadata","budget":120},
+    {"id":"A10","kind":"parity","title":"Directory metadata and complete pagination","budget":180},
+    {"id":"A11","kind":"parity","title":"Cleanup on success and application error","budget":120},
+    {"id":"A12","kind":"local","title":"Reject unsupported options before side effects","budget":180},
+    {"id":"A13","kind":"local","title":"File, output, event and scan bounds","budget":240},
+    {"id":"A14","kind":"local","title":"Accepted-start loss and SSE replay","budget":180},
+    {"id":"A15","kind":"local","title":"Unconfirmed Docker removal","budget":180},
+    {"id":"A16","kind":"local","title":"Authentication, legacy server and restart","budget":180},
+    {"id":"W01","kind":"parity","title":"Upload, execute, inspect and download artifacts","budget":180},
+    {"id":"W02","kind":"parity","title":"Multi-turn workspace in fresh client process","budget":180},
+    {"id":"W03","kind":"parity","title":"Long foreground task and explicit cleanup","budget":180}
+  ]
+}

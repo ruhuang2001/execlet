@@ -227,8 +227,12 @@ func TestFailedRemovalIsRetried(t *testing.T) {
 	container := sb.ID
 	_ = container
 
-	if _, err := s.Delete(ctx, sb.ID); err != nil {
-		t.Fatalf("delete: %v", err)
+	// The delete reports the container that is still there. Answering success
+	// would tell the caller nothing of this sandbox is running while it is.
+	if _, err := s.Delete(ctx, sb.ID); err == nil {
+		t.Fatal("delete succeeded after the removal failed; an unconfirmed removal is not cleanup")
+	} else if code := daemon.CodeOf(err); code != daemon.CodeBackendError {
+		t.Fatalf("code = %s, want backend_error: the runtime, not the request, is what failed", code)
 	}
 	if n := s.ScheduleRemovalCountForTest(); n != 1 {
 		t.Fatalf("%d removals scheduled after one failure, want 1", n)
@@ -243,5 +247,9 @@ func TestFailedRemovalIsRetried(t *testing.T) {
 	}
 	if got := be.State(s.ContainerIDForTest(sb.ID)); got != daemon.LivenessMissing {
 		t.Fatalf("container = %v after the retry, want missing", got)
+	}
+	// Once the retry has removed it, the same delete confirms and succeeds.
+	if _, err := s.Delete(ctx, sb.ID); err != nil {
+		t.Fatalf("delete after a successful retry: %v", err)
 	}
 }

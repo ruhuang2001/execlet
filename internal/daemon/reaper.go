@@ -140,7 +140,7 @@ func (s *Sandboxes) reapOne(ctx context.Context, sb *sandbox, now time.Time) {
 		// caller's context, so a reaper-driven kill during shutdown still
 		// completes; it also schedules a retry when the runtime does not
 		// answer in time.
-		s.terminateLocked(ctx, sb, reason)
+		_ = s.terminateLocked(ctx, sb, reason)
 	}
 }
 

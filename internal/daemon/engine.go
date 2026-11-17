@@ -280,7 +280,7 @@ func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req Ex
 	startCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), BackendCallTimeout)
 	proc, err := s.backend.Exec(startCtx, sb.container, ExecSpec{
 		Command: req.Command,
-		Env:     req.envPairs(),
+		Env:     mergedEnv(sb.opts.env, req.Env),
 		Dir:     req.Cwd,
 		Stdin:   req.Stdin,
 	})
@@ -400,7 +400,7 @@ func (s *Sandboxes) run(ctx context.Context, sb *sandbox, ex *execution) {
 		sb.lastActivity = now
 	}
 	if outcome.SandboxLost {
-		s.terminateLocked(context.WithoutCancel(context.Background()), sb, KillEvicted)
+		_ = s.terminateLocked(context.WithoutCancel(context.Background()), sb, KillEvicted) // Removal failures are queued for retry.
 	}
 	sb.pruneExecutionsLocked()
 	sb.mu.Unlock()
@@ -500,7 +500,7 @@ func (s *Sandboxes) CancelExecution(ctx context.Context, sandboxID, executionID 
 	// The process tree could not be confirmed gone. Removing the container is
 	// the only way to guarantee nothing keeps running.
 	sb.mu.Lock()
-	s.terminateLocked(cleanup, sb, KillRequested)
+	_ = s.terminateLocked(cleanup, sb, KillRequested) // The execution snapshot below remains the cancellation result.
 	sb.mu.Unlock()
 	// Removing the container ends the process, so the runner finishes the
 	// execution. Give it a moment, then report what is known.
@@ -532,7 +532,7 @@ func (s *Sandboxes) timeoutExecution(ctx context.Context, sb *sandbox, ex *execu
 			// The process outlives its deadline by one beat and timedOut is
 			// already set, so the deadline is not reclaimed. Removing the
 			// container is the only guarantee left.
-			s.terminateLocked(ctx, sb, KillTimeout)
+			_ = s.terminateLocked(ctx, sb, KillTimeout) // Removal failures are queued for retry.
 			sb.mu.Unlock()
 			return
 		}
@@ -552,7 +552,7 @@ func (s *Sandboxes) timeoutExecution(ctx context.Context, sb *sandbox, ex *execu
 	}
 
 	sb.mu.Lock()
-	s.terminateLocked(cleanup, sb, KillTimeout)
+	_ = s.terminateLocked(cleanup, sb, KillTimeout) // Removal failures are queued for retry.
 	sb.mu.Unlock()
 }
 

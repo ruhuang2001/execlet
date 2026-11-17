@@ -181,6 +181,23 @@ func (h *Handler) getSandbox(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, sb)
 }
 
+// updateSandbox changes the lifetime deadline. Body fields are mutually
+// exclusive, so one request can never both replace and extend.
+func (h *Handler) updateSandbox(w http.ResponseWriter, r *http.Request) {
+	var req UpdateRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	sb, err := h.store.Update(r.Context(), r.PathValue("sandbox_id"), req)
+	if err != nil {
+		writeDaemonError(r.Context(), w, err)
+		return
+	}
+	contextLogger(r.Context()).InfoContext(r.Context(), "sandbox lifetime updated",
+		"sandbox_id", sb.ID, "timeout_seconds", sb.TimeoutSeconds)
+	writeJSON(w, http.StatusOK, sb)
+}
+
 func (h *Handler) deleteSandbox(w http.ResponseWriter, r *http.Request) {
 	sb, err := h.store.Delete(r.Context(), r.PathValue("sandbox_id"))
 	if err != nil {

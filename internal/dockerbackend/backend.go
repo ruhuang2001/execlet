@@ -23,6 +23,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -327,19 +328,96 @@ func (b *Backend) ReadFile(ctx context.Context, containerID, path string) ([]byt
 // WriteFile writes a file through the archive API. The archive is extracted at
 // "/" with the full relative path as its entry name, which makes Docker create
 // every missing parent directory itself.
+//
+// The archive carries the guest's default uid and gid on the file and on every
+// parent directory it creates. Docker extracts as root, so without this a file
+// written into a fresh directory is root-owned and a non-root guest cannot then
+// write beside it — the common shape of an upload followed by a task that
+// produces output in the same directory.
 func (b *Backend) WriteFile(ctx context.Context, containerID, path string, data []byte) error {
 	if !strings.HasPrefix(path, "/") {
 		return fmt.Errorf("dockerbackend: path %q must be absolute", path)
 	}
-	tarBody, err := dockerapi.BuildFileTar(strings.TrimPrefix(path, "/"), data)
+	name := strings.TrimPrefix(path, "/")
+	uid, gid, dirs := b.writeOwnership(ctx, containerID, name)
+	tarBody, err := dockerapi.BuildOwnedFileTar(name, data, uid, gid, dirs)
 	if err != nil {
 		return err
 	}
 	if err := b.api.ArchivePut(ctx, containerID, "/", tarBody); err != nil {
 		return notFound(err, "%s", path)
 	}
+	// Docker answers 200 for an extraction it could not perform: a write under
+	// /proc is accepted and no file appears. The caller asked for the file, so
+	// the file is what confirms the write; a request that changed nothing must
+	// not read as success.
+	out, err := b.captureAs(ctx, containerID, "0", []string{"/bin/sh", "-c", writeVerifyScript, "write-verify", path})
+	if err != nil {
+		return &daemon.Error{Code: daemon.CodeBackendError, Message: "cannot confirm the write to " + path, Err: err}
+	}
+	if string(out) != "ok" {
+		return &daemon.Error{Code: daemon.CodeInvalidRequest, Message: "destination cannot hold a file: " + path}
+	}
 	return nil
 }
+
+// Fixed shell program; the target path is a positional argument, never code.
+const writeVerifyScript = `if [ -f "$1" ]; then printf ok; elif [ -e "$1" ]; then printf notfile; else printf missing; fi`
+
+// writeOwnership reports the ownership a write into name must carry, and the
+// ancestors that do not exist yet, shallowest first.
+//
+// One exec runs as the container's default user, so the ids are that user's
+// without naming it. It does not require `id`: the shell reads the ids from
+// /proc/self/status using builtins. When the probe cannot run, including when
+// /bin/sh is unavailable, the write proceeds as root — the
+// behaviour before this existed — rather than failing an upload that worked.
+//
+// Only missing ancestors are listed. An existing directory keeps its own owner
+// and mode: /home/user must stay the guest's, and /tmp must stay writable by
+// everyone.
+func (b *Backend) writeOwnership(ctx context.Context, containerID, name string) (uid, gid int, dirs []string) {
+	out, err := b.capture(ctx, containerID, []string{"/bin/sh", "-c", writeOwnershipScript, "write-owner", name})
+	if err != nil {
+		return 0, 0, nil
+	}
+	for line := range strings.SplitSeq(string(out), "\x00") {
+		switch {
+		case line == "":
+		case strings.HasPrefix(line, "uid="):
+			uid, _ = strconv.Atoi(strings.TrimPrefix(line, "uid="))
+		case strings.HasPrefix(line, "gid="):
+			gid, _ = strconv.Atoi(strings.TrimPrefix(line, "gid="))
+		case strings.HasPrefix(line, "dir="):
+			dirs = append(dirs, strings.TrimPrefix(line, "dir="))
+		}
+	}
+	// A shallowest-first order is what extracting the archive needs: a child
+	// entry under a directory Docker has not created yet would fail.
+	slices.Reverse(dirs)
+	return uid, gid, dirs
+}
+
+// Fixed shell program; the target name is a positional argument, never code.
+// It prints the default user's ids, then one NUL-delimited dir= entry per
+// missing ancestor. Paths stay intact even when they contain newlines.
+const writeOwnershipScript = `set -f
+u=0; g=0
+while read -r key value rest; do
+ case "$key" in
+  Uid:) u=$value;;
+  Gid:) g=$value;;
+ esac
+done < /proc/self/status
+printf 'uid=%s\0gid=%s\0' "$u" "$g"
+parent="/$1"
+parent=${parent%/*}
+while [ -n "$parent" ]; do
+ [ -e "$parent" ] && break
+ printf 'dir=%s\0' "${parent#/}"
+ parent=${parent%/*}
+done
+`
 
 // ---------------------------------------------------------------- helpers
 

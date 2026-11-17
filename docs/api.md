@@ -223,6 +223,13 @@ Request (all fields optional):
   network namespace with outbound access, so package installs and HTTP calls
   work. `none` removes networking entirely. Host networking is not offered: it
   would expose every host socket to code the caller does not control.
+- `env` is the sandbox's own environment. Every execution sees it, and it
+  survives a client reconnecting and creating a new Sandbox object. A
+  per-execution `env` entry overrides it for that execution only. The same
+  limits as execution `env` apply, and exceeding one is `400 invalid_request`.
+  Values are never echoed in a response or written to a log. An execution
+  record still retains only an entry count and a fingerprint of the per-command
+  environment, so a replay comparison stays meaningful without storing secrets.
 
 `201` with the Sandbox. Not idempotent; clients must not retry it automatically.
 
@@ -234,13 +241,33 @@ Request (all fields optional):
 
 `200` Sandbox.
 
+### `PATCH /v1/sandboxes/{sandbox_id}`
+
+Lifetime is the only mutable property: image, memory, CPU, pids and network
+describe the container itself and are fixed at creation. The body sets exactly
+one field, and sending both is `400 invalid_request`.
+
+- `{"timeout_seconds": n}` replaces the deadline with now plus `n`, so it may
+  shorten or lengthen it. `0` removes the deadline and means "run until killed",
+  matching the create-time meaning. A later resume re-arms the new value.
+- `{"extend_seconds": n}` keeps the later of the current deadline and now plus
+  `n`, so it can only ever extend. This is the rule a reconnecting client uses;
+  `0` is a no-op rather than an unbounded lifetime.
+
+`200` Sandbox. A pending or killed sandbox is `409 invalid_state`; a paused one
+is updated in place without resuming. Negative values are `400 invalid_request`.
+An update never changes an execution's own deadline, and it cannot revive an
+expired sandbox.
+
 ### `POST /v1/sandboxes/{sandbox_id}/pause`, `POST /v1/sandboxes/{sandbox_id}/resume`
 
 No body. `200` Sandbox. Idempotent per the transition table.
 
 ### `DELETE /v1/sandboxes/{sandbox_id}`
 
-`200` Sandbox in state `killed`. Requests container removal on a best-effort basis; removal errors are not returned. Repeating deletion returns the stored killed record without retrying removal.
+`200` Sandbox in state `killed`, once the container is confirmed gone. Repeating deletion is idempotent and returns the stored killed record.
+
+A removal the runtime refuses is `502 backend_error` with `unconfirmed container removal: <container>`: the sandbox is killed and the removal is retried in the background, but removal is unconfirmed, so answering `200` would claim cleanup that has not happened. Repeating the delete continues to report the error until the background retry confirms removal.
 
 ### `POST /v1/sandboxes/{sandbox_id}/executions`
 
@@ -314,6 +341,8 @@ Server-sent events; see below.
 
 Raw bytes in the body; creates parent directories; replaces existing files. `204`. Idempotent.
 
+The file and every parent directory this write creates are owned by the container's default user, because the archive is extracted by a root process: without that, an uploaded file in a fresh directory is root-owned and a non-root guest cannot write its output beside it. Existing parents keep their own owner and mode.
+
 <a id="directory-listing"></a>
 
 ### `GET /v1/sandboxes/{sandbox_id}/files/list`
@@ -321,7 +350,14 @@ Raw bytes in the body; creates parent directories; replaces existing files. `204
 Query `path=/work&limit=100&cursor=TOKEN` returns
 `entries` with `name`, `size` (regular-file bytes, symlink target-path bytes,
 zero for directories), `mode` (POSIX permission bits), `mtime` (UTC
-RFC3339), and `is_dir`, plus `next_cursor` when another page exists. Only immediate
+RFC3339), `is_dir`, `type`, `uid` and `gid`, plus `next_cursor` when another
+page exists. `type` is `file`, `dir`, `symlink` or `other`; a symlink is never
+reported as the file it points at, and device nodes, sockets and FIFOs are
+`other` rather than being silently labelled files. `owner`, `group` and
+`symlink_target` appear when they are known: Docker's archive carries numeric
+ids only, so the names are read from the guest's `/etc/passwd` and `/etc/group`
+in one bounded exec, and stay absent when that lookup is unavailable. The
+numeric `uid`/`gid` are always present and authoritative. Only immediate
 children appear; child symlinks are not followed. Results sort by UTF-8 name
 bytes. Limits are 1–1000 (default 100); reuse the opaque cursor with the same
 path. Concurrent mutations do not provide snapshot consistency. Empty
@@ -415,7 +451,7 @@ data: {"id":"exe_456","state":"completed","exit_code":0,"termination_reason":"ex
 
 | Limit | Value | Behavior when exceeded |
 |---|---|---|
-| Retained output per execution (stdout + stderr) | 1 MiB | further output is discarded, one `truncated` event is sent, `output_truncated: true`; the process keeps running |
+| Retained output per execution (stdout + stderr) | 1 MiB | the last chunk is cut to the budget, backing up to a UTF-8 boundary if necessary; one `truncated` event is sent and `output_truncated: true` is set; the process keeps running |
 | Output events per execution | 4096 | same as above |
 | Executions retained per sandbox | 200 | eligible completed records are dropped with their output and idempotency keys; all active executions and the most recently completed one are protected. `404 not_found` afterwards |
 | Live sandboxes | 64 | `POST /v1/sandboxes` returns `429 rate_limited` and starts no container. A killed sandbox does not count |

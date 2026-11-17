@@ -18,6 +18,16 @@ const MaxArchiveBytes = 10 << 20
 // name is the path inside the archive and must be relative: the archive is
 // extracted at "/" in the container, so a leading separator would be doubled.
 func BuildFileTar(name string, data []byte) ([]byte, error) {
+	return BuildOwnedFileTar(name, data, 0, 0, nil)
+}
+
+// BuildOwnedFileTar is BuildFileTar for a container whose default user is not
+// root. Docker extracts as root, so a missing parent directory would be created
+// root-owned and a non-root guest could not write beside the file afterwards;
+// dirs lists those missing ancestors, shallowest first, and they are written as
+// explicit directory entries that carry the same owner. An ancestor that already
+// exists must not be listed: its mode and owner belong to the container.
+func BuildOwnedFileTar(name string, data []byte, uid, gid int, dirs []string) ([]byte, error) {
 	name = path.Clean(name)
 	if name == "." || name == "/" || path.IsAbs(name) ||
 		name == ".." || strings.HasPrefix(name, "../") {
@@ -25,12 +35,32 @@ func BuildFileTar(name string, data []byte) ([]byte, error) {
 	}
 	var buf bytes.Buffer
 	w := tar.NewWriter(&buf)
+	modTime := time.Unix(0, 0)
+	for _, dir := range dirs {
+		dir = path.Clean(dir)
+		if dir == "." || dir == "/" || path.IsAbs(dir) || dir == ".." || strings.HasPrefix(dir, "../") {
+			return nil, fmt.Errorf("dockerapi: archive directory %q must be a relative path inside the container", dir)
+		}
+		hdr := &tar.Header{
+			Typeflag: tar.TypeDir,
+			Name:     dir + "/",
+			Mode:     0o755,
+			Uid:      uid,
+			Gid:      gid,
+			ModTime:  modTime,
+		}
+		if err := w.WriteHeader(hdr); err != nil {
+			return nil, fmt.Errorf("dockerapi: write tar header: %w", err)
+		}
+	}
 	hdr := &tar.Header{
 		Typeflag: tar.TypeReg,
 		Name:     name,
 		Mode:     0o644,
 		Size:     int64(len(data)),
-		ModTime:  time.Unix(0, 0),
+		Uid:      uid,
+		Gid:      gid,
+		ModTime:  modTime,
 	}
 	if err := w.WriteHeader(hdr); err != nil {
 		return nil, fmt.Errorf("dockerapi: write tar header: %w", err)

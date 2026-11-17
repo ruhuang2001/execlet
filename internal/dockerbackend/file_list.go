@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -32,7 +33,11 @@ func (b *Backend) ListFiles(ctx context.Context, id, p, after string, limit int)
 			return nil, &daemon.Error{Code: daemon.CodePayloadTooLarge, Message: "directory archive exceeds scan byte limit"}
 		}
 		if errors.Is(err, io.EOF) {
-			return resolveListingSizes(entries, root, sizes, links)
+			entries, err = resolveListingSizes(entries, root, sizes, links)
+			if err != nil {
+				return nil, err
+			}
+			return b.resolveOwnership(ctx, id, entries), nil
 		}
 		if err != nil {
 			return nil, fmt.Errorf("dockerbackend: list archive: %w", err)
@@ -68,8 +73,87 @@ func (b *Backend) ListFiles(ctx context.Context, id, p, after string, limit int)
 		if !utf8.ValidString(name) {
 			return nil, &daemon.Error{Code: daemon.CodeInvalidRequest, Message: "directory contains a non-UTF-8 name"}
 		}
-		entries = daemon.SelectFilePage(entries, daemon.FileEntry{Name: name, Size: hdr.Size, Mode: hdr.Mode & 0o7777, Mtime: hdr.ModTime.UTC(), IsDir: hdr.FileInfo().IsDir()}, after, limit)
+		entry := daemon.FileEntry{
+			Name:          name,
+			Size:          hdr.Size,
+			Mode:          hdr.Mode & 0o7777,
+			Mtime:         hdr.ModTime.UTC(),
+			IsDir:         hdr.FileInfo().IsDir(),
+			Type:          fileType(hdr),
+			UID:           hdr.Uid,
+			GID:           hdr.Gid,
+			SymlinkTarget: symlinkTarget(hdr),
+		}
+		entries = daemon.SelectFilePage(entries, entry, after, limit)
 	}
+}
+
+// fileType maps a tar header to the contract's kind. A hardlink is a file
+// because it is another name for one, not a separate object kind.
+func fileType(hdr *tar.Header) daemon.FileType {
+	switch hdr.Typeflag {
+	case tar.TypeDir:
+		return daemon.FileTypeDir
+	case tar.TypeSymlink:
+		return daemon.FileTypeSymlink
+	case tar.TypeReg, 0, tar.TypeLink: // Zero is the legacy regular-file flag.
+		return daemon.FileTypeFile
+	default:
+		return daemon.FileTypeOther
+	}
+}
+
+// symlinkTarget is only set for a symlink, and only when the target is valid
+// UTF-8: a listing must not return bytes that cannot be encoded in JSON.
+func symlinkTarget(hdr *tar.Header) string {
+	if hdr.Typeflag != tar.TypeSymlink || !utf8.ValidString(hdr.Linkname) {
+		return ""
+	}
+	return hdr.Linkname
+}
+
+// resolveOwnership names the uid/gid of each entry from the container's account
+// database. Docker's archive carries only numeric ids, so a name has to be read
+// from the guest; when that is unavailable the ids stay reported and the names
+// stay empty, because a guess would be indistinguishable from a real answer.
+func (b *Backend) resolveOwnership(ctx context.Context, containerID string, entries []daemon.FileEntry) []daemon.FileEntry {
+	if len(entries) == 0 {
+		return entries
+	}
+	users := map[int]string{}
+	groups := map[int]string{}
+	// One exec reads both files. A guest without them is not an error: the ids
+	// are the contract's required fields.
+	out, err := b.captureAs(ctx, containerID, "", []string{"/bin/sh", "-c",
+		`cat /etc/passwd 2>/dev/null | cut -d: -f1,3; echo ---; cat /etc/group 2>/dev/null | cut -d: -f1,3`})
+	if err != nil {
+		return entries
+	}
+	section := 0
+	for line := range strings.SplitSeq(string(out), "\n") {
+		if line == "---" {
+			section = 1
+			continue
+		}
+		name, id, ok := strings.Cut(line, ":")
+		if !ok || name == "" {
+			continue
+		}
+		n, err := strconv.Atoi(id)
+		if err != nil {
+			continue
+		}
+		if section == 0 {
+			users[n] = name
+		} else {
+			groups[n] = name
+		}
+	}
+	for i := range entries {
+		entries[i].Owner = users[entries[i].UID]
+		entries[i].Group = groups[entries[i].GID]
+	}
+	return entries
 }
 
 // Docker tar hardlinks have no payload size; their target may be a nested entry.

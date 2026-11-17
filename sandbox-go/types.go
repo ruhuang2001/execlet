@@ -105,6 +105,21 @@ type CreateSandboxRequest struct {
 	TimeoutAction           *Action `json:"timeout_action,omitempty"`
 	IdleTimeoutSeconds      *int    `json:"idle_timeout_seconds,omitempty"`
 	IdleTimeoutAction       *Action `json:"idle_timeout_action,omitempty"`
+	// Env is the sandbox's own environment. Every execution sees it and it
+	// survives a client reconnecting; a per-execution Env entry overrides it
+	// for that execution only.
+	Env map[string]string `json:"env,omitempty"`
+}
+
+// UpdateSandboxRequest is the body of PATCH /v1/sandboxes/{id}. Exactly one
+// field is set, and lifetime is the only mutable property.
+type UpdateSandboxRequest struct {
+	// TimeoutSeconds replaces the deadline with now plus the value; it may
+	// shorten it. Zero removes the deadline.
+	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
+	// ExtendSeconds keeps the later of the current deadline and now plus the
+	// value, so it can only extend. Zero is a no-op.
+	ExtendSeconds *int `json:"extend_seconds,omitempty"`
 }
 
 // ExecuteRequest is the body of POST .../executions.

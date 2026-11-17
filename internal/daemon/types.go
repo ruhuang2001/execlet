@@ -236,6 +236,25 @@ type CreateRequest struct {
 	TimeoutAction           *Action      `json:"timeout_action,omitempty"`
 	IdleTimeoutSeconds      *int         `json:"idle_timeout_seconds,omitempty"`
 	IdleTimeoutAction       *Action      `json:"idle_timeout_action,omitempty"`
+	// Env belongs to the sandbox: every execution sees it, and it survives a
+	// client reconnecting. A per-execution Env entry overrides it for that
+	// execution only. Raw values are never retained in a response or log.
+	Env map[string]string `json:"env,omitempty"`
+}
+
+// UpdateRequest is the body of PATCH /v1/sandboxes/{id}. Only the fields that
+// may change while a sandbox lives are here; image, memory, CPU and network
+// are fixed at creation, because changing them means a different container.
+type UpdateRequest struct {
+	// TimeoutSeconds replaces the lifetime deadline with now plus this value.
+	// It may shorten or lengthen it. Zero removes the deadline, which means
+	// "run until killed", matching the create-time meaning.
+	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
+	// ExtendSeconds is the E2B connect rule: keep the later of the current
+	// deadline and now plus this value, so it can only ever extend. Zero is a
+	// no-op rather than "forever", so a reconnecting client cannot accidentally
+	// remove a deadline it did not intend to touch.
+	ExtendSeconds *int `json:"extend_seconds,omitempty"`
 }
 
 // ExecuteRequest is the body of POST /v1/sandboxes/{id}/executions.
@@ -276,6 +295,23 @@ func (r ExecuteRequest) envPairs() []string {
 	return pairs
 }
 
+// mergedEnv layers the request environment over the sandbox environment and
+// returns sorted "NAME=value" pairs, so the same inputs always produce the same
+// argv and an idempotent replay stays meaningful.
+func mergedEnv(base, override map[string]string) []string {
+	if len(base) == 0 && len(override) == 0 {
+		return nil
+	}
+	merged := make(map[string]string, len(base)+len(override))
+	for name, value := range base {
+		merged[name] = value
+	}
+	for name, value := range override {
+		merged[name] = value
+	}
+	return ExecuteRequest{Env: merged}.envPairs()
+}
+
 // sandboxOptions is a CreateRequest resolved against the defaults.
 type sandboxOptions struct {
 	maxConcurrentExecutions int
@@ -288,6 +324,9 @@ type sandboxOptions struct {
 	timeoutAction           Action
 	idleTimeoutSeconds      int
 	idleTimeoutAction       Action
+	// env is the sandbox environment. It is applied to every execution as the
+	// base layer, with the request's own entries overriding it.
+	env map[string]string
 }
 
 // resolve applies defaults and validates the request.
@@ -366,6 +405,12 @@ func (r CreateRequest) resolve() (sandboxOptions, error) {
 		}
 		opts.idleTimeoutAction = *r.IdleTimeoutAction
 	}
+	if len(r.Env) > 0 {
+		if err := validateExecEnv(r.Env); err != nil {
+			return sandboxOptions{}, err
+		}
+		opts.env = cloneEnv(r.Env)
+	}
 	return opts, nil
 }
 
@@ -403,4 +448,15 @@ func cloneReason(r *KillReason) *KillReason {
 	}
 	c := *r
 	return &c
+}
+
+func cloneEnv(env map[string]string) map[string]string {
+	if env == nil {
+		return nil
+	}
+	c := make(map[string]string, len(env))
+	for name, value := range env {
+		c[name] = value
+	}
+	return c
 }

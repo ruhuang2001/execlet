@@ -32,6 +32,8 @@ func TestSpecFieldsMatchRequestAndSandboxTypes(t *testing.T) {
 		value  any
 	}{
 		{"CreateSandboxRequest", daemon.CreateRequest{}},
+		{"UpdateSandboxRequest", daemon.UpdateRequest{}},
+		{"UpdateSandboxRequest", sandbox.UpdateSandboxRequest{}},
 		{"CreateSandboxRequest", sandbox.CreateSandboxRequest{}},
 		{"ExecuteRequest", daemon.ExecuteRequest{}},
 		{"ExecuteRequest", sandbox.ExecuteRequest{}},
@@ -184,7 +186,7 @@ func TestOperationsCoversEveryDocumentedEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse embedded spec: %v", err)
 	}
-	if len(ops) != 18 {
-		t.Fatalf("parsed %d operations, want 18: %v", len(ops), ops)
+	if len(ops) != 19 {
+		t.Fatalf("parsed %d operations, want 19: %v", len(ops), ops)
 	}
 }

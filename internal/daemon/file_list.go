@@ -22,14 +22,38 @@ const (
 	FileOperationTimeout = 30 * time.Second
 )
 
-// FileEntry describes an immediate directory child; mode contains POSIX permission bits.
+// FileEntry describes an immediate directory child; mode contains POSIX
+// permission bits. Type mirrors what the filesystem reports, so a symlink is
+// not flattened into the file it points at, and uid/gid are the raw ownership
+// the archive carries. Owner and Group are resolved names when the container's
+// account database has them, and empty otherwise: a numeric id is still true,
+// a guessed name is not.
 type FileEntry struct {
-	Name  string    `json:"name"`
-	Size  int64     `json:"size"`
-	Mode  int64     `json:"mode"`
-	Mtime time.Time `json:"mtime"`
-	IsDir bool      `json:"is_dir"`
+	Name          string    `json:"name"`
+	Size          int64     `json:"size"`
+	Mode          int64     `json:"mode"`
+	Mtime         time.Time `json:"mtime"`
+	IsDir         bool      `json:"is_dir"`
+	Type          FileType  `json:"type"`
+	UID           int       `json:"uid"`
+	GID           int       `json:"gid"`
+	Owner         string    `json:"owner,omitempty"`
+	Group         string    `json:"group,omitempty"`
+	SymlinkTarget string    `json:"symlink_target,omitempty"`
 }
+
+// FileType is the filesystem object kind a listing reports.
+type FileType string
+
+// File types.
+const (
+	FileTypeFile    FileType = "file"
+	FileTypeDir     FileType = "dir"
+	FileTypeSymlink FileType = "symlink"
+	// FileTypeOther covers device nodes, sockets and FIFOs. A caller that only
+	// knows the three E2B kinds must not silently treat these as files.
+	FileTypeOther FileType = "other"
+)
 
 // FileList is one name-ordered page. NextCursor is absent on the last page.
 type FileList struct {

@@ -404,6 +404,20 @@ func (f *fakeDaemon) programLocked(containerID string, c *fakeContainer, cmd []s
 	if len(cmd) == 3 && cmd[0] == "/bin/sh" && cmd[2] == dockerapi.OOMScript {
 		return "low 0\nhigh 0\nmax 0\noom 0\noom_kill 5\n", "", 0
 	}
+	// The post-write check: report what the container actually holds. The
+	// target arrives as a container-root-relative path, as the archive does.
+	if len(cmd) == 5 && cmd[0] == "/bin/sh" && cmd[2] == writeVerifyScript {
+		for _, name := range []string{cmd[4], "/" + cmd[4]} {
+			if _, ok := c.files[name]; ok {
+				return "ok", "", 0
+			}
+		}
+		return "missing", "", 0
+	}
+	// The ownership probe: name the default user's ids and the missing parents.
+	if len(cmd) == 5 && cmd[0] == "/bin/sh" && cmd[2] == writeOwnershipScript {
+		return "uid=0\x00gid=0\x00", "", 0
+	}
 	// "cat <pid file> 2>/dev/null": return the file the wrapper would have
 	// written, or nothing when the test withholds it.
 	if len(cmd) == 3 && cmd[0] == "/bin/sh" && strings.HasPrefix(cmd[2], "cat ") {

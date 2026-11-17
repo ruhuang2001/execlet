@@ -37,6 +37,7 @@ var routes = []Route{
 	{Operation{http.MethodPost, "/v1/sandboxes"}, (*Handler).createSandbox},
 	{Operation{http.MethodGet, "/v1/sandboxes"}, (*Handler).listSandboxes},
 	{Operation{http.MethodGet, "/v1/sandboxes/{sandbox_id}"}, (*Handler).getSandbox},
+	{Operation{http.MethodPatch, "/v1/sandboxes/{sandbox_id}"}, (*Handler).updateSandbox},
 	{Operation{http.MethodDelete, "/v1/sandboxes/{sandbox_id}"}, (*Handler).deleteSandbox},
 	{Operation{http.MethodPost, "/v1/sandboxes/{sandbox_id}/pause"}, (*Handler).pauseSandbox},
 	{Operation{http.MethodPost, "/v1/sandboxes/{sandbox_id}/resume"}, (*Handler).resumeSandbox},

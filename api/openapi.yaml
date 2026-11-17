@@ -171,6 +171,47 @@ paths:
           $ref: '#/components/responses/BackendError'
         '503':
           $ref: '#/components/responses/Unavailable'
+    patch:
+      tags: [sandboxes]
+      operationId: updateSandbox
+      summary: Change a live sandbox's lifetime
+      description: >-
+        The only mutable property is the lifetime deadline, because image,
+        memory, CPU, pids and network describe the container itself.
+        timeout_seconds and extend_seconds are mutually exclusive and exactly
+        one is required. timeout_seconds replaces the deadline with now plus the
+        value, so it may shorten or lengthen; 0 removes the deadline.
+        extend_seconds keeps the later of the current deadline and now plus the
+        value, so it can only extend, and 0 is a no-op rather than an unbounded
+        lifetime. A pending or killed sandbox returns 409; a paused one is
+        updated in place. The response is the updated sandbox.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSandboxRequest'
+      responses:
+        '200':
+          description: The updated sandbox.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Sandbox'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
   /v1/sandboxes/{sandbox_id}/pause:
     parameters:
       - $ref: '#/components/parameters/SandboxID'
@@ -534,13 +575,34 @@ paths:
                     type: array
                     items:
                       type: object
-                      required: [name, size, mode, mtime, is_dir]
+                      required: [name, size, mode, mtime, is_dir, type, uid, gid]
                       properties:
                         name: {type: string}
                         size: {type: integer, format: int64, description: Regular-file bytes or symlink target-path bytes; zero for directories}
                         mode: {type: integer, description: POSIX permission bits}
                         mtime: {type: string, format: date-time}
                         is_dir: {type: boolean}
+                        type:
+                          type: string
+                          enum: [file, dir, symlink, other]
+                          description: >-
+                            What the directory entry is. A symlink is reported as
+                            a symlink, never as the file it points at. `other`
+                            covers device nodes, sockets and FIFOs.
+                        uid: {type: integer, description: Numeric owner from the archive}
+                        gid: {type: integer, description: Numeric group from the archive}
+                        owner:
+                          type: string
+                          description: >-
+                            Owner name resolved inside the container. Omitted when
+                            the guest's account database has no such id; uid is
+                            still authoritative.
+                        group:
+                          type: string
+                          description: Group name resolved inside the container; omitted like owner.
+                        symlink_target:
+                          type: string
+                          description: Present only for a symlink with a UTF-8 target.
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -858,6 +920,33 @@ components:
           type: string
           enum: [kill, pause]
           default: kill
+        env:
+          type: object
+          additionalProperties: {type: string}
+          description: >-
+            The sandbox's own environment. Every execution sees it and it
+            survives a client reconnecting; a per-execution env entry overrides
+            it for that execution only. Names and values follow the execution
+            env limits. Values are never echoed in a response or written to a
+            log.
+    UpdateSandboxRequest:
+      type: object
+      description: >-
+        Exactly one of the two fields is required and they are mutually
+        exclusive. Lifetime is the only mutable property.
+      properties:
+        timeout_seconds:
+          type: integer
+          minimum: 0
+          description: >-
+            Replaces the deadline with now plus this value, so it may shorten or
+            lengthen. 0 removes the deadline.
+        extend_seconds:
+          type: integer
+          minimum: 0
+          description: >-
+            Keeps the later of the current deadline and now plus this value, so
+            it can only extend. 0 is a no-op, never an unbounded lifetime.
     Sandbox:
       type: object
       required:

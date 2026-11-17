@@ -404,6 +404,63 @@ func (s *Sandboxes) OpenStream(id string) (closeStream func(), err error) {
 
 // ---------------------------------------------------------------- lifecycle
 
+// Update changes a live sandbox's lifetime. It is the only mutable property,
+// because image, memory, CPU and network describe the container itself.
+//
+// TimeoutSeconds replaces the deadline with now plus the value, which may
+// shorten it. ExtendSeconds applies the connect rule instead: the deadline is
+// the later of the current one and now plus the value, so it can only extend.
+// A killed or pending sandbox cannot be updated; a live one keeps its state.
+func (s *Sandboxes) Update(_ context.Context, id string, req UpdateRequest) (Sandbox, error) {
+	if req.TimeoutSeconds != nil && req.ExtendSeconds != nil {
+		return Sandbox{}, errorf(CodeInvalidRequest, "timeout_seconds and extend_seconds are mutually exclusive")
+	}
+	if req.TimeoutSeconds == nil && req.ExtendSeconds == nil {
+		return Sandbox{}, errorf(CodeInvalidRequest, "one of timeout_seconds or extend_seconds is required")
+	}
+	if req.TimeoutSeconds != nil && *req.TimeoutSeconds < 0 {
+		return Sandbox{}, errorf(CodeInvalidRequest, "timeout_seconds must not be negative")
+	}
+	if req.ExtendSeconds != nil && *req.ExtendSeconds < 0 {
+		return Sandbox{}, errorf(CodeInvalidRequest, "extend_seconds must not be negative")
+	}
+
+	sb, err := s.lookup(id)
+	if err != nil {
+		return Sandbox{}, err
+	}
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+	if sb.state != StateRunning && sb.state != StatePaused {
+		return Sandbox{}, sb.invalidState()
+	}
+	now := s.now()
+	switch {
+	case req.TimeoutSeconds != nil:
+		// Replacing also changes the policy the sandbox was created with, so a
+		// later resume or arm uses the new value rather than the old one.
+		sb.opts.timeoutSeconds = *req.TimeoutSeconds
+		if *req.TimeoutSeconds == 0 {
+			sb.expiresAt = nil
+			return sb.snapshot(), nil
+		}
+		deadline := now.Add(time.Duration(*req.TimeoutSeconds) * time.Second)
+		sb.expiresAt = &deadline
+	case *req.ExtendSeconds == 0:
+		// Extending by zero is a no-op: a connect must never remove a deadline
+		// the caller did not ask to remove.
+	default:
+		deadline := now.Add(time.Duration(*req.ExtendSeconds) * time.Second)
+		if sb.expiresAt == nil || deadline.After(*sb.expiresAt) {
+			if *req.ExtendSeconds > sb.opts.timeoutSeconds {
+				sb.opts.timeoutSeconds = *req.ExtendSeconds
+			}
+			sb.expiresAt = &deadline
+		}
+	}
+	return sb.snapshot(), nil
+}
+
 // Pause freezes the sandbox. It is invalid while pending or killed and a
 // no-op while paused.
 func (s *Sandboxes) Pause(ctx context.Context, id string) (Sandbox, error) {
@@ -471,6 +528,12 @@ func (s *Sandboxes) unpauseLocked(ctx context.Context, sb *sandbox) error {
 
 // Delete kills the sandbox with reason requested and removes its container. It
 // is idempotent.
+//
+// An unconfirmed removal is not success. The record is killed either way, but a
+// caller that reads 200 as "nothing of this sandbox is running" would be wrong
+// while the container survives, so a removal the runtime refused is reported as
+// backend_error with the retry still scheduled. Repeating the delete confirms
+// removal only after the background retry succeeds.
 func (s *Sandboxes) Delete(ctx context.Context, id string) (Sandbox, error) {
 	sb, err := s.lookup(id)
 	if err != nil {
@@ -480,10 +543,34 @@ func (s *Sandboxes) Delete(ctx context.Context, id string) (Sandbox, error) {
 	defer sb.mu.Unlock()
 
 	if sb.state == StateKilled {
+		if sb.container != "" && s.removalPending(sb.container) {
+			return sb.snapshot(), s.unconfirmedRemoval(sb.container)
+		}
 		return sb.snapshot(), nil
 	}
-	s.terminateLocked(ctx, sb, KillRequested)
+	if err := s.terminateLocked(ctx, sb, KillRequested); err != nil {
+		return sb.snapshot(), err
+	}
 	return sb.snapshot(), nil
+}
+
+// unconfirmedRemoval is the error for a container removal that has not
+// happened. It is a backend failure, not a client mistake: the request was
+// valid and the sandbox is ended; the runtime is what did not confirm.
+func (s *Sandboxes) unconfirmedRemoval(containerID string) error {
+	return &Error{
+		Code:    CodeBackendError,
+		Message: "unconfirmed container removal: " + containerID + "; a retry is scheduled",
+	}
+}
+
+// removalPending reports whether a container is still waiting for a removal
+// retry.
+func (s *Sandboxes) removalPending(containerID string) bool {
+	s.retryMu.Lock()
+	defer s.retryMu.Unlock()
+	_, ok := s.retryIDs[containerID]
+	return ok
 }
 
 // killLocked moves the sandbox to killed and records why. A running execution
@@ -531,16 +618,25 @@ func (s *Sandboxes) killLocked(sb *sandbox, reason KillReason) {
 // answers does not pin the sandbox lock forever. A removal that fails or times
 // out is scheduled for the reaper to retry: the record is already killed, and
 // nothing else would revisit that container.
-func (s *Sandboxes) terminateLocked(ctx context.Context, sb *sandbox, reason KillReason) {
+//
+// It returns the removal error so a caller answering a request can say the
+// container is still there. Callers with no requester to answer, such as a
+// timeout or an eviction, ignore it: the retry is what matters to them.
+func (s *Sandboxes) terminateLocked(ctx context.Context, sb *sandbox, reason KillReason) error {
 	s.killLocked(sb, reason)
 	if sb.container == "" {
-		return
+		return nil
 	}
 	removeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), BackendCallTimeout)
 	defer cancel()
-	if err := s.backend.Remove(removeCtx, sb.container); err != nil && !errors.Is(err, ErrNotFound) {
+	if err := s.backend.Remove(removeCtx, sb.container); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil
+		}
 		s.scheduleRemoval(sb.container)
+		return s.unconfirmedRemoval(sb.container)
 	}
+	return nil
 }
 
 // ---------------------------------------------------------------- shutdown

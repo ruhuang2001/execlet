@@ -71,9 +71,11 @@ func (l *eventLog) notifyLocked() {
 }
 
 // appendOutput records one chunk of process output. A chunk larger than the
-// per-event limit is split, so no single event exceeds 32 KiB. Once a bound is
-// hit the chunk is discarded whole, keeping "stored output is exactly the data
-// delivered in events" true.
+// per-event limit is split, so no single event exceeds 32 KiB. Once the byte
+// budget is reached the part that still fits is kept and the rest is dropped:
+// retaining every byte of the budget is what makes "at most 1 MiB" also mean
+// "1 MiB of real output", and a caller that compares a marker at the boundary
+// sees the same prefix either way.
 //
 // A cut never splits a UTF-8 sequence. Output is delivered as JSON strings,
 // and each event is encoded on its own, so a half rune at the end of one
@@ -97,16 +99,39 @@ func (l *eventLog) appendOutput(kind EventType, chunk []byte) {
 				n = cut
 			}
 		}
-		if l.outputEvents >= MaxOutputEvents || l.retained+n > MaxOutputBytes {
+		if l.outputEvents >= MaxOutputEvents {
 			l.truncateLocked()
 			return
 		}
-		data := append([]byte(nil), chunk[:n]...)
-		l.appendLocked(Event{Type: kind, Data: data})
-		l.outputEvents++
-		l.retained += n
+		if room := MaxOutputBytes - l.retained; room < n {
+			if room <= 0 {
+				l.truncateLocked()
+				return
+			}
+			n = room
+			if n < len(chunk) {
+				if cut := runeBoundary(chunk, n); cut > 0 {
+					n = cut
+				} else if _, size := utf8.DecodeRune(chunk); size > n {
+					// The remaining budget cannot hold even the first rune.
+					n = 0
+				}
+			}
+			if n > 0 {
+				l.appendOutputLocked(kind, chunk[:n])
+			}
+			l.truncateLocked()
+			return
+		}
+		l.appendOutputLocked(kind, chunk[:n])
 		chunk = chunk[n:]
 	}
+}
+
+func (l *eventLog) appendOutputLocked(kind EventType, data []byte) {
+	l.appendLocked(Event{Type: kind, Data: append([]byte(nil), data...)})
+	l.outputEvents++
+	l.retained += len(data)
 }
 
 // runeBoundary returns the largest index i in (0, limit] at which chunk[i]

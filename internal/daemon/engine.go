@@ -28,11 +28,17 @@ type execution struct {
 	sandboxID string
 	command   []string
 	// Env identity retains no raw names or values. Cwd remains diagnostic data.
-	envDigest   [32]byte
-	envCount    int
-	cwd         string
-	key         string
-	stdinDigest [32]byte
+	envDigest      [32]byte
+	envCount       int
+	cwd            string
+	key            string
+	stdinDigest    [32]byte
+	pid            int
+	timeoutMS      *int64
+	fingerprintKey [32]byte
+	persist        func(Execution, []Event) error
+	forget         func() error
+	outputLost     bool // restart interrupted the nondurable live output stream
 
 	startedAt time.Time
 	finished  *time.Time
@@ -100,8 +106,9 @@ func (ex *execution) finish(at time.Time, exitCode int, outcome ExecOutcome) boo
 	// The terminal record is stored without output: the log's events are the
 	// only copy, and the delivery path assembles it for the client. Storing it
 	// here as well would double the memory each execution keeps.
-	ex.log.appendComplete(Execution{
+	terminal := Execution{
 		ID:                ex.id,
+		PID:               ex.pid,
 		SandboxID:         ex.sandboxID,
 		Command:           append([]string(nil), ex.command...),
 		Cwd:               cwdPtr(ex.cwd),
@@ -110,7 +117,24 @@ func (ex *execution) finish(at time.Time, exitCode int, outcome ExecOutcome) boo
 		TerminationReason: ex.reason,
 		StartedAt:         ex.startedAt,
 		FinishedAt:        ex.finished,
-	})
+	}
+	ex.log.mu.Lock()
+	if ex.persist != nil {
+		events := append(append([]Event(nil), ex.log.events...), Event{ID: ex.log.nextID + 1, Type: EventComplete, Execution: &terminal})
+		terminal.OutputTruncated = ex.log.truncated
+		if err := ex.persist(terminal, events); err != nil {
+			// Storage uncertainty must never be published as confirmed success.
+			ex.reason = new(ReasonUnknown)
+			ex.exitCode = nil
+			ex.log.truncated = true
+			terminal.TerminationReason = ex.reason
+			terminal.ExitCode = nil
+			terminal.OutputTruncated = true
+		}
+	}
+	ex.log.complete = true
+	ex.log.appendLocked(Event{Type: EventComplete, Execution: &terminal})
+	ex.log.mu.Unlock()
 	close(ex.done)
 	logger := ex.logger
 	if logger == nil {
@@ -136,6 +160,7 @@ func (ex *execution) snapshotLocked() Execution {
 	stdout, stderr, truncated := ex.log.output()
 	return Execution{
 		ID:                ex.id,
+		PID:               ex.pid,
 		SandboxID:         ex.sandboxID,
 		Command:           append([]string(nil), ex.command...),
 		Cwd:               cwdPtr(ex.cwd),
@@ -164,6 +189,7 @@ func (ex *execution) summary() ExecutionSummary {
 	defer ex.mu.Unlock()
 	return ExecutionSummary{
 		ID:                ex.id,
+		PID:               ex.pid,
 		SandboxID:         ex.sandboxID,
 		Command:           append([]string(nil), ex.command...),
 		Cwd:               cwdPtr(ex.cwd),
@@ -185,6 +211,9 @@ func (ex *execution) summary() ExecutionSummary {
 // time, so an overlapping start is busy; and a reused idempotency key returns
 // the existing execution instead of starting a second process.
 func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req ExecuteRequest) (Execution, bool, error) {
+	if err := s.durableReady(); err != nil {
+		return Execution{}, false, err
+	}
 	if len(req.Command) == 0 {
 		return Execution{}, false, errorf(CodeInvalidRequest, "command must not be empty")
 	}
@@ -200,6 +229,14 @@ func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req Ex
 	}
 	if req.TimeoutSeconds != nil && *req.TimeoutSeconds < 0 {
 		return Execution{}, false, errorf(CodeInvalidRequest, "timeout_seconds must not be negative")
+	}
+	if req.TimeoutMS != nil {
+		if req.TimeoutSeconds != nil || *req.TimeoutMS < 0 || *req.TimeoutMS > 9223372036854 || req.Stdin != "" {
+			return Execution{}, false, errorf(CodeInvalidRequest, "timeout_ms must be within duration range, without timeout_seconds or stdin")
+		}
+		if !s.backgroundCommands() {
+			return Execution{}, false, errorf(CodeUnavailable, "managed commands are unsupported by this runtime")
+		}
 	}
 	if len(req.Stdin) > MaxStdinBytes {
 		return Execution{}, false, errorf(CodePayloadTooLarge, "stdin exceeds %d bytes", MaxStdinBytes)
@@ -245,6 +282,9 @@ func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req Ex
 			}
 			out := prior.snapshot()
 			sb.mu.Unlock()
+			if prior.timeoutMS != nil && out.PID <= 0 {
+				return Execution{}, false, errorf(CodeBackendError, "managed identity unconfirmed; retained execution %s; do not start with a new key", out.ID)
+			}
 			return out, false, nil
 		}
 	}
@@ -277,44 +317,89 @@ func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req Ex
 	// timeouts never fire again. The bound covers the start handshake only;
 	// the process itself outlives this context, which the backend detaches
 	// from the request.
+	ex := &execution{
+		id: newID("exe_"), sandboxID: sandboxID, command: append([]string(nil), req.Command...),
+		envDigest: keyedFingerprint(s.fingerprintKey, req.envPairs()), envCount: len(req.Env), cwd: req.Cwd, key: req.IdempotencyKey,
+		stdinDigest: keyedFingerprint(s.fingerprintKey, []string{req.Stdin}), fingerprintKey: s.fingerprintKey,
+		startedAt: s.now(), state: ExecRunning, log: newEventLog(), logger: contextLogger(ctx), oomBaseline: baseline, done: make(chan struct{}),
+	}
+	if req.TimeoutMS != nil {
+		ex.timeoutMS = new(*req.TimeoutMS)
+	}
+	if s.journal != nil {
+		ex.persist = func(snapshot Execution, events []Event) error { return s.saveExecution(ex, snapshot, events) }
+		ex.forget = func() error { return s.forgetExecution(sb, ex) }
+		if err := ex.persist(ex.snapshotLocked(), nil); err != nil {
+			sb.mu.Unlock()
+			return Execution{}, false, errorf(CodeUnavailable, "cannot persist execution intent")
+		}
+		sb.executions = append(sb.executions, ex)
+		if ex.key != "" {
+			sb.idempotency[ex.key] = ex
+		}
+		if err := s.saveSandboxLocked(sb); err != nil {
+			sb.mu.Unlock()
+			return Execution{}, false, err
+		}
+	}
 	startCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), BackendCallTimeout)
 	proc, err := s.backend.Exec(startCtx, sb.container, ExecSpec{
-		Command: req.Command,
-		Env:     mergedEnv(sb.opts.env, req.Env),
-		Dir:     req.Cwd,
-		Stdin:   req.Stdin,
+		Command:   req.Command,
+		Env:       mergedEnv(sb.opts.env, req.Env),
+		Dir:       req.Cwd,
+		Stdin:     req.Stdin,
+		TimeoutMS: req.TimeoutMS,
 	})
 	cancel()
-	if err != nil {
+	startErr := err
+	if err != nil && proc == nil {
+		if s.journal != nil {
+			// Any backend error can follow accepted work. Preserve the key and
+			// stop this container before a client can retry into another process.
+			_ = s.terminateLocked(context.WithoutCancel(ctx), sb, KillEvicted)
+			ex.finish(s.now(), -1, ExecOutcome{Reason: ReasonUnknown})
+			sb.mu.Unlock()
+			return Execution{}, false, errorf(CodeBackendError, "start unconfirmed; sandbox terminated; execution %s", ex.id)
+		}
+		if req.TimeoutMS != nil {
+			// A lost managed-start handshake may have executed user code. Do
+			// not allow a retry to create a second incarnation in this sandbox.
+			removeErr := s.terminateLocked(context.WithoutCancel(ctx), sb, KillRequested)
+			sb.mu.Unlock()
+			return Execution{}, false, errorf(CodeBackendError, "managed start unconfirmed; sandbox terminated to prevent duplicate execution (cleanup error: %v)", removeErr)
+		}
 		sb.mu.Unlock()
 		return Execution{}, false, backendError(err)
 	}
 
-	ex := &execution{
-		id:          newID("exe_"),
-		sandboxID:   sandboxID,
-		command:     append([]string(nil), req.Command...),
-		envDigest:   envFingerprint(req),
-		envCount:    len(req.Env),
-		cwd:         req.Cwd,
-		key:         req.IdempotencyKey,
-		stdinDigest: invocationFingerprint([]string{req.Stdin}),
-		startedAt:   s.now(),
-		state:       ExecRunning,
-		log:         newEventLog(),
-		logger:      contextLogger(ctx),
-		proc:        proc,
-		oomBaseline: baseline,
-		done:        make(chan struct{}),
-	}
+	ex.proc = proc
 	if req.TimeoutSeconds != nil && *req.TimeoutSeconds > 0 {
 		deadline := s.now().Add(time.Duration(*req.TimeoutSeconds) * time.Second)
 		ex.deadline = &deadline
 	}
-	sb.executions = append(sb.executions, ex)
+	if req.TimeoutMS != nil {
+		ex.timeoutMS = new(*req.TimeoutMS)
+		managed, ok := proc.(ManagedProcess)
+		if !ok || (managed.PID() <= 0 && startErr == nil) {
+			_ = s.terminateLocked(context.WithoutCancel(ctx), sb, KillRequested)
+			ex.finish(s.now(), -1, ExecOutcome{Reason: ReasonUnknown})
+			sb.mu.Unlock()
+			return Execution{}, false, errorf(CodeBackendError, "runtime did not confirm managed identity")
+		}
+		ex.pid = managed.PID()
+		// The in-guest supervisor owns this exact deadline. A second reaper
+		// clock could overwrite a natural exit with an unconfirmed timeout.
+	}
+	if s.journal == nil {
+		sb.executions = append(sb.executions, ex)
+	}
 	sb.running[ex.id] = ex
 	if ex.key != "" {
 		sb.idempotency[ex.key] = ex
+	}
+	var persistErr error
+	if ex.persist != nil {
+		persistErr = ex.persist(ex.snapshotLocked(), nil)
 	}
 	sb.lastActivity = s.now()
 	sb.pruneExecutionsLocked()
@@ -325,6 +410,12 @@ func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req Ex
 
 	contextLogger(ctx).InfoContext(ctx, "execution started", "sandbox_id", sandboxID, "execution_id", ex.id)
 	go s.run(context.WithoutCancel(ctx), sb, ex)
+	if persistErr != nil {
+		return Execution{}, false, errorf(CodeUnavailable, "accepted execution %s could not persist its identity", ex.id)
+	}
+	if startErr != nil {
+		return Execution{}, false, errorf(CodeBackendError, "managed identity unconfirmed; retained execution %s; do not start with a new key", ex.id)
+	}
 	return out, true, nil
 }
 
@@ -361,6 +452,11 @@ func (s *Sandboxes) run(ctx context.Context, sb *sandbox, ex *execution) {
 
 	exitCode, waitErr := ex.proc.Wait()
 	pumps.Wait()
+	if managed, ok := ex.proc.(ManagedProcess); ok && managed.TimedOut() {
+		ex.setIntent(ReasonTimeout)
+	} else if ok && managed.Killed() {
+		ex.setIntent(ReasonCanceled)
+	}
 
 	ex.mu.Lock()
 	intent := ex.intent
@@ -383,6 +479,9 @@ func (s *Sandboxes) run(ctx context.Context, sb *sandbox, ex *execution) {
 		// The runtime failed to report an exit status. Keep the reason the
 		// classification gave, but the exit code stays unknown.
 		exitCode = -1
+		if outcome.Reason == ReasonExited {
+			outcome.Reason = ReasonUnknown
+		}
 	}
 
 	// Completion and the sandbox's release happen under one sandbox lock.
@@ -398,6 +497,7 @@ func (s *Sandboxes) run(ctx context.Context, sb *sandbox, ex *execution) {
 	if ex.finish(now, exitCode, outcome) {
 		delete(sb.running, ex.id)
 		sb.lastActivity = now
+		_ = s.saveSandboxLocked(sb)
 	}
 	if outcome.SandboxLost {
 		_ = s.terminateLocked(context.WithoutCancel(context.Background()), sb, KillEvicted) // Removal failures are queued for retry.
@@ -657,6 +757,9 @@ func (s *Sandboxes) Events(sandboxID, executionID string, lastEventID uint64) (*
 	if err != nil {
 		return nil, err
 	}
+	if ex.outputLost && lastEventID != 0 {
+		return nil, errorf(CodeInvalidState, "live output lost on restart; read execution outcome or replay from zero")
+	}
 	if newest := ex.log.lastEventID(); lastEventID > newest {
 		return nil, errorf(CodeInvalidRequest,
 			"Last-Event-ID %d is beyond the newest event %d", lastEventID, newest)
@@ -823,10 +926,11 @@ func validateCwd(cwd string) error {
 // execution that ran with the old one.
 func sameInvocation(ex *execution, req ExecuteRequest) bool {
 	return equalStrings(ex.command, req.Command) &&
+		((ex.timeoutMS == nil && req.TimeoutMS == nil) || (ex.timeoutMS != nil && req.TimeoutMS != nil && *ex.timeoutMS == *req.TimeoutMS)) &&
 		ex.envCount == len(req.Env) &&
-		ex.envDigest == envFingerprint(req) &&
+		ex.envDigest == keyedFingerprint(ex.fingerprintKey, req.envPairs()) &&
 		ex.cwd == req.Cwd &&
-		ex.stdinDigest == invocationFingerprint([]string{req.Stdin})
+		ex.stdinDigest == keyedFingerprint(ex.fingerprintKey, []string{req.Stdin})
 }
 
 // ---------------------------------------------------------------- small helpers

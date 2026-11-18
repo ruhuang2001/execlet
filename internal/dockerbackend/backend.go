@@ -220,6 +220,21 @@ func (b *Backend) RemoveOwned(ctx context.Context, labelKey, owner string) (int,
 	return removed, errors.Join(errs...)
 }
 
+// Owned returns exact container identities for startup reconciliation.
+func (b *Backend) Owned(ctx context.Context, owner string) ([]string, error) {
+	list, err := b.api.ContainerList(ctx, true, map[string][]string{"label": {daemon.OwnerLabelKey + "=" + owner}})
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for _, container := range list {
+		if container.Labels[daemon.OwnerLabelKey] == owner {
+			ids = append(ids, container.ID)
+		}
+	}
+	return ids, nil
+}
+
 // ---------------------------------------------------------------- executions
 
 // Exec starts spec.Command inside the container. The command is wrapped in a
@@ -242,13 +257,26 @@ func (b *Backend) Exec(ctx context.Context, containerID string, spec daemon.Exec
 		}
 	}()
 	wrapped := wrapCommand(pidPath, spec.Dir, spec.Env, spec.Command)
-	if stdinDir != "" {
+	execEnv := spec.Env
+	controlToken := ""
+	if spec.TimeoutMS != nil {
+		if spec.Stdin != "" {
+			return nil, errors.New("managed commands do not support stdin")
+		}
+		controlToken = strings.TrimPrefix(b.nextPidPath(), PidDir+"/")
+		wrapped, stdinDir, err = b.managedCommand(ctx, containerID, pidPath, controlToken, spec)
+		if err != nil {
+			return nil, err
+		}
+		execEnv = nil // User environment belongs to the child, not its supervisor.
+	}
+	if stdinDir != "" && controlToken == "" {
 		wrapped = withStdin(wrapped, stdinDir)
 	}
 
 	execID, err := b.api.ExecCreate(ctx, containerID, dockerapi.ExecConfig{
 		Cmd: wrapped,
-		Env: spec.Env,
+		Env: execEnv,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("dockerbackend: exec create: %w", err)
@@ -261,14 +289,15 @@ func (b *Backend) Exec(ctx context.Context, containerID string, spec daemon.Exec
 	outW := newBufferedStream()
 	errW := newBufferedStream()
 	p := &process{
-		b:           b,
-		containerID: containerID,
-		execID:      execID,
-		pidPath:     pidPath,
-		stdinDir:    stdinDir,
-		stdout:      outW,
-		stderr:      errW,
-		done:        make(chan struct{}),
+		b:            b,
+		containerID:  containerID,
+		execID:       execID,
+		pidPath:      pidPath,
+		stdinDir:     stdinDir,
+		controlToken: controlToken,
+		stdout:       outW,
+		stderr:       errW,
+		done:         make(chan struct{}),
 	}
 	go func() {
 		defer close(p.done)
@@ -280,6 +309,15 @@ func (b *Backend) Exec(ctx context.Context, containerID string, spec daemon.Exec
 		p.demuxErr = err
 		p.mu.Unlock()
 	}()
+	if controlToken != "" {
+		if err := p.readManagedPID(ctx); err != nil {
+			// ExecStart was accepted. Keep its observer and original supervisor
+			// deadline alive; the caller retains the invocation but cannot
+			// advertise a handle whose guest identity was never confirmed.
+			started = true
+			return p, err
+		}
+	}
 	started = true
 	return p, nil
 }

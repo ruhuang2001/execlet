@@ -54,6 +54,10 @@ StreamExecution(ctx, sandboxID, executionID, onEvent func(Event) error) (*Execut
 GetExecution(ctx, sandboxID, executionID) (*Execution, error)
 ListExecutions(ctx, sandboxID) ([]*Execution, error)
 CancelExecution(ctx, sandboxID, executionID) (*Execution, error)
+Capabilities(ctx) ([]string, error)
+RequireCapability(ctx, capability string) error
+AttachCommand(ctx, sandboxID string, pid int) (*CommandAttachment, error)
+KillExecution(ctx, sandboxID, executionID string) (*CommandKill, error)
 
 // conveniences
 Exec(ctx, sandboxID, command []string) (*Execution, error)                      // = ExecStream with nil onEvent
@@ -93,6 +97,17 @@ and one-shot input:
 | `Env` | `map[string]string` | at most 64 entries; 64-byte names, 8192-byte values, 32768 bytes total including one `=` byte per entry; names must be non-empty and contain no `=`, NUL or newline; values contain no NUL |
 | `Cwd` | `string` | empty for the image's working directory, else an absolute path of at most 4096 bytes |
 | `Stdin` | `string` | UTF-8 text, at most 1 MiB; empty means EOF |
+| `TimeoutMS` | `*int64` | managed remote deadline, 0–9223372036854 milliseconds; exclusive with `TimeoutSeconds` and nonempty stdin; zero disables this command deadline |
+
+The native client checks capabilities before optional env/cwd/stdin, explicit
+concurrency and managed deadlines; missing support returns `incompatible_server`
+before mutation. Basic legacy calls skip discovery. Go reads capabilities afresh
+using the configured credentials. This is not mixed-version load-balancer support.
+`AttachCommand` returns an execution and atomic `LastEventID` watermark;
+`KillExecution` sends one immediate managed kill and returns the confirmed
+`Signaled` result. It never retries a lost signal acknowledgement. Native
+seconds-based deadlines and graceful `CancelExecution` are unchanged; the
+[background contract](e2b-background-commands.md) defines the managed boundary.
 
 `Env` is additive. A name here overrides the same name from the image, every
 other image variable stays visible, and a later execution does not inherit it.

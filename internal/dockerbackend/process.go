@@ -15,24 +15,29 @@ import (
 // process is one execution's process: a Docker exec inside the sandbox
 // container.
 type process struct {
-	b           *Backend
-	containerID string
-	execID      string
-	pidPath     string
-	stdinDir    string
+	b            *Backend
+	containerID  string
+	execID       string
+	pidPath      string
+	stdinDir     string
+	controlToken string
+	guestPID     int
 
 	stdout *bufferedStream
 	stderr *bufferedStream
 	done   chan struct{} // closed when the output stream has ended
 
-	signalMu   sync.Mutex
-	exited     bool
-	pidCleaned bool
-	mu         sync.Mutex
-	demuxErr   error
+	signalMu       sync.Mutex
+	exited         bool
+	pidCleaned     bool
+	mu             sync.Mutex
+	demuxErr       error
+	managedTimeout bool
+	managedKilled  bool
 }
 
 var _ daemon.Process = (*process)(nil)
+var _ daemon.ManagedProcess = (*process)(nil)
 
 // Stdout returns the process's stdout reader. It reaches EOF once the streams
 // end, which Wait waits for.
@@ -58,6 +63,11 @@ func (p *process) Wait() (int, error) {
 	if err != nil {
 		return -1, err
 	}
+	if p.controlToken != "" {
+		if err := p.readManagedOutcome(ctx); err != nil {
+			return -1, err
+		}
+	}
 	p.cleanupPID()
 	if inspect.ExitCode == nil {
 		return -1, nil
@@ -72,6 +82,10 @@ func (p *process) Wait() (int, error) {
 // A missing PID file means the process has not started yet or has already
 // been reaped; the first is retried briefly, the second is a success.
 func (p *process) Signal(sig daemon.Signal) error {
+	if p.controlToken != "" {
+		_, err := p.signalManaged(sig)
+		return err
+	}
 	p.signalMu.Lock()
 	defer p.signalMu.Unlock()
 	if p.exited {

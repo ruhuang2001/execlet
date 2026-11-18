@@ -93,9 +93,11 @@ const (
 // on another, and the reaper skips a sandbox whose lock is held instead of
 // waiting for it.
 type Sandboxes struct {
-	backend Backend
-	clock   Clock
-	sleep   SleepFunc
+	backend        Backend
+	clock          Clock
+	journal        *Journal
+	fingerprintKey [32]byte
+	sleep          SleepFunc
 
 	cleanupInterval time.Duration
 	owner           string
@@ -131,6 +133,7 @@ const removalPassBudget = 2 * time.Second
 func New(backend Backend, opts ...Option) *Sandboxes {
 	s := &Sandboxes{
 		backend:              backend,
+		fingerprintKey:       invocationFingerprintKey,
 		clock:                realClock{},
 		cleanupInterval:      time.Second,
 		cancelGrace:          2 * time.Second,
@@ -194,6 +197,7 @@ type sandbox struct {
 	// released records that this sandbox gave back its live-sandbox slot, so a
 	// kill that races a failed create cannot free the same slot twice.
 	released   bool
+	forgotten  bool
 	killReason *KillReason
 	// expiresAt is non-nil only while a lifetime deadline is armed: for a
 	// kill-action sandbox in any live state, and for a pause-action sandbox
@@ -231,6 +235,9 @@ func (sb *sandbox) pruneExecutionsLocked() {
 
 // Create starts a container and returns the sandbox once it is running.
 func (s *Sandboxes) Create(ctx context.Context, req CreateRequest) (Sandbox, error) {
+	if err := s.durableReady(); err != nil {
+		return Sandbox{}, err
+	}
 	opts, err := req.resolve()
 	if err != nil {
 		return Sandbox{}, err
@@ -256,6 +263,14 @@ func (s *Sandboxes) Create(ctx context.Context, req CreateRequest) (Sandbox, err
 	s.order = append(s.order, sb)
 	s.mu.Unlock()
 
+	sb.mu.Lock()
+	err = s.saveSandboxLocked(sb)
+	sb.mu.Unlock()
+	if err != nil {
+		s.release()
+		s.forget(sb)
+		return Sandbox{}, err
+	}
 	spec := ContainerSpec{
 		Image:     opts.image,
 		MemoryMB:  opts.memoryMB,
@@ -270,7 +285,11 @@ func (s *Sandboxes) Create(ctx context.Context, req CreateRequest) (Sandbox, err
 		// The container may exist despite the error; removing it is the only
 		// way to be sure. A failed remove is left for startup cleanup by
 		// label.
-		_ = s.backend.Remove(ctx, containerID)
+		if containerID != "" {
+			if removeErr := s.backend.Remove(context.WithoutCancel(ctx), containerID); removeErr != nil && !errors.Is(removeErr, ErrNotFound) {
+				s.scheduleRemoval(containerID)
+			}
+		}
 		// The reservation from reserve() never became a sandbox record. A kill
 		// that landed while the container was being created already released
 		// it, so the sandbox decides whether this call owns the slot.
@@ -296,7 +315,16 @@ func (s *Sandboxes) Create(ctx context.Context, req CreateRequest) (Sandbox, err
 	}
 	sb.state = StateRunning
 	sb.armLifetimeLocked(s.now())
+	err = s.saveSandboxLocked(sb)
+	if err != nil {
+		// No successful response can identify this container for the caller.
+		// Reclaim it now; a failed removal stays reserved and queued.
+		_ = s.terminateLocked(ctx, sb, KillEvicted)
+	}
 	sb.mu.Unlock()
+	if err != nil {
+		return Sandbox{}, err
+	}
 	return sb.snapshot(), nil
 }
 
@@ -325,6 +353,29 @@ func (s *Sandboxes) release() {
 
 // forget removes a sandbox that never started.
 func (s *Sandboxes) forget(sb *sandbox) {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+	if s.journal != nil {
+		// A partially pruned tombstone must not claim history already removed.
+		history := sb.executions
+		sb.executions = nil
+		err := s.saveSandboxLocked(sb)
+		sb.executions = history
+		if err != nil {
+			return
+		}
+		for _, ex := range sb.executions {
+			s.journal.remove(sb.id + "-" + ex.id + ".json")
+		}
+		if s.journal.health() != nil {
+			return
+		}
+		s.journal.remove(sb.id + ".json")
+		if s.journal.health() != nil {
+			return
+		}
+	}
+	sb.forgotten = true
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.byID, sb.id)
@@ -411,7 +462,7 @@ func (s *Sandboxes) OpenStream(id string) (closeStream func(), err error) {
 // shorten it. ExtendSeconds applies the connect rule instead: the deadline is
 // the later of the current one and now plus the value, so it can only extend.
 // A killed or pending sandbox cannot be updated; a live one keeps its state.
-func (s *Sandboxes) Update(_ context.Context, id string, req UpdateRequest) (Sandbox, error) {
+func (s *Sandboxes) Update(_ context.Context, id string, req UpdateRequest) (result Sandbox, retErr error) {
 	if req.TimeoutSeconds != nil && req.ExtendSeconds != nil {
 		return Sandbox{}, errorf(CodeInvalidRequest, "timeout_seconds and extend_seconds are mutually exclusive")
 	}
@@ -431,6 +482,11 @@ func (s *Sandboxes) Update(_ context.Context, id string, req UpdateRequest) (San
 	}
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
+	defer func() {
+		if err := s.saveSandboxLocked(sb); err != nil {
+			retErr = err
+		}
+	}()
 	if sb.state != StateRunning && sb.state != StatePaused {
 		return Sandbox{}, sb.invalidState()
 	}
@@ -463,13 +519,18 @@ func (s *Sandboxes) Update(_ context.Context, id string, req UpdateRequest) (San
 
 // Pause freezes the sandbox. It is invalid while pending or killed and a
 // no-op while paused.
-func (s *Sandboxes) Pause(ctx context.Context, id string) (Sandbox, error) {
+func (s *Sandboxes) Pause(ctx context.Context, id string) (result Sandbox, retErr error) {
 	sb, err := s.lookup(id)
 	if err != nil {
 		return Sandbox{}, err
 	}
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
+	defer func() {
+		if err := s.saveSandboxLocked(sb); err != nil {
+			retErr = err
+		}
+	}()
 
 	switch sb.state {
 	case StatePaused:
@@ -523,7 +584,7 @@ func (s *Sandboxes) unpauseLocked(ctx context.Context, sb *sandbox) error {
 	}
 	sb.state = StateRunning
 	sb.armLifetimeLocked(s.now())
-	return nil
+	return s.saveSandboxLocked(sb)
 }
 
 // Delete kills the sandbox with reason requested and removes its container. It
@@ -624,19 +685,21 @@ func (s *Sandboxes) killLocked(sb *sandbox, reason KillReason) {
 // timeout or an eviction, ignore it: the retry is what matters to them.
 func (s *Sandboxes) terminateLocked(ctx context.Context, sb *sandbox, reason KillReason) error {
 	s.killLocked(sb, reason)
+	// Record deletion intent before removing; a crash must not re-adopt it.
+	persistErr := s.saveSandboxLocked(sb)
 	if sb.container == "" {
-		return nil
+		return persistErr
 	}
 	removeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), BackendCallTimeout)
 	defer cancel()
 	if err := s.backend.Remove(removeCtx, sb.container); err != nil {
 		if errors.Is(err, ErrNotFound) {
-			return nil
+			return persistErr
 		}
 		s.scheduleRemoval(sb.container)
 		return s.unconfirmedRemoval(sb.container)
 	}
-	return nil
+	return persistErr
 }
 
 // ---------------------------------------------------------------- shutdown

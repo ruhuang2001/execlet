@@ -34,6 +34,25 @@ func (c *Client) StartExecution(ctx context.Context, sandboxID string, req Execu
 	if ctx.Err() != nil {
 		return nil, &Error{Code: "canceled", Message: "sandbox: request canceled", Cause: ctx.Err()}
 	}
+	if req.TimeoutMS != nil {
+		req.TimeoutMS = new(*req.TimeoutMS)
+		if req.TimeoutSeconds != nil || *req.TimeoutMS < 0 || *req.TimeoutMS > 9223372036854 {
+			return nil, &Error{Code: "invalid_request", Message: "invalid or conflicting execution timeout"}
+		}
+		if err := c.RequireCapability(ctx, "e2b.background.v1"); err != nil {
+			return nil, err
+		}
+	}
+	if len(req.Env) > 0 || req.Cwd != "" {
+		if err := c.RequireCapability(ctx, "execution.env-cwd.v1"); err != nil {
+			return nil, err
+		}
+	}
+	if req.Stdin != "" {
+		if err := c.RequireCapability(ctx, "execution.stdin.v1"); err != nil {
+			return nil, err
+		}
+	}
 
 	ex, err := c.startExecution(ctx, sandboxID, req)
 	if err == nil {

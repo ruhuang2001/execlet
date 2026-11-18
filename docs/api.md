@@ -9,7 +9,7 @@ Status: normative. [OpenAPI specification](../api/openapi.yaml) must describe ex
 - Clients should tolerate unknown response fields and preserve unknown string
   values. A missing additive field on an older server is unknown, not evidence
   that a newer default or capability took effect. See the [Python SDK](sdk-python.md).
-- Timestamps are RFC 3339 in UTC. Durations are integer seconds and their field names end in `_seconds`.
+- Timestamps are RFC 3339 in UTC. Durations use the unit in their name: integer seconds (`_seconds`) or managed-command milliseconds (`timeout_ms`).
 - IDs are opaque strings. Clients must not parse them.
 - Authentication: if the server was started with `SANDBOX_API_KEY` set, every `/v1` request must carry `Authorization: Bearer <key>`, otherwise `401 unauthorized`. `/healthz` and `/readyz` never require authentication. The key is compared in constant time.
 
@@ -77,7 +77,8 @@ Creation is never automatically retried; see the respective SDK contracts.
 | `exit_code` | int or null | null while running, or if the runtime could not report one |
 | `termination_reason` | string or null | null while running; see below |
 | `stdout`, `stderr` | string | retained output; omitted in list responses |
-| `output_truncated` | bool | true when output exceeded the retention limit |
+| `output_truncated` | bool | true when output exceeded retention or live output was lost during recovery |
+| `pid` | int, optional | confirmed positive guest PID for managed commands; absent on native executions or unconfirmed start |
 | `started_at` | string | |
 | `finished_at` | string or null | |
 
@@ -88,13 +89,51 @@ container liveness, and finally the exit code:
 | Reason | Condition |
 |---|---|
 | `canceled` | the server terminated it because of a cancel request or sandbox deletion |
-| `timeout` | the server terminated it because a deadline expired: the sandbox lifetime with action `kill`, or the execution's own `timeout_seconds` |
+| `timeout` | the sandbox lifetime with action `kill`, native `timeout_seconds`, or managed `timeout_ms` expired |
 | `oom` | positive cgroup OOM evidence during an execution in a sandbox configured for one slot |
 | `evicted` | the container stopped or disappeared without the server asking for it |
 | `exited` | the process exited without a higher-priority reason; unexplained 137 is included only with one configured slot |
-| `unknown` | unexplained exit 137 with multiple configured slots; a non-success SDK outcome |
+| `unknown` | unexplained exit 137 with multiple configured slots, or interrupted execution after durable restart recovery; a non-success SDK outcome |
 
 `canceled` and `timeout` are intents the server records before it acts; a later intent does not replace the first. The periodic eviction sweep can also finalize an execution directly as `evicted` when the container is gone. Exit code 137 alone never implies `oom`.
+
+### `GET /v1/capabilities`
+
+Authenticated feature discovery: `200 {"capabilities":["execution.env-cwd.v1","files.archive.v1","files.list.v1","execution.stdin.v1","execution.concurrent.v1","e2b.background.v1"]}`.
+The background flag is present only for a supporting backend. Missing endpoint
+or flag means unsupported, not permission to send fields an old server ignores.
+Flags describe the configured endpoint; mixed-version rolling servers are unsupported.
+Current native SDKs preflight nonempty env/cwd/stdin, explicit concurrency and
+managed `timeout_ms` before create/start. Basic legacy calls need no discovery.
+File methods use dedicated endpoints; they do not silently downgrade to shell.
+
+### `GET /v1/sandboxes/{sandbox_id}/commands/{pid}`
+
+Resolve the newest retained managed incarnation of a positive guest PID.
+Returns `200 {execution, last_event_id}` with an atomic outcome/output watermark.
+Requires a running sandbox; does not start work, resume it, or renew its TTL.
+Unknown PID is `404 not_found`. A fresh observer starts **after** the watermark;
+an already completed command uses the returned terminal outcome, not an SSE
+request after the last event. The snapshot's retained full stdout is not the
+new observer's output. See [background command semantics](e2b-background-commands.md).
+
+### `POST /v1/sandboxes/{sandbox_id}/executions/{execution_id}/kill`
+
+Immediate, lifetime-bound SIGKILL for a managed command, distinct from graceful
+`/cancel`. Returns `200 {execution, signaled}` only with confirmed termination.
+Already completed returns false; lost acknowledgement or unconfirmed termination
+is `502 backend_error`, never fabricated success. Container-removal fallback
+reports the collateral termination of siblings explicitly. No automatic retry
+of this signal acknowledgement is safe. Handles keep their immutable execution ID.
+
+Managed execution is selected by `timeout_ms` on the existing execution-start
+endpoint. It must be an integer from 0 through 9223372036854, exclusive with
+`timeout_seconds` and nonempty `stdin`; zero disables only the command deadline.
+It is part of the idempotency fingerprint. Deadlines are enforced remotely with
+immediate group kill; disconnect does not stop or extend them. Managed results
+include additive `pid` in start/get/list/complete when confirmed. Native seconds
+deadlines and graceful cancel are unchanged. Linux Python 3 is required in images
+used for managed commands; missing runtime support must not silently fall back.
 
 ## Sandbox lifecycle
 
@@ -501,9 +540,10 @@ cleanup with the same owner label is the fallback.
 ## Server behavior
 
 - Listens on `127.0.0.1:8080` by default (`-addr` flag). Refuses to start on a non-loopback address unless `SANDBOX_API_KEY` is set.
-- Each container is labeled `tiny-sandbox.owner=<owner>`, where `<owner>` is the `-owner` flag and defaults to the listen address. On startup the server attempts to remove containers carrying its own label and logs cleanup failures.
+- Each container is labeled `tiny-sandbox.owner=<owner>`, where `<owner>` is the `-owner` flag and defaults to the listen address. Without `-state-dir`, startup removes containers carrying its own label; incomplete cleanup refuses admission.
 - An ordinary stop (SIGINT, SIGTERM) ends open event streams, waits for in-flight requests up to 10 seconds, then attempts container removal within a separate ten-second sweep budget. Removal is best effort; runtime failures can leave containers for owner-label cleanup on a later startup.
-- State is in memory and is lost on restart. A crash skips the shutdown sweep, so startup cleanup is the fallback. It matches the owner label: pin `-owner` when the listen address can change, or a restart on a different port will not clean up the previous process's containers.
+- State is in memory by default. Pin `-owner` when the listen address can change. Opt-in `-state-dir` journals intents and completed results, adopts eligible idle containers, and removes interrupted work as `unknown` without replay. Graceful durable shutdown preserves idle containers, not live commands. Lost live output is truncated; nonzero lost cursors return 409.
+- Journal failures close readiness and create/start admission.
 
 ## Implementation references
 

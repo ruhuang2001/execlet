@@ -7,20 +7,20 @@ import (
 	"encoding/binary"
 )
 
-// The key lives only for this process, just like the execution records. A
-// fingerprint alone cannot be used to guess low-entropy environment secrets.
-// This does not protect secrets from an attacker who can read all process memory.
+// In-memory stores use a process key; durable stores retain their own private
+// key. Fingerprints alone do not reveal low-entropy environment secrets.
+// Reading the key or all process memory defeats that protection.
 var invocationFingerprintKey = func() [32]byte {
 	var key [32]byte
 	_, _ = rand.Read(key[:]) // crypto/rand.Read always fills the buffer or terminates.
 	return key
 }()
 
-// invocationFingerprint hashes a length-framed sequence, so neither separators
+// keyedFingerprint hashes a length-framed sequence, so neither separators
 // inside values nor different entry boundaries can alias another invocation.
 // The caller supplies deterministic ordering. No input strings are retained.
-func invocationFingerprint(parts []string) [sha256.Size]byte {
-	mac := hmac.New(sha256.New, invocationFingerprintKey[:])
+func keyedFingerprint(key [32]byte, parts []string) [sha256.Size]byte {
+	mac := hmac.New(sha256.New, key[:])
 	var size [8]byte
 	binary.BigEndian.PutUint64(size[:], uint64(len(parts)))
 	_, _ = mac.Write(size[:])
@@ -32,8 +32,4 @@ func invocationFingerprint(parts []string) [sha256.Size]byte {
 	var digest [sha256.Size]byte
 	mac.Sum(digest[:0])
 	return digest
-}
-
-func envFingerprint(req ExecuteRequest) [sha256.Size]byte {
-	return invocationFingerprint(req.envPairs())
 }

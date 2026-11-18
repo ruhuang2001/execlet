@@ -67,6 +67,9 @@ func (s *Sandboxes) Reap(ctx context.Context) {
 			continue
 		}
 		s.reapOne(ctx, sb, now)
+		if s.journal != nil {
+			_ = s.saveSandboxLocked(sb)
+		}
 		sb.mu.Unlock()
 	}
 }
@@ -265,7 +268,7 @@ func (s *Sandboxes) EvictSweep(ctx context.Context) {
 			case err != nil:
 				// Unreadable is not proof of death; the next sweep asks again.
 			case liveness == LivenessStopped || liveness == LivenessMissing:
-				s.killLocked(sb, KillEvicted)
+				_ = s.terminateLocked(ctx, sb, KillEvicted)
 			}
 		}
 		sb.mu.Unlock()

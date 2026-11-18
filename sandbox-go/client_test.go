@@ -398,3 +398,40 @@ func implementsIs(err, target error) bool {
 	var sdkErr *Error
 	return errors.As(err, &sdkErr) && sdkErr.Is(target)
 }
+
+func TestAdditiveFieldsRejectLegacyServer(t *testing.T) {
+	f := newFakeServer(t)
+	f.setHandler(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/capabilities" {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSON(w, http.StatusOK, Execution{ID: "exe_legacy", SandboxID: "sbx_legacy"})
+	})
+	c := f.client(t, -1)
+	for _, req := range []ExecuteRequest{
+		{Command: []string{"true"}, Env: map[string]string{"X": "Y"}},
+		{Command: []string{"true"}, Cwd: "/tmp"},
+		{Command: []string{"true"}, Stdin: "payload"},
+		{Command: []string{"true"}, TimeoutMS: new(int64(0))},
+	} {
+		_, err := c.StartExecution(t.Context(), "sbx_legacy", req)
+		value, ok := errors.AsType[*Error](err)
+		if !ok || value.Code != "incompatible_server" {
+			t.Fatalf("unsafe old-server dispatch: %v", err)
+		}
+	}
+	for _, req := range []CreateSandboxRequest{{Env: map[string]string{"X": "Y"}}, {MaxConcurrentExecutions: new(2)}} {
+		_, err := c.CreateSandbox(t.Context(), req)
+		value, ok := errors.AsType[*Error](err)
+		if !ok || value.Code != "incompatible_server" {
+			t.Fatalf("unsafe old-server create: %v", err)
+		}
+	}
+	if f.count(http.MethodPost, "/v1/sandboxes") != 0 || f.count(http.MethodPost, "/v1/sandboxes/sbx_legacy/executions") != 0 {
+		t.Fatal("rejected fields must cause no mutation")
+	}
+	if _, err := c.StartExecution(t.Context(), "sbx_legacy", ExecuteRequest{Command: []string{"true"}}); err != nil {
+		t.Fatal(err)
+	}
+}

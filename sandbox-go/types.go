@@ -70,6 +70,7 @@ type Sandbox struct {
 // Execution is one command run in a sandbox.
 type Execution struct {
 	ID                string   `json:"id"`
+	PID               *int     `json:"pid,omitempty"`
 	SandboxID         string   `json:"sandbox_id"`
 	Command           []string `json:"command"`
 	Cwd               *string  `json:"cwd"`
@@ -136,6 +137,7 @@ type ExecuteRequest struct {
 	Command        []string          `json:"command"`
 	IdempotencyKey string            `json:"idempotency_key,omitempty"`
 	TimeoutSeconds *int              `json:"timeout_seconds,omitempty"`
+	TimeoutMS      *int64            `json:"timeout_ms,omitempty"`
 	Env            map[string]string `json:"env,omitempty"`
 	Cwd            string            `json:"cwd,omitempty"`
 	// Stdin is one-shot UTF-8 text (maximum 1 MiB), followed by EOF.

@@ -22,6 +22,67 @@ tags:
   - name: executions
   - name: files
 paths:
+  /v1/capabilities:
+    get:
+      operationId: getCapabilities
+      summary: Query supported capabilities before using additive fields
+      responses:
+        '200':
+          description: Authenticated server capabilities; absence is not support.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [capabilities]
+                properties:
+                  capabilities:
+                    type: array
+                    items: {type: string}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /v1/sandboxes/{sandbox_id}/commands/{pid}:
+    parameters:
+      - $ref: '#/components/parameters/SandboxID'
+      - in: path
+        name: pid
+        required: true
+        schema: {type: integer, minimum: 1}
+    get:
+      operationId: attachCommand
+      summary: Resolve newest retained managed command with atomic event watermark
+      responses:
+        '200':
+          description: No start, resume or TTL renewal.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [execution, last_event_id]
+                properties:
+                  execution: {$ref: '#/components/schemas/Execution'}
+                  last_event_id: {type: integer, minimum: 0}
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/sandboxes/{sandbox_id}/executions/{execution_id}/kill:
+    parameters:
+      - $ref: '#/components/parameters/SandboxID'
+      - $ref: '#/components/parameters/ExecutionID'
+    post:
+      operationId: killExecution
+      summary: Immediately kill one immutable managed execution with confirmation
+      responses:
+        '200':
+          description: Confirmed terminal execution; signaled false if already completed.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [execution, signaled]
+                properties:
+                  execution: {$ref: '#/components/schemas/Execution'}
+                  signaled: {type: boolean}
+        '502':
+          $ref: '#/components/responses/BackendError'
   /healthz:
     get:
       tags: [health]
@@ -46,6 +107,7 @@ paths:
       description: >-
         Public probe of Docker's unversioned /_ping, bounded to two seconds.
         Requires HTTP 200 and body OK; no runtime details are exposed on failure.
+        With durable state enabled, journal failure also makes the service unready.
       security: []
       responses:
         '200':
@@ -55,7 +117,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Readiness'
         '503':
-          description: Docker is unreachable or did not answer a valid probe.
+          description: Docker is unavailable or the durable journal has failed.
           content:
             application/json:
               schema:
@@ -103,7 +165,8 @@ paths:
       operationId: listSandboxes
       summary: List sandboxes
       description: >-
-        Newest first. Killed sandboxes are included until the server restarts.
+        Newest first. Killed sandboxes are included while retained; durable
+        mode preserves retained records across restart.
       responses:
         '200':
           description: Every sandbox the server knows about.
@@ -1030,6 +1093,16 @@ components:
       type: object
       required: [command]
       properties:
+        timeout_ms:
+          type: integer
+          minimum: 0
+          maximum: 9223372036854
+          description: >-
+            Managed execution deadline, requiring e2b.background.v1 capability
+            and Linux Python 3 in the image. Mutually exclusive with
+            timeout_seconds and nonempty stdin. Zero disables the deadline.
+            Unlike timeout_seconds, this is part of the idempotency identity
+            and expiry uses immediate group kill. Check capabilities first.
         command:
           type: array
           minItems: 1
@@ -1116,6 +1189,10 @@ components:
         - started_at
         - finished_at
       properties:
+        pid:
+          type: integer
+          minimum: 1
+          description: Guest PID for managed executions; absent otherwise. Never a durable identity.
         id:
           type: string
           description: Opaque identifier. Clients must not parse it.
@@ -1149,12 +1226,13 @@ components:
             as evicted, preserving a previously recorded intent. Above one configured
             execution slot, OOM counters are not attributed to an execution and
             an otherwise unexplained exit 137 is unknown. Exit code 137 alone
-            never implies oom.
+            never implies oom. Interrupted work in durable recovery becomes
+            unknown with a null exit code, never re-executed.
         output_truncated:
           type: boolean
           description: >-
             True when output exceeded the retention limit of 1 MiB or 4096
-            events.
+            events, or live output was lost during durable restart recovery.
         started_at:
           type: string
           format: date-time

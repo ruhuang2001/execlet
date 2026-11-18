@@ -179,6 +179,7 @@ type Sandbox struct {
 // Execution is the contract view of an execution, including retained output.
 type Execution struct {
 	ID                string     `json:"id"`
+	PID               int        `json:"pid,omitzero"`
 	SandboxID         string     `json:"sandbox_id"`
 	Command           []string   `json:"command"`
 	Cwd               *string    `json:"cwd"`
@@ -196,6 +197,7 @@ type Execution struct {
 // list endpoints.
 type ExecutionSummary struct {
 	ID                string     `json:"id"`
+	PID               int        `json:"pid,omitzero"`
 	SandboxID         string     `json:"sandbox_id"`
 	Command           []string   `json:"command"`
 	Cwd               *string    `json:"cwd"`
@@ -211,6 +213,7 @@ type ExecutionSummary struct {
 func (e Execution) Summary() ExecutionSummary {
 	return ExecutionSummary{
 		ID:                e.ID,
+		PID:               e.PID,
 		SandboxID:         e.SandboxID,
 		Command:           e.Command,
 		Cwd:               cloneString(e.Cwd),
@@ -274,6 +277,7 @@ type ExecuteRequest struct {
 	Command        []string          `json:"command"`
 	IdempotencyKey string            `json:"idempotency_key,omitempty"`
 	TimeoutSeconds *int              `json:"timeout_seconds,omitempty"`
+	TimeoutMS      *int64            `json:"timeout_ms,omitempty"`
 	Env            map[string]string `json:"env,omitempty"`
 	Cwd            string            `json:"cwd,omitempty"`
 	Stdin          string            `json:"stdin,omitempty"`

@@ -141,6 +141,9 @@ func (sb *sandbox) dropOldestLocked() (int, bool) {
 	if ex == nil {
 		return 0, false
 	}
+	if ex.forget != nil && ex.forget() != nil {
+		return 0, false
+	}
 	if ex.key != "" && sb.idempotency[ex.key] == ex {
 		delete(sb.idempotency, ex.key)
 	}
@@ -162,5 +165,5 @@ func (sb *sandbox) dropOldestLocked() (int, bool) {
 func (sb *sandbox) isKilled() bool {
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
-	return sb.state == StateKilled
+	return sb.state == StateKilled && len(sb.running) == 0
 }

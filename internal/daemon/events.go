@@ -175,18 +175,6 @@ func (l *eventLog) truncateLocked() {
 	l.outputEvents = MaxOutputEvents // keep both bounds visibly exhausted
 }
 
-// appendComplete appends the terminal event. It is always last.
-func (l *eventLog) appendComplete(ex Execution) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	if l.complete {
-		return
-	}
-	l.complete = true
-	l.appendLocked(Event{Type: EventComplete, Execution: &ex})
-}
-
 func (l *eventLog) appendLocked(ev Event) {
 	l.nextID++
 	ev.ID = l.nextID

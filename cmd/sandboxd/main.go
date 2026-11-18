@@ -28,6 +28,7 @@ func main() {
 	dockerHost := flag.String("docker", defaultDockerSocket(), "Docker socket path")
 	owner := flag.String("owner", "", "container ownership label; defaults to the listen address")
 	showVersion := flag.Bool("version", false, "print version and exit")
+	stateDir := flag.String("state-dir", "", "private local directory for conservative restart recovery")
 	flag.Parse()
 
 	if *showVersion {
@@ -39,7 +40,19 @@ func main() {
 		slog.Error("refusing non-loopback listener without authentication", "addr", *addr)
 		os.Exit(1)
 	}
-
+	if *owner == "" {
+		*owner = *addr
+	}
+	var journal *daemon.Journal
+	if *stateDir != "" {
+		var err error
+		journal, err = daemon.OpenJournal(*stateDir, *owner)
+		if err != nil {
+			slog.Error("cannot open durable state", "error", err)
+			os.Exit(1)
+		}
+		defer func() { _ = journal.Close() }()
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -49,22 +62,26 @@ func main() {
 		os.Exit(1)
 	}
 
-	// State is in memory, so containers from a previous process are orphans.
-	// Removing them by the owner label is what keeps a restart from leaking
-	// sandboxes. The label defaults to the listen address, the only stable
-	// identity a restart has, but it can be pinned with -owner so a restart on
-	// a different port still finds the previous process's containers.
-	if *owner == "" {
-		*owner = *addr
-	}
-	if removed, err := backend.RemoveOwned(ctx, daemon.OwnerLabelKey, *owner); err != nil {
-		slog.Warn("startup cleanup incomplete", "removed", removed, "error_category", runtimeErrorCategory(err))
-	} else if removed > 0 {
-		slog.Info("startup cleanup completed", "removed", removed)
+	// The default in-memory mode reclaims owned orphans. Durable mode instead
+	// reconciles the journal before admission. Pin -owner across port changes.
+	if journal == nil {
+		if removed, err := backend.RemoveOwned(ctx, daemon.OwnerLabelKey, *owner); err != nil {
+			slog.Error("startup cleanup incomplete; refusing admission", "removed", removed, "error_category", runtimeErrorCategory(err))
+			os.Exit(1)
+		} else if removed > 0 {
+			slog.Info("startup cleanup completed", "removed", removed)
+		}
 	}
 
 	store := daemon.New(backend, daemon.WithOwnerLabel(*owner))
-	go store.Run(ctx)
+	if journal != nil {
+		if err := store.Recover(ctx, journal, backend); err != nil {
+			slog.Error("recovery failed; refusing admission", "error", err)
+			os.Exit(1)
+		}
+	}
+	reaperDone := make(chan struct{})
+	go func() { defer close(reaperDone); store.Run(ctx) }()
 
 	// shuttingDown tells event streams to end. Without it a live SSE handler
 	// outlives the shutdown deadline: http.Server.Shutdown stops accepting and
@@ -94,9 +111,13 @@ func main() {
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			slog.Warn("http shutdown incomplete", "error", err)
 		}
-		// Containers are this process's state, so they go with it. Startup
-		// cleanup covers a crash; this covers the ordinary stop.
-		store.Shutdown(context.Background())
+		// Durable mode preserves idle containers, never live execution state.
+		<-reaperDone
+		if journal == nil {
+			store.Shutdown(context.Background())
+		} else {
+			store.DrainPersistent(context.Background())
+		}
 		slog.Info("shutdown completed")
 	}()
 

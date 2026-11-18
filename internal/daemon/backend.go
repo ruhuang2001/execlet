@@ -111,6 +111,8 @@ type ExecSpec struct {
 	Dir string
 	// Stdin is bounded, one-shot UTF-8 input. Empty means immediate EOF.
 	Stdin string
+	// TimeoutMS selects lifetime-bound managed execution, including explicit zero.
+	TimeoutMS *int64
 }
 
 // Process is one execution's process, started by a Backend.
@@ -146,7 +148,8 @@ type Backend interface {
 	Unpause(ctx context.Context, containerID string) error
 	// Exec starts a command inside the container, without a shell around the
 	// command itself, and returns its process. The process runs in its own
-	// process group.
+	// process group. A non-nil process with an error means start was accepted
+	// but identity confirmation failed: retain and observe it, never replay it.
 	Exec(ctx context.Context, containerID string, spec ExecSpec) (Process, error)
 	// Liveness reports whether the container exists and is running.
 	Liveness(ctx context.Context, containerID string) (Liveness, error)

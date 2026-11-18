@@ -40,6 +40,8 @@ class _Model:
                 raise Error("decode", "response is missing " + key)
         if "state" in known and not data.get("state"):
             raise Error("decode", "response is missing state")
+        if "pid" in known and data.get("pid") is not None and data["pid"] <= 0:
+            raise Error("decode", "response pid must be positive")
         try:
             return cls(
                 **{key: value for key, value in data.items() if key in known},
@@ -73,6 +75,7 @@ class Execution(_Model):
     id: str
     sandbox_id: str
     state: str = ""
+    pid: int | None = None
     command: list[str] = field(default_factory=list)
     cwd: str | None = None
     exit_code: int | None = None
@@ -82,6 +85,23 @@ class Execution(_Model):
     output_truncated: bool = False
     started_at: str = ""
     finished_at: str | None = None
+
+
+@dataclass(kw_only=True)
+class Capabilities(_Model):
+    capabilities: list[str]
+
+
+@dataclass(kw_only=True)
+class CommandAttachment(_Model):
+    execution: Execution
+    last_event_id: int
+
+
+@dataclass(kw_only=True)
+class ExecutionKillResult(_Model):
+    execution: Execution
+    signaled: bool
 
 
 @dataclass(kw_only=True)
@@ -130,9 +150,20 @@ class ExecuteRequest(_Request):
     command: list[str]
     idempotency_key: str = ""
     timeout_seconds: int | None = None
+    timeout_ms: int | None = None
     env: dict[str, str] | None = None
     cwd: str | None = None
     stdin: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        from ._errors import Error
+
+        if self.timeout_ms is not None:
+            if type(self.timeout_ms) is not int or not 0 <= self.timeout_ms <= 9_223_372_036_854:
+                raise Error("invalid_request", "timeout_ms must be nonnegative integer milliseconds within the server duration range")
+            if self.timeout_seconds is not None:
+                raise Error("invalid_request", "timeout_ms and timeout_seconds are mutually exclusive")
+        return super().to_dict()
 
 
 @dataclass(kw_only=True)

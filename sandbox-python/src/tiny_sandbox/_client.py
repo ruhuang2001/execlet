@@ -46,8 +46,12 @@ class Client(SandboxAPI):
         on_stderr: Callable[[str], None] | None = None,
         cancel: CancellationToken | None = None,
         cancel_remote: bool = True,
+        last_event_id: int = 0,
     ) -> Execution:
-        cursor = 0
+        """Observe after last_event_id; reconnect only after delivered events."""
+        if type(last_event_id) is not int or not 0 <= last_event_id < 2**64:
+            raise Error("invalid_request", "last_event_id must be a nonnegative uint64 integer")
+        cursor = last_event_id
         try:
             for attempt in range(self._max_retries + 1):
                 headers = {"Accept": "text/event-stream"}

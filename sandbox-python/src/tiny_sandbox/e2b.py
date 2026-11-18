@@ -1,17 +1,22 @@
 """Source-compatible E2B 2.64.0 subset over sandboxd, without E2B dependencies.
 
 See docs/e2b-compatibility.md for the allowlist and image prerequisites.
-Native Client cancellation still cancels remote work; this facade only stops
-waiting. No cloud credentials, endpoints or template IDs are used.
+Native Client cancellation still cancels remote work; local observation failure
+in this facade does not. Command deadlines are enforced remotely.
+No cloud credentials, endpoints or template IDs are used.
 """
 from __future__ import annotations
 
+import builtins
 import math
 import os
 import re
+import secrets
 import stat
+import threading
+import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import Enum
 from typing import Any, Literal, overload
@@ -20,7 +25,7 @@ from . import CancellationToken, Client, CreateSandboxRequest, Error, ExecuteReq
 from ._models import Event, Execution, Sandbox as NativeSandbox
 
 __all__ = [
-    "Sandbox", "SandboxInfo", "CommandResult", "CommandExitException",
+    "Sandbox", "SandboxInfo", "CommandResult", "CommandHandle", "CommandExitException",
     "SandboxException", "NotFoundException", "SandboxNotFoundException",
     "FileNotFoundException", "AuthenticationException",
     "InvalidArgumentException", "TimeoutException", "AdapterError",
@@ -40,7 +45,10 @@ class SandboxException(Exception):
         super().__init__(message)
         self.status_code = status_code
         self.code = code
+        self.execution = execution
         self.execution_id = execution.id if execution else ""
+        self.sandbox_id = execution.sandbox_id if execution else ""
+        self.pid = execution.pid if execution else None
         self.idempotency_key = idempotency_key
         self.termination_reason = execution.termination_reason if execution else None
         self.output_truncated = execution.output_truncated if execution else False
@@ -74,6 +82,10 @@ class TimeoutException(SandboxException):
 
 class AdapterError(SandboxException):
     """Native limits, incomplete evidence and uncertainty outside E2B parity."""
+
+    @property
+    def exit_code(self) -> int | None:
+        return self.execution.exit_code if self.execution else None
 
 
 @dataclass
@@ -123,7 +135,7 @@ class SandboxInfo:
     end_at: datetime
 
 
-def _unknown(options: dict, allowed: set[str] = frozenset()) -> None:
+def _unknown(options: dict, allowed: set[str] | frozenset[str] = frozenset()) -> None:
     unknown = sorted(set(options) - allowed)
     if unknown:
         raise InvalidArgumentException("unsupported options: " + ", ".join(unknown))
@@ -146,6 +158,34 @@ def _duration(value: Any, *, lifetime: bool = False) -> float:
     elif type(value) not in (int, float) or not math.isfinite(value) or value < 0:
         raise InvalidArgumentException("timeout must be finite nonnegative seconds")
     return value
+
+
+def _command_duration_ms(value: Any) -> int:
+    # Pinned E2B timeout_to_ms: positive sub-millisecond durations round up
+    # to one; other ties use Python's round, not integer-seconds truncation.
+    if type(value) not in (int, float) or not 0 <= value <= 9_223_372_037:
+        raise InvalidArgumentException("timeout must be finite nonnegative seconds within the server duration range")
+    milliseconds = 0 if value == 0 else max(1, round(value * 1000))
+    if milliseconds > 9_223_372_036_854:
+        raise InvalidArgumentException("timeout exceeds the server duration range")
+    return milliseconds
+
+
+def _observation_token(milliseconds: int, entered: float) -> CancellationToken:
+    return CancellationToken(timeout=(
+        max(0, milliseconds / 1000 - (time.monotonic() - entered)) if milliseconds else None
+    ))
+
+
+def _pid(value: Any) -> int:
+    if type(value) is not int or value <= 0:
+        raise InvalidArgumentException("pid must be a positive integer")
+    return value
+
+
+def _callbacks(*values: Any) -> None:
+    if any(value is not None and not callable(value) for value in values):
+        raise InvalidArgumentException("output callbacks must be callable")
 
 
 def _env(value: Any) -> dict[str, str] | None:
@@ -217,7 +257,7 @@ class Sandbox:
         self.sandbox_id = sandbox.id
         self._client = client
         self._request_timeout = request_timeout
-        self.commands = _Commands(client, sandbox.id)
+        self.commands = _Commands(client, sandbox.id, request_timeout)
         self.files = _Files(client, sandbox.id, request_timeout)
 
     @classmethod
@@ -307,63 +347,304 @@ class Sandbox:
             raise
 
 
+def _require_commands(client: Client, token: CancellationToken) -> None:
+    # No process-global or endpoint-only cache: credentials and transport are
+    # exactly those that will dispatch the command. Mixed builds remain unsupported.
+    try:
+        capabilities = client.get_capabilities(cancel=token).capabilities
+    except Error as exc:
+        if exc.status_code in {404, 405, 501} or exc.code == "decode":
+            raise AdapterError("server does not support e2b.background.v1",
+                               code="incompatible_server", status_code=exc.status_code or None) from exc
+        raise
+    if "e2b.background.v1" not in capabilities:
+        raise AdapterError("server does not support e2b.background.v1", code="incompatible_server")
+
+
+def _command_error(client: Client, sandbox_id: str, exc: Error,
+                   token: CancellationToken) -> SandboxException:
+    if exc.status_code == 404 or exc.code == "not_found":
+        # The native wire has one not_found code. Distinguish an expired
+        # command from a missing sandbox with a read, never a resume or renewal.
+        try:
+            current = client.get_sandbox(sandbox_id, cancel=token)
+        except Error as lookup:
+            if lookup.execution is None:
+                lookup.execution = exc.execution
+            return _translate(lookup)
+        cls = NotFoundException if current.state == "running" else SandboxNotFoundException
+        return cls(str(exc), code=exc.code, status_code=exc.status_code or None,
+                   execution=exc.execution, idempotency_key=exc.idempotency_key)
+    return _translate(exc)
+
+
+@dataclass(frozen=True)
+class _CommandIdentity:
+    sandbox_id: str
+    execution_id: str
+    pid: int
+
+
+def _kill_command(client: Client, identity: _CommandIdentity, token: CancellationToken) -> bool:
+    try:
+        result = client.kill_execution(identity.sandbox_id, identity.execution_id, cancel=token)
+        if result.execution.pid != identity.pid:
+            raise Error("backend_error", "kill response identifies a different guest process")
+        return result.signaled
+    except Error as exc:
+        if exc.execution is None:
+            exc.execution = Execution(id=identity.execution_id, sandbox_id=identity.sandbox_id, pid=identity.pid)
+        else:
+            exc.execution = replace(exc.execution, id=identity.execution_id,
+                                    sandbox_id=identity.sandbox_id, pid=identity.pid)
+        translated = _command_error(client, identity.sandbox_id, exc, token)
+        if type(translated) is NotFoundException:
+            return False
+        raise translated from exc
+
+
+class CommandHandle:
+    """One thread-confined observation, bound permanently to a managed command.
+
+    Constructed by commands.run(background=True) or commands.connect(pid).
+    Disconnect and local failures never signal the command. Use a new handle
+    to observe again; kill always addresses this handle's original execution.
+    """
+
+    __slots__ = ("__identity", "_client", "_request_timeout", "_token", "_owner",
+                 "_snapshot", "_cursor", "_stdout", "_stderr", "_result", "_error",
+                 "_disconnected", "_waiting")
+
+    def __init__(self, client: Client, execution: Execution, *, token: CancellationToken,
+                 request_timeout: float, last_event_id: int = 0, attached: bool = False):
+        if (not execution.id or not execution.sandbox_id or type(execution.pid) is not int
+                or execution.pid <= 0 or execution.state not in {"running", "completed"}):
+            raise AdapterError("server did not confirm command identity", code="backend_error", execution=execution)
+        self.__identity = _CommandIdentity(execution.sandbox_id, execution.id, execution.pid)
+        self._client, self._request_timeout, self._token = client, request_timeout, token
+        self._owner = threading.current_thread()
+        self._snapshot = replace(execution)
+        self._cursor = last_event_id
+        self._stdout: list[str] = []
+        self._stderr: list[str] = []
+        self._result: CommandResult | None = None
+        self._error: BaseException | None = None
+        self._disconnected = self._waiting = False
+        # An atomic completed attach already contains terminal evidence. Do not
+        # open SSE after its final event, nor expose the retained output prefix.
+        if execution.output_truncated or (attached and execution.state == "completed"):
+            if not attached:
+                self._stdout.append(execution.stdout)
+                self._stderr.append(execution.stderr)
+            try:
+                self._result = self._finish(execution)
+            except SandboxException as exc:
+                self._error = exc
+            self._token.cancel()
+
+    @property
+    def sandbox_id(self) -> str:
+        return self.__identity.sandbox_id
+
+    @property
+    def execution_id(self) -> str:
+        """tiny-sandbox extension for diagnostics and native recovery."""
+        return self.__identity.execution_id
+
+    @property
+    def pid(self) -> int:
+        return self.__identity.pid
+
+    def _check_thread(self) -> None:
+        if threading.current_thread() is not self._owner:
+            raise AdapterError("cross-thread command handle use is unsupported",
+                               code="unsupported_operation", execution=self._evidence())
+
+    def _evidence(self) -> Execution:
+        return replace(self._snapshot, id=self.execution_id, sandbox_id=self.sandbox_id, pid=self.pid,
+                       stdout="".join(self._stdout), stderr="".join(self._stderr))
+
+    def _finish(self, execution: Execution) -> CommandResult:
+        if (execution.id != self.execution_id or execution.sandbox_id != self.sandbox_id
+                or execution.pid != self.pid):
+            raise AdapterError("terminal snapshot identifies a different command",
+                               code="backend_error", execution=self._evidence())
+        self._snapshot = replace(execution)
+        evidence = self._evidence()
+        if evidence.output_truncated:
+            raise AdapterError("command output was truncated", code="output_truncated", execution=evidence)
+        if (evidence.state != "completed" or evidence.termination_reason != "exited"
+                or type(evidence.exit_code) is not int):
+            raise AdapterError("command did not report an ordinary exit",
+                               code=evidence.termination_reason or "incomplete", execution=evidence)
+        result = CommandResult(evidence.stderr, evidence.stdout, evidence.exit_code)
+        if result.exit_code != 0:
+            error = CommandExitException(result.stderr, result.stdout, result.exit_code, result.error)
+            SandboxException.__init__(error, str(error), code="nonzero_exit", execution=evidence)
+            raise error
+        return result
+
+    def wait(self, *, on_stdout: Callable[[str], None] | None = None,
+             on_stderr: Callable[[str], None] | None = None, **options) -> CommandResult:
+        _unknown(options)
+        _callbacks(on_stdout, on_stderr)
+        self._check_thread()
+        if self._waiting:
+            raise AdapterError("simultaneous command consumers are unsupported",
+                               code="unsupported_operation", execution=self._evidence())
+        if self._error is not None:
+            raise self._error
+        if self._result is not None:
+            return self._result
+        if self._disconnected:
+            raise AdapterError("command handle is disconnected", code="disconnected", execution=self._evidence())
+
+        def event(value: Event) -> None:
+            if value.type == "stdout":
+                self._stdout.append(value.data)
+                if on_stdout is not None:
+                    on_stdout(value.data)
+            elif value.type == "stderr":
+                self._stderr.append(value.data)
+                if on_stderr is not None:
+                    on_stderr(value.data)
+            elif value.type == "truncated":
+                self._snapshot.output_truncated = True
+                raise AdapterError("command output was truncated", code="output_truncated", execution=self._evidence())
+            if self._disconnected:
+                raise AdapterError("command handle is disconnected", code="disconnected", execution=self._evidence())
+            self._cursor = value.id
+
+        self._waiting = True
+        try:
+            try:
+                execution = self._client.stream_execution(
+                    self.sandbox_id, self.execution_id, on_event=event, cancel=self._token,
+                    cancel_remote=False, last_event_id=self._cursor,
+                )
+            except Error as exc:
+                if exc.code == "callback" and exc.cause is not None:
+                    raise exc.cause
+                exc.execution = self._evidence()
+                raise _command_error(self._client, self.sandbox_id, exc, self._token) from exc
+            self._result = self._finish(execution)
+            return self._result
+        except BaseException as exc:
+            self._error = exc
+            raise
+        finally:
+            self._waiting = False
+            self._token.cancel()
+
+    def disconnect(self, **options) -> None:
+        _unknown(options)
+        self._check_thread()
+        self._disconnected = True
+        self._token.cancel()
+
+    def kill(self, **options) -> bool:
+        _unknown(options)
+        self._check_thread()
+        token = CancellationToken(timeout=self._request_timeout)
+        try:
+            _require_commands(self._client, token)
+        except Error as exc:
+            exc.execution = self._evidence()
+            raise _translate(exc) from exc
+        except SandboxException as exc:
+            exc.execution = self._evidence()
+            exc.execution_id, exc.sandbox_id, exc.pid = self.execution_id, self.sandbox_id, self.pid
+            raise
+        return _kill_command(self._client, self.__identity, token)
+
+
 class _Commands:
-    def __init__(self, client: Client, sandbox_id: str):
-        self._client, self._id = client, sandbox_id
+    def __init__(self, client: Client, sandbox_id: str, request_timeout: float):
+        self._client, self._id, self._request_timeout = client, sandbox_id, request_timeout
+
+    @overload
+    def run(self, cmd: str, *, background: Literal[True], envs: dict[str, str] | None = None,
+            cwd: str | None = None, timeout: float = 60, on_stdout: None = None,
+            on_stderr: None = None, stdin: Literal[False] = False,
+            retain_output: Literal[True] = True) -> CommandHandle: ...
+
+    @overload
+    def run(self, cmd: str, *, background: Literal[False] = False, envs: dict[str, str] | None = None,
+            cwd: str | None = None, timeout: float = 60, on_stdout: Callable[[str], None] | None = None,
+            on_stderr: Callable[[str], None] | None = None, stdin: Literal[False] = False,
+            retain_output: Literal[True] = True) -> CommandResult: ...
+
+    @overload
+    def run(self, cmd: str, *, background: bool, envs: dict[str, str] | None = None,
+            cwd: str | None = None, timeout: float = 60, on_stdout: Callable[[str], None] | None = None,
+            on_stderr: Callable[[str], None] | None = None, stdin: Literal[False] = False,
+            retain_output: Literal[True] = True) -> CommandResult | CommandHandle: ...
 
     def run(self, cmd: str, *, envs: dict[str, str] | None = None, cwd: str | None = None,
             timeout: float = 60, on_stdout: Callable[[str], None] | None = None,
             on_stderr: Callable[[str], None] | None = None, background: bool = False,
-            stdin: bool = False, retain_output: bool = True, **options) -> CommandResult:
+            stdin: bool = False, retain_output: bool = True, **options) -> CommandResult | CommandHandle:
+        entered = time.monotonic()
         _unknown(options)
         _text(cmd, "command")
-        _duration(timeout)
+        milliseconds = _command_duration_ms(timeout)
         environment = _env(envs)
-        if background is not False or stdin is not False or retain_output is not True:
-            raise InvalidArgumentException("only foreground, closed stdin and retained output are supported")
-        if cwd is not None and (not _text(cwd, "cwd").startswith("/")):
+        if type(background) is not bool or stdin is not False or retain_output is not True:
+            raise InvalidArgumentException("background must be boolean; only closed stdin and retained output are supported")
+        if cwd is not None and not _text(cwd, "cwd").startswith("/"):
             raise InvalidArgumentException("cwd must be absolute")
-        if any(cb is not None and not callable(cb) for cb in (on_stdout, on_stderr)):
-            raise InvalidArgumentException("output callbacks must be callable")
-        token = CancellationToken(timeout=timeout) if timeout else None
-        partial = Execution(id="", sandbox_id=self._id)
-        stdout, stderr = [], []
-
-        def event(value: Event) -> None:
-            if value.type == "stdout":
-                stdout.append(value.data)
-            elif value.type == "stderr":
-                stderr.append(value.data)
-            elif value.type == "truncated":
-                partial.stdout, partial.stderr = "".join(stdout), "".join(stderr)
-                partial.output_truncated = True
-                raise AdapterError("command output was truncated", code="output_truncated", execution=partial)
-
+        _callbacks(on_stdout, on_stderr)
+        if background and (on_stdout is not None or on_stderr is not None):
+            raise InvalidArgumentException("background callbacks belong on handle.wait")
+        token = _observation_token(milliseconds, entered)
+        request = ExecuteRequest(
+            command=["/bin/bash", "-l", "-c", cmd], env=environment, cwd=cwd or _HOME,
+            timeout_ms=milliseconds, idempotency_key=secrets.token_hex(16),
+        )
         try:
-            started = self._client.start_execution(self._id, ExecuteRequest(
-                command=["/bin/bash", "-l", "-c", cmd], env=environment, cwd=cwd or _HOME,
-            ), cancel=token, cancel_remote=False)
-            partial.id = started.id
-            execution = self._client.stream_execution(
-                self._id, started.id, on_event=event, on_stdout=on_stdout, on_stderr=on_stderr,
-                cancel=token, cancel_remote=False,
-            )
+            started = self._client.start_execution(self._id, request, cancel=token, cancel_remote=False)
+            if started.sandbox_id != self._id:
+                raise AdapterError("start response identifies a different sandbox", code="backend_error",
+                                   idempotency_key=request.idempotency_key)
+            try:
+                handle = CommandHandle(self._client, started, token=token, request_timeout=self._request_timeout)
+            except AdapterError as exc:
+                exc.idempotency_key = request.idempotency_key
+                raise
         except Error as exc:
-            if exc.code == "callback" and exc.cause is not None:
-                raise exc.cause
-            translated = _translate(exc)
-            translated.execution_id = translated.execution_id or partial.id
-            translated.stdout, translated.stderr = "".join(stdout), "".join(stderr)
+            raise _translate(exc) from exc
+        if background:
+            return handle
+        return handle.wait(on_stdout=on_stdout, on_stderr=on_stderr)
+
+    def connect(self, pid: int, *, timeout: float = 60, **options) -> CommandHandle:
+        entered = time.monotonic()
+        _unknown(options)
+        _pid(pid)
+        milliseconds = _command_duration_ms(timeout)
+        token = _observation_token(milliseconds, entered)
+        try:
+            _require_commands(self._client, token)
+            attached = self._client.get_command(self._id, pid, cancel=token)
+        except Error as exc:
+            raise _command_error(self._client, self._id, exc, token) from exc
+        return CommandHandle(self._client, attached.execution, token=token,
+                             request_timeout=self._request_timeout, last_event_id=attached.last_event_id, attached=True)
+
+    def kill(self, pid: int, **options) -> bool:
+        _unknown(options)
+        _pid(pid)
+        token = CancellationToken(timeout=self._request_timeout)
+        try:
+            _require_commands(self._client, token)
+            attached = self._client.get_command(self._id, pid, cancel=token)
+        except Error as exc:
+            translated = _command_error(self._client, self._id, exc, token)
+            if type(translated) is NotFoundException:
+                return False
             raise translated from exc
-        if execution.output_truncated:
-            raise AdapterError("command output was truncated", code="output_truncated", execution=execution)
-        if execution.termination_reason != "exited" or type(execution.exit_code) is not int:
-            raise AdapterError("command did not report an ordinary exit",
-                               code=execution.termination_reason or "incomplete", execution=execution)
-        result = CommandResult(execution.stderr, execution.stdout, execution.exit_code)
-        if result.exit_code != 0:
-            raise CommandExitException(result.stderr, result.stdout, result.exit_code, result.error)
-        return result
+        identity = _CommandIdentity(self._id, attached.execution.id, pid)
+        return _kill_command(self._client, identity, token)
 
 
 class _Files:
@@ -422,7 +703,7 @@ class _Files:
             raise InvalidArgumentException("only depth 1 is supported")
         return self._list(target, CancellationToken(timeout=self._request_timeout))
 
-    def _list(self, target: str, token: CancellationToken) -> list[EntryInfo]:
+    def _list(self, target: str, token: CancellationToken) -> builtins.list[EntryInfo]:
         entries: list[EntryInfo] = []
         cursor, seen = "", set()
         while True:

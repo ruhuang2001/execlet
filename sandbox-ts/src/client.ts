@@ -4,6 +4,7 @@ import { consume, streamEvents } from './stream.js';
 import type {
   FileList, ListFilesOptions, ClientConfig, CompletedExecution, CreateSandboxRequest, Event, EventHandler,
   ExecuteRequest, Execution, ExecutionOptions, ExecutionOutcome, RequestOptions, Sandbox, UpdateSandboxRequest,
+  Capabilities, CommandAttachment, KillExecutionResponse, StreamExecutionOptions,
 } from './types.js';
 
 function sandboxPath(id: string): string { return '/v1/sandboxes/' + encodeURIComponent(id); }
@@ -40,11 +41,42 @@ export function executionOutcome(execution: Execution): ExecutionOutcome {
 /** One HTTP endpoint, no global deadline and no runtime dependencies. */
 export class Client {
   private readonly transport: Transport;
+  private capabilities: readonly string[] | undefined;
 
   constructor(config: ClientConfig = {}) { this.transport = new Transport(config); }
 
-  createSandbox(request: CreateSandboxRequest = {}, options: RequestOptions = {}): Promise<Sandbox> {
-    return this.transport.json('POST', '/v1/sandboxes', false, options.signal, request);
+  /** Authenticated feature discovery; basic legacy calls need no capabilities. */
+  getCapabilities(options: RequestOptions = {}): Promise<Capabilities> {
+    return this.transport.json('GET', '/v1/capabilities', true, options.signal);
+  }
+
+  async requireCapabilities(required: readonly string[], options: RequestOptions = {}): Promise<void> {
+    checkSignal(options.signal);
+    if (required.length === 0) return;
+    if (this.capabilities === undefined) {
+      try {
+        const response = await this.getCapabilities(options);
+        if (!Array.isArray(response?.capabilities) || response.capabilities.some(v => typeof v !== 'string')) {
+          throw new SandboxError('decode', 'invalid capability response');
+        }
+        this.capabilities = [...response.capabilities];
+      } catch (cause) {
+        if (!(cause instanceof SandboxError) || [401, 403].includes(cause.statusCode) ||
+            (cause.code !== 'decode' && ![404, 405, 501].includes(cause.statusCode))) throw cause;
+        throw new SandboxError('incompatible_server', 'server does not advertise required capabilities', { cause });
+      }
+    }
+    const missing = required.filter(flag => !this.capabilities!.includes(flag));
+    if (missing.length) throw new SandboxError('incompatible_server', 'server lacks ' + missing.join(', '));
+  }
+
+  async createSandbox(request: CreateSandboxRequest = {}, options: RequestOptions = {}): Promise<Sandbox> {
+    const snapshot = { ...request, ...(request.env ? { env: { ...request.env } } : {}) };
+    const required = [];
+    if (snapshot.env && Object.keys(snapshot.env).length) required.push('execution.env-cwd.v1');
+    if (snapshot.max_concurrent_executions !== undefined) required.push('execution.concurrent.v1');
+    await this.requireCapabilities(required, options);
+    return this.transport.json('POST', '/v1/sandboxes', false, options.signal, snapshot);
   }
 
   getSandbox(sandboxID: string, options: RequestOptions = {}): Promise<Sandbox> {
@@ -79,10 +111,20 @@ export class Client {
     if (!Array.isArray(request.command) || request.command.length === 0 || request.command.some(arg => typeof arg !== 'string')) {
       throw new SandboxError('invalid_request', 'sandbox: command must be a nonempty string array');
     }
+    if (request.timeout_ms !== undefined &&
+        (!Number.isSafeInteger(request.timeout_ms) || request.timeout_ms < 0 || request.timeout_ms > 9_223_372_036_854 ||
+         request.timeout_seconds !== undefined)) {
+      throw new SandboxError('invalid_request', 'sandbox: timeout_ms must be a nonnegative integer within the server duration range, exclusive with timeout_seconds');
+    }
     const keyed: ExecuteRequest = {
       ...request, command: [...request.command], ...(request.env ? { env: { ...request.env } } : {}),
       idempotency_key: request.idempotency_key || newKey(),
     };
+    const required = [];
+    if ((keyed.env && Object.keys(keyed.env).length) || keyed.cwd) required.push('execution.env-cwd.v1');
+    if (keyed.stdin) required.push('execution.stdin.v1');
+    if (keyed.timeout_ms !== undefined) required.push('e2b.background.v1');
+    await this.requireCapabilities(required, options);
     try {
       return await this.start(sandboxID, keyed, options.signal);
     } catch (cause) {
@@ -124,10 +166,49 @@ export class Client {
     return this.transport.json('POST', executionPath(sandboxID, executionID) + '/cancel', true, options.signal);
   }
 
-  streamExecution(sandboxID: string, executionID: string, options?: ExecutionOptions): AsyncIterableIterator<Event>;
-  streamExecution(sandboxID: string, executionID: string, onEvent: EventHandler, options?: ExecutionOptions): Promise<Execution>;
+  /** Resolve the newest retained managed PID incarnation without renewing sandbox lifetime. */
+  async resolveCommand(sandboxID: string, pid: number, options: RequestOptions = {}): Promise<CommandAttachment> {
+    if (!Number.isSafeInteger(pid) || pid <= 0) {
+      return Promise.reject(new SandboxError('invalid_request', 'sandbox: pid must be a positive safe integer'));
+    }
+    await this.requireCapabilities(['e2b.background.v1'], options);
+    return this.transport.json('GET', sandboxPath(sandboxID) + '/commands/' + pid, true, options.signal);
+  }
+
+  /** Immediate managed group kill. Never retry an uncertain acknowledgement as a false result. */
+  async killExecution(sandboxID: string, executionID: string, options: RequestOptions = {}): Promise<KillExecutionResponse> {
+    checkSignal(options.signal);
+    await this.requireCapabilities(['e2b.background.v1'], options);
+    const identity = { id: executionID, sandbox_id: sandboxID };
+    try {
+      const result = await this.transport.json<KillExecutionResponse>(
+        'POST', executionPath(sandboxID, executionID) + '/kill', false, options.signal,
+      );
+      if (typeof result?.signaled !== 'boolean' || result.execution?.state !== 'completed' ||
+          result.execution.id !== executionID || result.execution.sandbox_id !== sandboxID ||
+          typeof result.execution.termination_reason !== 'string' || !result.execution.termination_reason ||
+          !(result.execution.exit_code === null || Number.isInteger(result.execution.exit_code))) {
+        throw new SandboxError('backend_error', 'sandbox: kill termination was not confirmed', { execution: identity });
+      }
+      return result;
+    } catch (cause) {
+      if (cause instanceof SandboxError) {
+        // A lost response may follow a successful signal. Replaying it could
+        // turn uncertainty into an apparently definitive already-done false.
+        const uncertain = cause.statusCode >= 500 || ['transport', 'decode', 'canceled'].includes(cause.code);
+        throw new SandboxError(uncertain ? 'backend_error' : cause.code,
+          uncertain ? 'sandbox: kill outcome is unconfirmed; ' + cause.message : cause.message, {
+          cause, statusCode: cause.statusCode, execution: { ...cause.execution, ...identity },
+        });
+      }
+      throw new SandboxError('backend_error', 'sandbox: kill outcome is unconfirmed', { cause, execution: identity });
+    }
+  }
+
+  streamExecution(sandboxID: string, executionID: string, options?: StreamExecutionOptions): AsyncIterableIterator<Event>;
+  streamExecution(sandboxID: string, executionID: string, onEvent: EventHandler, options?: StreamExecutionOptions): Promise<Execution>;
   streamExecution(sandboxID: string, executionID: string,
-    handlerOrOptions: EventHandler | ExecutionOptions = {}, options: ExecutionOptions = {}): AsyncIterableIterator<Event> | Promise<Execution> {
+    handlerOrOptions: EventHandler | StreamExecutionOptions = {}, options: StreamExecutionOptions = {}): AsyncIterableIterator<Event> | Promise<Execution> {
     const opts = typeof handlerOrOptions === 'function' ? options : handlerOrOptions;
     const events = streamEvents(this.transport, executionPath(sandboxID, executionID) + '/events', opts,
       () => opts.cancelRemote === false

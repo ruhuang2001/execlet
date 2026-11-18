@@ -26,6 +26,8 @@ export interface Sandbox {
 export interface Execution {
   id: string;
   sandbox_id: string;
+  /** Confirmed guest command-leader PID, only present for managed commands. */
+  pid?: number;
   command: string[];
   /** The requested working directory; null when the request set none. Absent on servers without cwd support. */
   cwd?: string | null;
@@ -42,6 +44,12 @@ export interface Execution {
 }
 
 export type CompletedExecution = Execution & { state: 'completed' };
+
+export interface Capabilities { capabilities: string[] }
+/** One atomic identity/snapshot/event-watermark attach boundary. */
+export interface CommandAttachment { execution: Execution; last_event_id: number }
+/** True only after a signal and confirmed termination; false if already done. */
+export interface KillExecutionResponse { execution: CompletedExecution; signaled: boolean }
 
 /** New wire reasons map to unknown, keeping consumer switches exhaustive. */
 export type ExecutionOutcome = {
@@ -75,6 +83,8 @@ export interface ExecuteRequest {
   command: readonly string[];
   idempotency_key?: string;
   timeout_seconds?: number;
+  /** Managed command deadline; exclusive with timeout_seconds. Explicit 0 disables the deadline. */
+  timeout_ms?: number;
   /** Added to the image's environment for this execution only. Never echoed back. */
   env?: Readonly<Record<string, string>>;
   /** Absolute working directory; omit for the image's own. */
@@ -88,6 +98,11 @@ export interface RequestOptions { signal?: AbortSignal }
 export interface ExecutionOptions extends RequestOptions {
   /** Default true. False aborts only local I/O and never cancels remote work. */
   cancelRemote?: boolean;
+}
+
+export interface StreamExecutionOptions extends ExecutionOptions {
+  /** Start after this event watermark; automatic retries continue from delivered events. Default 0. */
+  lastEventId?: number;
 }
 
 export type Event =

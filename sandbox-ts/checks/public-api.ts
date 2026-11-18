@@ -37,5 +37,14 @@ async function consumer(client = new Client(), signal?: AbortSignal) {
   const future: Sandbox['state'] = 'future_state';
   const retryable: boolean = new SandboxError('transport', 'failed').retryable;
   void [bytes, future, retryable, placedCwd];
+  const flags: string[] = (await client.getCapabilities(options)).capabilities;
+  const managed = await client.startExecution(sandbox.id, { command: ['true'], timeout_ms: 1250 }, options);
+  const pid: number | undefined = managed.pid;
+  const attached = await client.resolveCommand(sandbox.id, pid!, options);
+  const suffix = client.streamExecution(sandbox.id, attached.execution.id, {
+    ...options, lastEventId: attached.last_event_id, cancelRemote: false,
+  });
+  const killed: boolean = (await client.killExecution(sandbox.id, managed.id, options)).signaled;
+  void [flags, pid, suffix, killed];
 }
 void consumer;

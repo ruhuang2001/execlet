@@ -259,10 +259,20 @@ get/list/file requests only aborts those requests.
 
 ## Compatibility and Go parity
 
-Use client and server builds from compatible revisions. New request fields
-can be ignored by older servers; success does not prove enforcement. There is
-no capability negotiation. Future wire termination reasons map to the explicit
-`unknown` outcome so consumer switches remain exhaustive.
+Use client and server builds from compatible revisions. `getCapabilities()`
+queries authenticated flags. Optional env/cwd/stdin, explicit concurrency and
+managed `timeout_ms` are checked before mutation; missing support raises
+`incompatible_server`. Flags are cached per client with its immutable endpoint
+and credentials. Basic legacy calls skip discovery. Downgrade during a session
+and mixed-version load balancers remain unsupported. Future wire termination
+reasons map to the explicit `unknown` outcome so switches remain exhaustive.
+
+Native `attachCommand` returns the execution and atomic event watermark;
+`killExecution` sends one immediate managed kill without retrying uncertain
+acknowledgements. `@tiny-sandbox/sdk/e2b` exports `CommandHandle` for background
+run/connect/wait/disconnect/kill; see the [package examples](../sandbox-ts/README.md)
+and [contract](e2b-background-commands.md). Native graceful cancellation and
+seconds-based deadlines are unchanged.
 
 Unknown response fields are retained and response enum strings remain open.
 Additive resource fields can be absent; the client does not substitute defaults

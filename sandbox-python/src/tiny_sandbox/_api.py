@@ -12,7 +12,10 @@ from urllib.parse import quote, urlencode
 
 from ._cancel import CancellationToken, _Cancellation
 from ._errors import Error
-from ._models import CreateSandboxRequest, ExecuteRequest, Execution, FileEntry, FileList, Sandbox, UpdateSandboxRequest
+from ._models import (
+    Capabilities, CommandAttachment, CreateSandboxRequest, ExecuteRequest, Execution,
+    ExecutionKillResult, FileEntry, FileList, Sandbox, UpdateSandboxRequest,
+)
 from ._transport import Transport
 
 _P = ParamSpec("_P")
@@ -56,6 +59,81 @@ class SandboxAPI(Transport, ABC):
         )
 
     @_public_cancellation
+    def get_capabilities(self, *, cancel: CancellationToken | None = None) -> Capabilities:
+        """Read this endpoint's authenticated feature advertisement; never cached."""
+        return Capabilities.from_dict(self._json("GET", "/v1/capabilities", cancel=cancel))
+
+    def require_capabilities(self, *required: str, cancel: CancellationToken | None = None) -> None:
+        if not required:
+            return
+        try:
+            flags = self.get_capabilities(cancel=cancel).capabilities
+        except Error as exc:
+            if exc.status_code not in {401, 403} and (exc.status_code in {404, 405, 501} or exc.code == "decode"):
+                raise Error("incompatible_server", "server does not advertise required capabilities", cause=exc) from exc
+            raise
+        missing = set(required).difference(flags)
+        if missing:
+            raise Error("incompatible_server", "server lacks " + ", ".join(sorted(missing)))
+
+    @_public_cancellation
+    def get_command(
+        self, sandbox_id: str, pid: int, *, cancel: CancellationToken | None = None,
+    ) -> CommandAttachment:
+        """Resolve a managed guest PID and its atomic live-attach event boundary."""
+        if type(pid) is not int or pid <= 0:
+            raise Error("invalid_request", "pid must be a positive integer")
+        self.require_capabilities("e2b.background.v1", cancel=cancel)
+        payload = self._json(
+            "GET", self._sandbox_path(sandbox_id) + "/commands/" + str(pid), cancel=cancel,
+        )
+        execution = Execution.from_dict(payload.get("execution"))
+        attached = CommandAttachment.from_dict({**payload, "execution": execution})
+        if execution.sandbox_id != sandbox_id or execution.pid != pid:
+            raise Error("decode", "command attachment identifies a different command")
+        if not 0 <= attached.last_event_id < 2**64:
+            raise Error("decode", "command attachment has an invalid event boundary", execution=execution)
+        if execution.state not in {"running", "completed"}:
+            raise Error("decode", "command attachment has an invalid state", execution=execution)
+        return attached
+
+    def kill_execution(
+        self, sandbox_id: str, execution_id: str, *, cancel: CancellationToken | None = None,
+    ) -> ExecutionKillResult:
+        """Request immediate group kill once; true requires a confirmed terminal outcome.
+
+        Unlike graceful cancel, an uncertain acknowledgement is never retried
+        automatically: a later 'already done' response cannot explain the loss.
+        """
+        identity = Execution(id=execution_id, sandbox_id=sandbox_id)
+        try:
+            self.require_capabilities("e2b.background.v1", cancel=cancel)
+            payload = self._json(
+                "POST", self._execution_path(sandbox_id, execution_id) + "/kill",
+                cancel=cancel, retry=False,
+            )
+            execution = Execution.from_dict(payload.get("execution"))
+            result = ExecutionKillResult.from_dict({**payload, "execution": execution})
+            if execution.id != execution_id or execution.sandbox_id != sandbox_id:
+                raise Error("backend_error", "kill response identifies a different execution")
+            identity = execution
+            if execution.state != "completed" or not execution.termination_reason:
+                raise Error("backend_error", "command termination was not confirmed")
+            if result.signaled and execution.termination_reason != "canceled":
+                raise Error("backend_error", "kill response does not confirm the requested signal")
+            return result
+        except _Cancellation as exc:
+            raise Error("backend_error", "kill acknowledgement was not confirmed",
+                        execution=identity, cause=exc) from exc
+        except Error as exc:
+            if exc.code in {"decode", "transport"}:
+                raise Error("backend_error", "kill acknowledgement was not confirmed",
+                            execution=identity, cause=exc) from exc
+            if exc.execution is None:
+                exc.execution = identity
+            raise
+
+    @_public_cancellation
     def create_sandbox(
         self,
         request: CreateSandboxRequest | None = None,
@@ -64,6 +142,12 @@ class SandboxAPI(Transport, ABC):
     ) -> Sandbox:
         """Create a sandbox once; creation is never automatically retried."""
         payload = (request if request is not None else CreateSandboxRequest()).to_dict()
+        required = []
+        if payload.get("env"):
+            required.append("execution.env-cwd.v1")
+        if payload.get("max_concurrent_executions") is not None:
+            required.append("execution.concurrent.v1")
+        self.require_capabilities(*required, cancel=cancel)
         return Sandbox.from_dict(
             self._json("POST", "/v1/sandboxes", json_body=payload, cancel=cancel, retry=False)
         )
@@ -141,14 +225,36 @@ class SandboxAPI(Transport, ABC):
                 cancel._check()
             except _Cancellation as exc:
                 raise Error("canceled", cause=exc) from exc
+        body = keyed_request.to_dict()
+        required = []
+        if keyed_request.env or keyed_request.cwd:
+            required.append("execution.env-cwd.v1")
+        if keyed_request.stdin:
+            required.append("execution.stdin.v1")
+        if keyed_request.timeout_ms is not None:
+            required.append("e2b.background.v1")
+        # Capability cancellation precedes dispatch: never replay a command to
+        # recover a canceled read that could not possibly start it.
+        self.require_capabilities(*required, cancel=cancel)
         try:
             payload = self._json(
                 "POST",
                 self._sandbox_path(sandbox_id) + "/executions",
-                json_body=keyed_request.to_dict(),
+                json_body=body,
                 cancel=cancel,
             )
-            return Execution.from_dict(payload)
+            try:
+                execution = Execution.from_dict(payload)
+                if execution.sandbox_id != sandbox_id:
+                    raise Error("decode", "start response identifies a different sandbox")
+                return execution
+            except Error as exc:
+                # A malformed handshake can still expose an accepted execution
+                # ID. Keep it with the request key; never fabricate a guest PID.
+                execution_id = payload.get("id")
+                if isinstance(execution_id, str) and execution_id:
+                    exc.execution = Execution(id=execution_id, sandbox_id=sandbox_id)
+                raise
         except _Cancellation as exc:
             if not cancel_remote:
                 raise Error(

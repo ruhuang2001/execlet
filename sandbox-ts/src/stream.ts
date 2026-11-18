@@ -1,13 +1,16 @@
 import { SandboxError, statusError, transportError } from './errors.js';
 import { backoff, sleep, type Transport } from './http.js';
 import { parseSSE } from './sse.js';
-import type { Event, EventHandler, Execution, RequestOptions } from './types.js';
+import type { Event, EventHandler, Execution, StreamExecutionOptions } from './types.js';
 
 type Cancel = () => Promise<SandboxError>;
 
 /** An iterator-local controller lets return() interrupt an outstanding next(). */
 export function streamEvents(transport: Transport, path: string,
-  options: RequestOptions, cancel: Cancel): AsyncIterableIterator<Event> {
+  options: StreamExecutionOptions, cancel: Cancel): AsyncIterableIterator<Event> {
+  if (options.lastEventId !== undefined && (!Number.isSafeInteger(options.lastEventId) || options.lastEventId < 0)) {
+    throw new SandboxError('invalid_request', 'sandbox: lastEventId must be a nonnegative safe integer');
+  }
   const local = new AbortController();
   const generator = readEvents(transport, path, options, cancel, local);
   return {
@@ -26,9 +29,9 @@ export function streamEvents(transport: Transport, path: string,
 }
 
 async function* readEvents(transport: Transport, path: string,
-  options: RequestOptions, cancel: Cancel, local: AbortController): AsyncGenerator<Event> {
+  options: StreamExecutionOptions, cancel: Cancel, local: AbortController): AsyncGenerator<Event> {
   const signal = options.signal;
-  let cursor = 0;
+  let cursor = options.lastEventId ?? 0;
   let completed = false;
   let recovery: Promise<SandboxError> | undefined;
   // Also clean up while a consumer is between next() calls or in a callback.

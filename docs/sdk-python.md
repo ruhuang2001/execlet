@@ -330,10 +330,19 @@ The policy matches Go except for configuring zero retries:
 The wire API, idempotency rules, safe retry set, retry status set, jitter,
 constant reconnect budget, retained-output replay, and file operations
 match the Go contract. Additive response fields and unknown string values are
-accepted. A newer request field may be ignored by an older server; successful
-HTTP status does not prove an optional capability was enforced. Consult the
-server's matching API specification before depending on execution deadlines or
-resource controls.
+accepted. The current client calls authenticated `get_capabilities()` before
+nonempty env/cwd/stdin, explicit concurrency and managed `timeout_ms` requests;
+missing support raises `incompatible_server` before mutation. Discovery is read
+afresh with the current endpoint/credentials. Basic legacy calls skip it; raw
+HTTP can still have unknown fields ignored by old servers. This is not runtime
+image validation or support for mixed-version load balancers.
+
+Native `attach_command` returns the execution and atomic event watermark;
+`kill_execution` sends one immediate managed kill, without retrying uncertain
+acknowledgements. The optional `tiny_sandbox.e2b.CommandHandle` supplies
+background run/connect/wait/disconnect/kill; see the [package examples](../sandbox-python/README.md)
+and [normative contract](e2b-background-commands.md). Native graceful cancellation
+and seconds-based deadlines remain unchanged.
 
 Important differences:
 

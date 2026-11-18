@@ -133,9 +133,11 @@ Publishing a release is a separate action from this verification checklist.
 ## Publish through GitHub Actions
 
 Prepare and merge the intended release commit on `main`, including OpenAPI's
-`info.version` and applicable package versions, then create a stable
-`vMAJOR.MINOR.PATCH` tag at that commit and push it. Tags
-containing the Release workflow trigger publication automatically:
+`info.version` and applicable package versions, then create the intended
+`vMAJOR.MINOR.PATCH` tag at that commit and push it. The Release workflow
+publishes a normal GitHub Release by default; prerelease status must be set
+explicitly and is not inferred from `0.x` numbering. Tags containing the
+Release workflow trigger publication automatically:
 
 ```sh
 git tag -a v0.0.2 -m 'v0.0.2'

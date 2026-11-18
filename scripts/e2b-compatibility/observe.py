@@ -5,7 +5,7 @@ import re
 import subprocess
 import sys
 
-provider, operation, sid, owner = sys.argv[1:]
+provider, operation, sid, owner = sys.argv[1:5]
 
 
 def docker(*args):
@@ -23,7 +23,7 @@ if provider == 'tiny':
         try:
             obj = json.loads(docker('inspect', cid))[0]
         except subprocess.CalledProcessError as exc:
-            if 'No such object' in (exc.stderr or ''):
+            if any(message in (exc.stderr or '').lower() for message in ('no such object', 'no such container')):
                 continue
             raise
         assert obj['Config']['Labels'].get('tiny-sandbox.owner') == owner
@@ -31,6 +31,27 @@ if provider == 'tiny':
             matches.append(obj)
     if operation == 'count':
         answer = {'count':len(matches)}
+    elif operation == 'process':
+        identity = json.loads(sys.argv[5])
+        assert type(identity['pid']) is int and identity['pid'] > 0
+        answer = {'alive': False, 'identity': identity}
+        for obj in matches:
+            if obj['State'].get('Paused'):
+                raise RuntimeError('paused container cannot establish process death')
+            if not obj['State']['Running']:
+                continue
+            probe = ('import pathlib,json,sys; p=pathlib.Path("/proc/"+sys.argv[1]+"/stat");\n'
+                     'try: s=p.read_text().rsplit(") ",1)[1].split()\n'
+                     'except FileNotFoundError: s=None\n'
+                     'print(json.dumps({"alive":bool(s and s[0] not in ("Z","X") and s[19]==sys.argv[2]),'
+                     '"state":s[0] if s else None,"start_ticks":s[19] if s else None}))')
+            try:
+                answer.update(json.loads(docker('exec', obj['Id'], 'python3', '-c', probe,
+                                                str(identity['pid']), str(identity['start_ticks']))))
+            except subprocess.CalledProcessError as exc:
+                if 'No such container' not in (exc.stderr or '') and 'is not running' not in (exc.stderr or ''):
+                    raise
+            answer['container'] = obj['Id']
     elif operation in ('cleanup','sweep'):
         for obj in matches:
             docker('rm','-f',obj['Id'])

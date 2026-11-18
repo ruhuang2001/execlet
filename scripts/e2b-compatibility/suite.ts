@@ -9,7 +9,9 @@ type SDK = typeof Reference;
 type Sandbox = InstanceType<SDK['Sandbox']>;
 type Query = { op: string; id: string; duration?: number; options?: Record<string, unknown>;
   command: string; callbacks?: boolean; callback_error?: boolean | 'sdk'; path: string; text?: string;
-  bytes: string; bytearray?: boolean; raise_error?: boolean; method: string; wait?: number; millis?: number };
+  bytes: string; bytearray?: boolean; raise_error?: boolean; method: string; wait?: number; millis?: number;
+  pid: number; handle?: string; callback_mode?: 'disconnect' | 'pending'; simultaneous?: boolean;
+  nonfinite?: 'nan' | 'infinity' | '-infinity' };
 const emit = (value: unknown) => process.stdout.write(JSON.stringify(value) + '\n');
 const options = JSON.parse(process.env.CONTRACT_OPTIONS || '{}');
 // Template/image selection is create-only, so connect never receives it.
@@ -27,7 +29,7 @@ try {
   // to pin yet, so its version is reported when resolvable and otherwise null.
   const version = provider === 'e2b' ? JSON.parse(readFileSync(require.resolve('e2b/package.json'), 'utf8')).version : null;
   if (provider === 'e2b') assert.equal(version, '2.64.0');
-  emit({ready: true, version, module: name, runtime: process.version});
+  emit({ready: true, version, module: name, runtime: process.version, pid:process.pid});
 } catch (error) {
   const e = error as NodeJS.ErrnoException;
   const missing = e.code === 'ERR_MODULE_NOT_FOUND' && /Cannot find package '(e2b|@tiny-sandbox\/sdk)'/.test(e.message);
@@ -35,6 +37,11 @@ try {
   process.exit(2);
 }
 const sandboxes = new Map<string, Sandbox>();
+type HandleState = {handle: Reference.CommandHandle; callbacks: Callbacks; sentinel: Error;
+  active: boolean; serial: boolean; release?: () => void; disconnected?: boolean};
+const handles = new Map<string, HandleState>();
+const unhandled: string[] = [];
+process.on('unhandledRejection', e => { unhandled.push(String(e)); });
 function own(s: Sandbox) {
   assert.equal(typeof s.sandboxId, 'string');
   assert(s.sandboxId);
@@ -73,7 +80,8 @@ function failure(e: unknown) {
   };
   const family = is('CommandExitError') ? 'exit' : is('SandboxNotFoundError') ? 'sandbox_not_found'
     : is('FileNotFoundError') ? 'file_not_found' : is('AuthenticationError') ? 'auth'
-    : is('InvalidArgumentError') ? 'invalid' : is('TimeoutError') ? 'timeout' : 'other';
+    : is('InvalidArgumentError') ? 'invalid' : is('TimeoutError') ? 'timeout'
+    : is('NotFoundError') ? 'command_not_found' : 'other';
   const data: Record<string, unknown> = {family, class:e instanceof Error ? e.name : typeof e, message:String(e)};
   if (family === 'exit') Object.assign(data, result(e as unknown as Reference.CommandResult));
   const fields = {code:'code', executionId:'execution_id', idempotencyKey:'idempotency_key',
@@ -113,7 +121,71 @@ async function dispatch(q: Query, callbacks: Callbacks) {
     const s = await sdk.Sandbox.connect(q.id, {...connectOptions, ...opts});
     assert.equal(s.sandboxId, q.id); sandboxes.set(q.id, s); return {id:s.sandboxId};
   }
+  if (q.op === 'handle_exports') {
+    // Type-only exports are checked against the installed declarations, not fabricated here.
+    return {unhandled:[...unhandled]};
+  }
   const s = sandboxes.get(q.id)!;
+  if (q.op === 'background' || q.op === 'command_connect') {
+    if (q.wait !== undefined) opts.timeoutMs = q.wait * 1000;
+    if (q.nonfinite) opts.timeoutMs = {nan:NaN, infinity:Infinity, '-infinity':-Infinity}[q.nonfinite];
+    const state = {callbacks:{stdout:[], stderr:[], times:[]}, sentinel:new Error('background-callback-sentinel'),
+      active:false, serial:true} as unknown as HandleState;
+    const callback = async (stream: 'stdout' | 'stderr', chunk: string) => {
+      assert.equal(typeof chunk, 'string');
+      if (state.active) state.serial = false;
+      state.active = true;
+      state.callbacks[stream].push(chunk); state.callbacks.times.push(performance.now()/1000);
+      if (q.callback_mode === 'pending') await new Promise<void>(resolve => { state.release = resolve; });
+      else await new Promise(resolve => setTimeout(resolve, 5));
+      if (q.callback_mode === 'disconnect') {
+        await state.handle.disconnect(); state.disconnected = true;
+      }
+      state.active = false;
+      if (q.callback_error) throw state.sentinel;
+    };
+    if (q.callbacks || q.callback_error || q.callback_mode) {
+      opts.onStdout = (c: string) => callback('stdout', c);
+      opts.onStderr = (c: string) => callback('stderr', c);
+    }
+    const handle = q.op === 'background'
+      ? await s.commands.run(q.command, {background:true, ...opts})
+      : await s.commands.connect(q.pid, opts);
+    assert(Number.isSafeInteger(handle.pid) && handle.pid > 0, 'pid is not a positive guest PID');
+    for (const method of ['wait','disconnect','kill'] as const) assert.equal(typeof handle[method], 'function');
+    state.handle = handle; handles.set(q.handle ?? 'h', state);
+    return {handle:q.handle ?? 'h', pid:handle.pid,
+      execution_id:(handle as Reference.CommandHandle & {executionId?: string}).executionId};
+  }
+  if (q.op === 'handle_stats' || q.op === 'handle_release') {
+    const h = handles.get(q.handle ?? 'h')!;
+    if (q.op === 'handle_release') h.release?.();
+    return {stdout:h.handle.stdout, stderr:h.handle.stderr, exit:h.handle.exitCode, callbacks:h.callbacks,
+      active:h.active, serial:h.serial, disconnected:h.disconnected, unhandled:[...unhandled]};
+  }
+  if (q.op === 'handle_wait') {
+    const h = handles.get(q.handle ?? 'h')!;
+    const before = {stdout:h.callbacks.stdout.length, stderr:h.callbacks.stderr.length, times:h.callbacks.times.length};
+    try {
+      const values = q.simultaneous ? await Promise.all([h.handle.wait(), h.handle.wait()]) : [await h.handle.wait()];
+      const value = result(values[0]);
+      for (const other of values) assert.deepEqual(result(other), value);
+      assert(h.serial, 'background callbacks were concurrent');
+      return value;
+    } catch (e) { if (e === h.sentinel) return {callback_error_preserved:true}; throw e; }
+    finally {
+      Object.assign(callbacks, h.callbacks);
+      Object.assign(callbacks, {new_stdout:h.callbacks.stdout.slice(before.stdout),
+        new_stderr:h.callbacks.stderr.slice(before.stderr), new_times:h.callbacks.times.slice(before.times)});
+    }
+  }
+  if (q.op === 'handle_disconnect' || q.op === 'handle_kill') {
+    const h = handles.get(q.handle ?? 'h')!;
+    const value = q.op === 'handle_disconnect' ? await h.handle.disconnect() : await h.handle.kill();
+    assert.equal(typeof value, q.op === 'handle_disconnect' ? 'undefined' : 'boolean');
+    return value ?? null;
+  }
+  if (q.op === 'command_kill') { const value = await s.commands.kill(q.pid, opts); assert.equal(typeof value, 'boolean'); return value; }
   if (q.op === 'kill') { const v = await s.kill(opts); assert.equal(typeof v, 'boolean'); return v; }
   if (q.op === 'timeout') {
     const { timeoutMs, ...requestOptions } = opts;

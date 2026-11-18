@@ -44,7 +44,7 @@ try:
     options = json.loads(os.environ.get("CONTRACT_OPTIONS", "{}"))
     # Template/image selection is create-only, so connect never receives it.
     connect_options = {k: v for k, v in options.items() if k not in {"image", "template"}}
-    emit({"ready": True, "version": version, "module": sdk.__name__, "runtime": sys.version})
+    emit({"ready": True, "version": version, "module": sdk.__name__, "runtime": sys.version, "pid": os.getpid()})
 except ModuleNotFoundError as e:
     # A missing SDK or adapter module is not_run; a broken dependency is a failure.
     expected = {"e2b", "tiny_sandbox", "tiny_sandbox.e2b", os.environ.get("CONTRACT_MODULE", "")}
@@ -55,6 +55,8 @@ except Exception as e:
     sys.exit(1)
 
 sandboxes = {}
+handles = {}
+handle_errors = {}
 
 
 def result(value):
@@ -82,8 +84,9 @@ def entry(value, full=False):
 def failure(exc):
     families = [("CommandExitException", "exit"), ("SandboxNotFoundException", "sandbox_not_found"),
                 ("FileNotFoundException", "file_not_found"), ("AuthenticationException", "auth"),
-                ("InvalidArgumentException", "invalid"), ("TimeoutException", "timeout")]
-    family = next((label for name, label in families if isinstance(exc, getattr(sdk, name))), "other")
+                ("InvalidArgumentException", "invalid"), ("TimeoutException", "timeout"),
+                ("NotFoundException", "command_not_found")]
+    family = next((label for name, label in families if isinstance(exc, getattr(sdk, name, ()))), "other")
     data = {"family": family, "class": type(exc).__name__, "message": str(exc)}
     if family == "exit":
         data.update(result(exc))
@@ -127,7 +130,52 @@ def dispatch(q, callbacks):
         assert s.sandbox_id == q["id"]
         sandboxes[q["id"]] = s
         return {"id": s.sandbox_id}
-    s = sandboxes[q["id"]]
+    if op == "handle_exports":
+        assert isinstance(getattr(sdk, 'CommandHandle', None), type), 'missing public CommandHandle'
+        return True
+    s = sandboxes[q['id']] if 'id' in q else None
+    if op in {"background", "command_connect"}:
+        if 'wait' in q:
+            kwargs['timeout'] = q['wait']
+        if 'nonfinite' in q:
+            kwargs['timeout'] = float(q['nonfinite'])
+        if q.get('callbacks'):
+            kwargs['on_stdout'] = lambda chunk: callbacks['stdout'].append(chunk)
+        handle = (s.commands.run(q['command'], **{'background': True, **kwargs})
+                  if op == 'background' else s.commands.connect(q['pid'], **kwargs))
+        assert isinstance(handle, getattr(sdk, 'CommandHandle')), 'not an exported CommandHandle'
+        assert type(handle.pid) is int and handle.pid > 0, 'pid is not a positive guest PID'
+        name = q.get('handle', 'h')
+        handles[name] = handle
+        handle_errors[name] = RuntimeError('background-callback-sentinel')
+        return {'handle': name, 'pid': handle.pid, 'execution_id': getattr(handle, 'execution_id', None)}
+    if op == 'handle_wait':
+        handle = handles[q.get('handle', 'h')]
+        sentinel = handle_errors[q.get('handle', 'h')]
+        def cb(stream, chunk):
+            assert isinstance(chunk, str)
+            callbacks[stream].append(chunk)
+            callbacks['times'].append(time.monotonic())
+            if q.get('callback_error'):
+                raise sentinel
+        try:
+            return result(handle.wait(on_stdout=lambda c: cb('stdout', c), on_stderr=lambda c: cb('stderr', c), **kwargs))
+        except Exception as exc:
+            if exc is sentinel:
+                return {'callback_error_preserved': True}
+            raise
+    if op in {'handle_disconnect', 'handle_kill'}:
+        handle = handles[q.get('handle', 'h')]
+        value = handle.disconnect(**kwargs) if op == 'handle_disconnect' else handle.kill(**kwargs)
+        if op == 'handle_kill':
+            assert type(value) is bool
+        else:
+            assert value is None
+        return value
+    if op == 'command_kill':
+        value = s.commands.kill(q['pid'], **kwargs)
+        assert type(value) is bool
+        return value
     if op == "kill":
         value = s.kill(**kwargs)
         assert type(value) is bool

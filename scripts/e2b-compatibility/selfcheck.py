@@ -77,11 +77,15 @@ def good(**mutate):
     for case in runner.CASES:
         for language in runner.LANGUAGES:
             checks = {name: True for name in runner.check_names(case, language)}
+            for name in set(checks) & set(runner.REFERENCE.get('fault_checks', [])):
+                checks[name] = {'passed': True, 'evidence': {'fault': 'selfcheck-only', 'fired': True}}
             rows[f'{language}:{case}'] = {'status': 'passed', 'complete': True, 'checks': checks,
                                           'cleanup': {'confirmed': True}}
     report = {'schema': 1, 'provider': 'tiny', 'baseline': runner.MANIFEST['baseline'],
               'digest': runner.digest(), 'languages': list(runner.LANGUAGES), 'complete': True,
-              'selected': list(runner.CASES), 'rows': rows}
+              'selected': list(runner.CASES), 'rows': rows, 'profile': runner.PROFILE,
+              'runtime_revision': runner.REFERENCE.get('runtime_revision'),
+              'old_server_revision': runner.REFERENCE.get('old_server_revision')}
     mutate.get('apply', lambda r: None)(report)
     return report
 
@@ -90,7 +94,7 @@ def compare_case(name, expect_pass, report=None):
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / 'tiny.json'
         path.write_text(json.dumps(report if report is not None else good()))
-        result = subprocess.run([python, str(HERE / 'runner.py'), 'compare', str(path)],
+        result = subprocess.run([python, str(HERE / 'runner.py'), 'compare', str(path), '--profile', runner.PROFILE],
                                 capture_output=True, text=True, timeout=120)
         check(name, (result.returncode == 0) == expect_pass, result.stdout + result.stderr)
 
@@ -148,6 +152,37 @@ compare_case('gate scopes a language-only check', True,
              report=good(apply=lambda r: r['rows']['python:A06']['checks'].pop('1501 ms becomes 2 s', None)))
 compare_case('gate rejects a missing check in its own language', False,
              report=good(apply=lambda r: r['rows']['typescript:A06']['checks'].pop('1501 ms becomes 2 s')))
+
+# This is a fabricated report for gate mutation tests, never adapter evidence.
+runner.select_profile('background')
+listed = invoke('--list', '--profile', 'background')
+check('background lists 40 cases', listed.returncode == 0
+      and [line.split()[0] for line in listed.stdout.splitlines()] == list(runner.CASES)
+      and len(runner.CASES) == 40)
+from background import SCENARIOS as background_scenarios
+check('every background case is executable', all(callable(background_scenarios[c])
+      for c in [*(f'B{i:02}' for i in range(1, 21)), 'W04', 'A05', 'A12', 'A14', 'A16', 'W03']))
+compare_case('background gate accepts complete evidence schema', True)
+for field in ('profile', 'runtime_revision', 'old_server_revision', 'digest'):
+    compare_case(f'background rejects wrong {field}', False,
+                 good(apply=lambda r: r.update({field: 'wrong'})))
+for row in ('python:B08', 'typescript:B20', 'python:W04'):
+    compare_case(f'background rejects omitted {row}', False, good(apply=lambda r: r['rows'].pop(row)))
+compare_case('background rejects missing lifetime-race assertion', False, good(apply=lambda r:
+    r['rows']['python:B08']['checks'].pop('backend rejects reused PID at signal dispatch')))
+compare_case('background rejects missing installed declarations', False, good(apply=lambda r:
+    r['rows']['typescript:B20']['checks'].pop('installed background declarations compile')))
+compare_case('background rejects cleanup uncertainty', False, good(apply=lambda r:
+    r['rows']['python:W04']['cleanup'].update(confirmed=False)))
+for value in (True, {'passed': True}, {'passed': True, 'evidence': {'fault': 'cut', 'fired': False}}):
+    compare_case('background rejects untriggered fault ' + repr(value), False, good(apply=lambda r:
+        r['rows']['python:B11']['checks'].update({'start resumes once from delivered event ID': value})))
+with tempfile.TemporaryDirectory() as tmp:
+    refused = invoke('run', '--profile', 'background', '--provider', 'e2b', '--allow-cloud', '--out', tmp)
+    check('background profile cannot call cloud even with opt-in', refused.returncode == 1
+          and 'local-only' in refused.stderr)
+runner.select_profile('baseline')
+check('baseline is restored without B assertions', len(runner.CASES) == 19 and 'B01' not in runner.CASES)
 
 if failures:
     print(json.dumps({'selfcheck': 'failed', 'failures': failures}, indent=2))

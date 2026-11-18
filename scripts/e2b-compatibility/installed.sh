@@ -7,6 +7,13 @@ OUT=${1:?fresh evidence directory (keep short for Unix sockets)}
 IMAGE=${2:?installed compatibility image digest}
 shift 2
 PYTHON=${PYTHON:-python3}
+PROFILE=baseline
+previous=
+for argument in "$@"; do
+  if [ "$previous" = --profile ]; then PROFILE=$argument; fi
+  case "$argument" in --profile=*) PROFILE=${argument#--profile=} ;; esac
+  previous=$argument
+done
 if [ -e "$OUT" ]; then echo "evidence directory already exists: $OUT" >&2; exit 1; fi
 mkdir -p "$OUT"
 OUT=$(cd "$OUT" && pwd)
@@ -27,6 +34,18 @@ sed "s|'../src/e2b.js'|'@tiny-sandbox/sdk/e2b'|" "$ROOT/sandbox-ts/checks/e2b-ap
   "$OUT/consumer/contract.mts" >"$OUT/installed-types.log" 2>&1
 cp "$HERE/dist/suite.js" "$OUT/consumer/suite.mjs"
 export CONTRACT_TS_WORKER="$OUT/consumer/suite.mjs"
+if [ "$PROFILE" = background ]; then
+  "$OUT/venv/bin/python" -B -m unittest discover -s "$ROOT/sandbox-python/tests" -v >"$OUT/installed-python-tests.log" 2>&1
+  cp "$ROOT/sandbox-ts/tests/background.test.mjs" "$OUT/consumer/background.test.mjs"
+  (cd "$OUT/consumer" && node --test background.test.mjs) >"$OUT/installed-typescript-tests.log" 2>&1
+  sed "s|from 'e2b'|from '@tiny-sandbox/sdk/e2b'|" "$HERE/background-types.ts" >"$OUT/consumer/background.mts"
+  type_status=0
+  "$ROOT/sandbox-ts/node_modules/.bin/tsc" --noEmit --strict --exactOptionalPropertyTypes \
+    --module NodeNext --moduleResolution NodeNext --target ES2022 --lib ES2022,DOM,DOM.Iterable \
+    "$OUT/consumer/background.mts" >"$OUT/background-types.log" 2>&1 || type_status=$?
+  printf '{"returncode":%s,"log":"background-types.log"}\n' "$type_status" >"$OUT/background-types.json"
+  export CONTRACT_BACKGROUND_TYPES="$OUT/background-types.json"
+fi
 "$OUT/venv/bin/python" -c 'import importlib.util, tiny_sandbox.e2b; assert importlib.util.find_spec("e2b") is None; print(tiny_sandbox.e2b.__file__)' >"$OUT/python-import.txt"
 (cd "$OUT/consumer" && node --input-type=module -e '
   import { Sandbox } from "@tiny-sandbox/sdk/e2b";
@@ -37,6 +56,11 @@ export CONTRACT_TS_WORKER="$OUT/consumer/suite.mjs"
 ') >"$OUT/typescript-import.txt"
 docker image inspect "$IMAGE" >"$OUT/image.json"
 docker run --rm --network none "$IMAGE" /bin/bash -l -c 'id; pwd; printf "HOME=%s\n" "$HOME"; bash --version; python3 --version; dpkg-query -W' >"$OUT/guest.txt"
+run_status=0
 "$OUT/venv/bin/python" "$HERE/runner.py" run --provider tiny --out "$OUT/run" \
-  --python "$OUT/venv/bin/python" --image "$IMAGE" "$@"
-"$OUT/venv/bin/python" "$HERE/runner.py" compare "$OUT/run/report.json" | tee "$OUT/compare.log"
+  --python "$OUT/venv/bin/python" --image "$IMAGE" "$@" || run_status=$?
+compare_status=0
+"$OUT/venv/bin/python" "$HERE/runner.py" compare "$OUT/run/report.json" --profile "$PROFILE" \
+  | tee "$OUT/compare.log" || compare_status=$?
+if [ "$run_status" -ne 0 ]; then exit "$run_status"; fi
+exit "$compare_status"

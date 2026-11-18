@@ -24,6 +24,34 @@ CASE_NAMES = list(CASES)
 # the basis for compatibility, so it never appears in this file's inputs.
 REFERENCE = json.loads((HERE / 'reference.json').read_text())
 LANGUAGES = ['python', 'typescript']
+PROFILE = 'baseline'
+
+
+def select_profile(name):
+    """Keep the released gate separate from the intentionally red next profile."""
+    global MANIFEST, CASES, CASE_NAMES, REFERENCE, PROFILE
+    MANIFEST = json.loads((HERE / 'cases.json').read_text())
+    REFERENCE = json.loads((HERE / 'reference.json').read_text())
+    if name == 'background':
+        extension = json.loads((HERE / 'background-reference.json').read_text())
+        assert extension['baseline'] == MANIFEST['baseline']
+        replacements = extension['cases']
+        MANIFEST['cases'] = [dict(c, **{k: v for k, v in replacements.get(c['id'], {}).items()
+                                      if k in ('title', 'kind', 'budget')}) for c in MANIFEST['cases']]
+        known = {c['id'] for c in MANIFEST['cases']}
+        MANIFEST['cases'] += [dict(id=k, **{f: v[f] for f in ('title', 'kind', 'budget')})
+                              for k, v in replacements.items() if k not in known]
+        for case, replacement in replacements.items():
+            merged = {**REFERENCE['cases'].get(case, {}), **replacement}
+            merged['checks'] = merged.get('checks', []) + merged.pop('append_checks', [])
+            REFERENCE['cases'][case] = merged
+        REFERENCE['runtime_revision'] = extension['runtime_revision']
+        REFERENCE['reference_kind'] = extension['reference_kind']
+        REFERENCE['fault_checks'] = extension['fault_checks']
+        REFERENCE['old_server_revision'] = extension['old_server_revision']
+    CASES = {c['id']: c for c in MANIFEST['cases']}
+    CASE_NAMES = list(CASES)
+    PROFILE = name
 
 
 class NotRun(Exception):
@@ -50,6 +78,8 @@ def digest():
     for path in sorted(HERE.iterdir()):
         if path.suffix in {'.py', '.ts', '.json', '.sh', '.txt'} or path.name == 'README.md':
             h.update(path.name.encode() + b'\0' + path.read_bytes())
+    h.update((ROOT / 'sandbox-python/e2e/proxy.py').read_bytes())
+    h.update((ROOT / 'internal/dockerbackend/background_acceptance_test.go').read_bytes())
     return h.hexdigest()
 
 
@@ -61,6 +91,7 @@ class Worker:
         self.call_budget = seconds or float(os.environ.get('CONTRACT_CALL_SECONDS', 30))
         self.deadline = time.monotonic() + self.call_budget
         self.queue = queue.Queue()
+        self.pending = None
         self.env = env
         command = ([env.get('CONTRACT_PYTHON', str(HERE / '.venv/bin/python')), str(HERE / 'worker.py')]
                    if language == 'python' else [env.get('NODE', 'node'), env.get('CONTRACT_TS_WORKER', str(HERE / 'dist/suite.js'))])
@@ -88,7 +119,6 @@ class Worker:
             raise
 
     def receive(self):
-        self.deadline = time.monotonic() + self.call_budget
         try:
             line = self.queue.get(timeout=max(.01, self.deadline - time.monotonic()))
         except queue.Empty:
@@ -97,11 +127,21 @@ class Worker:
             raise RuntimeError('SDK worker exited without a response')
         return json.loads(line)
 
-    def call(self, op, **kwargs):
+    def begin(self, op, **kwargs):
+        if self.pending is not None:
+            raise RuntimeError('worker already has an outstanding call')
         request = dict(op=op, **kwargs)
+        self.deadline = time.monotonic() + self.call_budget
         self.process.stdin.write(json.dumps(request, ensure_ascii=False) + '\n')
         self.process.stdin.flush()
+        self.pending = request
+
+    def finish(self):
+        if self.pending is None:
+            raise RuntimeError('worker has no outstanding call')
+        request = self.pending
         reply = self.receive()
+        self.pending = None
         # Payloads are deterministic fixtures, but avoid 10 MiB data dumps.
         def compact(v):
             if isinstance(v, str) and len(v) > 2048:
@@ -115,6 +155,10 @@ class Worker:
             f.write(json.dumps(scrub({'at':time.monotonic(), 'request':compact(request), 'response':compact(reply)})) + '\n')
         return reply
 
+    def call(self, op, **kwargs):
+        self.begin(op, **kwargs)
+        return self.finish()
+
     def close(self):
         if self.process.poll() is None:
             self.process.terminate()
@@ -123,7 +167,8 @@ class Worker:
             except subprocess.TimeoutExpired:
                 self.process.kill(); self.process.wait()
         for pipe in (self.process.stdin, self.process.stdout, self.process.stderr):
-            pipe.close()
+            if not pipe.closed:
+                pipe.close()
         for thread in self.threads:
             thread.join(timeout=2)
 
@@ -161,6 +206,9 @@ def cleanup(provider, directory, env, owner):
 def one_case(args):
     from scenarios import Context, SCENARIOS
     from local import Local
+    if PROFILE == 'background':
+        from background import SCENARIOS as background_scenarios
+        SCENARIOS = {**SCENARIOS, **background_scenarios}
     out = Path(args.out)
     env = dict(os.environ)
     local = None
@@ -173,14 +221,19 @@ def one_case(args):
             env.update(local.environment(args.language))
         context = Context(args.provider, args.language, out, env, CASES[args.case]['budget'], local)
         SCENARIOS[args.case](context)
+        problems = check_errors(args.case, args.language, context.checks)
+        assert not problems, f'acceptance coverage incomplete: {problems}'
         record.update(status='passed', complete=True, checks=context.checks, identity=context.worker.identity)
     except NotRun as e:
         record.update(status='not_run', reason=str(e))
     except Exception as e:
         record.update(reason=type(e).__name__ + ': ' + str(e))
+        import traceback
+        traceback.print_exc()
     finally:
         if context:
             record['checks'] = context.checks
+            record['identity'] = context.worker.identity
             context.close()
         if local:
             local.close()
@@ -196,6 +249,8 @@ def run(args):
     if len(set(languages)) != len(languages) or not set(languages) <= set(LANGUAGES):
         raise ValueError('unknown or duplicate languages')
     if args.provider == 'e2b':
+        if PROFILE != 'baseline':
+            raise ValueError('background profile is local-only; no E2B Cloud invocation')
         selected = [i for i in selected if CASES[i]['kind'] == 'parity']
     if not selected or not languages:
         raise ValueError('empty run selection')
@@ -217,6 +272,7 @@ def run(args):
         env['CONTRACT_MODULE'] = args.module
     rows = {f'{lang}:{case}':{'status':'not_run', 'reason':'not dispatched'} for lang in languages for case in selected}
     report = {'schema':1, 'provider':args.provider, 'baseline':MANIFEST['baseline'], 'digest':digest(),
+              'profile':PROFILE, 'runtime_revision':REFERENCE.get('runtime_revision'),
               'languages':languages, 'selected':selected, 'started':time.time(), 'complete':False, 'rows':rows,
               'source':subprocess.check_output(['git','rev-parse','HEAD'], cwd=ROOT, text=True).strip(),
               'dirty':subprocess.check_output(['git','status','--porcelain'], cwd=ROOT, text=True).splitlines()}
@@ -259,6 +315,20 @@ def run(args):
             with (out / 'build.log').open('w') as log:
                 subprocess.run(['go','build','-o',str(server),'./cmd/sandboxd'], cwd=ROOT, stdout=log, stderr=log, check=True, timeout=120)
             env.update(CONTRACT_SERVER=str(server), CONTRACT_IMAGE=args.image)
+            if PROFILE == 'background' and set(selected) & {'A16', 'B18'}:
+                import io
+                import tarfile
+                old = out / 'old-source'
+                old.mkdir()
+                archive = subprocess.check_output(['git', 'archive', REFERENCE['old_server_revision']], cwd=ROOT)
+                with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
+                    tar.extractall(old, filter='data')
+                binary = out / 'sandboxd-v0.0.2'
+                with (out / 'build-old.log').open('w') as log:
+                    subprocess.run(['go', 'build', '-o', str(binary), './cmd/sandboxd'], cwd=old,
+                                   stdout=log, stderr=log, check=True, timeout=120)
+                env['CONTRACT_OLD_SERVER'] = str(binary)
+                report['old_server_revision'] = REFERENCE['old_server_revision']
     except Exception as e:
         status = 'not_run' if isinstance(e, (NotRun, FileNotFoundError)) else 'failed'
         for row in rows.values():
@@ -271,7 +341,7 @@ def run(args):
             owner = 'e2b-contract-' + uuid.uuid4().hex
             childenv = dict(env, CONTRACT_OWNED=str(directory / 'owned.jsonl'), CONTRACT_OWNER=owner)
             command = [sys.executable, str(HERE / 'runner.py'), '_case', '--provider',args.provider, '--language',language,
-                       '--case',case,'--out',str(directory)]
+                       '--case',case,'--out',str(directory), '--profile', PROFILE]
             row = rows[f'{language}:{case}']
             with (directory / 'runner.log').open('w') as log:
                 child = subprocess.Popen(command, env=childenv, stdout=log, stderr=log, start_new_session=True)
@@ -343,6 +413,23 @@ def check_names(case, language=None):
     return names
 
 
+def check_errors(case, language, have):
+    errors = []
+    missing = missing_checks(expected_checks(case, language), have)
+    if missing:
+        errors.append(f'checks not executed: {missing}')
+    failed = [name for name, value in have.items()
+              if not (value is True or (isinstance(value, dict) and value.get('passed') is True))]
+    if failed:
+        errors.append(f'failed or unproven checks: {failed}')
+    for name in set(check_names(case, language)) & set(REFERENCE.get('fault_checks', [])):
+        value = have.get(name)
+        evidence = value.get('evidence', {}) if isinstance(value, dict) else {}
+        if not isinstance(evidence, dict) or evidence.get('fired') is not True or not evidence.get('fault'):
+            errors.append(f'missing fired-fault evidence for {name}')
+    return errors
+
+
 def compare(tiny_only):
     """Gate on the recorded reference contract. No cloud run is required."""
     report = json.loads(Path(tiny_only).read_text())
@@ -351,6 +438,12 @@ def compare(tiny_only):
         errors.append('incomplete or wrong-provider report')
     if report.get('baseline') != MANIFEST['baseline'] or report.get('digest') != digest():
         errors.append('baseline or suite digest mismatch')
+    if report.get('profile', 'baseline') != PROFILE:
+        errors.append('acceptance profile mismatch')
+    if PROFILE == 'background' and report.get('runtime_revision') != REFERENCE['runtime_revision']:
+        errors.append('runtime reference mismatch')
+    if PROFILE == 'background' and report.get('old_server_revision') != REFERENCE['old_server_revision']:
+        errors.append('old-server reference mismatch')
     if report.get('selected') != list(CASES):
         errors.append('not the full case selection')
     if sorted(report.get('languages', [])) != sorted(LANGUAGES):
@@ -368,20 +461,13 @@ def compare(tiny_only):
                 continue
             if row.get('cleanup', {}).get('confirmed') is not True:
                 errors.append(key + ': cleanup unconfirmed')
-            needed = expected_checks(case, language)
             have = row.get('checks') or {}
-            missing = missing_checks(needed, have)
-            if missing:
-                errors.append(f'{key}: checks not executed: {missing}')
-            failed = [name for name, value in have.items()
-                      if not (value is True or (isinstance(value, dict) and value.get('passed') is True))]
-            if failed:
-                errors.append(f'{key}: failed or unproven checks: {failed}')
+            errors.extend(f'{key}: {error}' for error in check_errors(case, language, have))
     if errors:
         print(json.dumps({'status': 'failed', 'reference': REFERENCE['reference_kind'],
                           'errors': errors}, ensure_ascii=False, indent=2))
         return 1
-    print(f'PASS: recorded E2B {REFERENCE["baseline"]} subset checks '
+    print(f'PASS: {PROFILE} recorded E2B {REFERENCE["baseline"]} subset checks '
           f'({len(CASES)} cases x {len(LANGUAGES)} languages, '
           f'{sum(len(expected_checks(c, language)) for c in CASES for language in LANGUAGES)} expectations)')
     print('Not claimed: a released adapter, live E2B drift, native regression gates, or any case outside this suite.')
@@ -391,6 +477,7 @@ def compare(tiny_only):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--list', action='store_true')
+    parser.add_argument('--profile', choices=['baseline', 'background'], default='baseline')
     sub = parser.add_subparsers(dest='action')
     p = sub.add_parser('run')
     p.add_argument('--provider', choices=['e2b','tiny'], required=True)
@@ -401,12 +488,16 @@ def main():
     p.add_argument('--allow-cloud', action='store_true')
     p.add_argument('--image')
     p.add_argument('--module', help='tiny-provider adapter module; defaults to tiny_sandbox.e2b')
+    p.add_argument('--profile', choices=['baseline', 'background'], default=argparse.SUPPRESS)
     p = sub.add_parser('compare')
     p.add_argument('report', help='tiny report.json to gate against reference.json')
+    p.add_argument('--profile', choices=['baseline', 'background'], default=argparse.SUPPRESS)
     p = sub.add_parser('_case')
     for name in ('provider','language','case','out'):
         p.add_argument('--' + name, required=True)
+    p.add_argument('--profile', choices=['baseline', 'background'], default=argparse.SUPPRESS)
     args = parser.parse_args()
+    select_profile(args.profile)
     if args.list:
         for c in CASES.values():
             print(f'{c["id"]}  {c["kind"]:6}  {c["budget"]:3}s  {c["title"]}')

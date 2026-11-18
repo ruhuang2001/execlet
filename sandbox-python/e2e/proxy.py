@@ -23,6 +23,7 @@ class Fault:
     location: str | None = None
     delay: float = 0.0
     accepted: threading.Event = dataclasses.field(default_factory=threading.Event)
+    release: threading.Event = dataclasses.field(default_factory=threading.Event)
 
 
 class FaultProxy:
@@ -33,6 +34,7 @@ class FaultProxy:
         self.lock = threading.Lock()
         self.faults: list[Fault] = []
         self.records: list[dict] = []
+        self._request_count = 0
         self.scenario = "setup"
         owner = self
 
@@ -58,6 +60,10 @@ class FaultProxy:
                     pass
 
             def forward(self):
+                # Completion records lag behind responses, especially for SSE.
+                # Count arrivals separately when proving a cached call sends nothing.
+                with owner.lock:
+                    owner._request_count += 1
                 body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
                 headers = {k: v for k, v in self.headers.items() if k.lower() not in {"host", "connection"}}
                 record = {"scenario": owner.scenario, "at": time.monotonic(),
@@ -68,12 +74,32 @@ class FaultProxy:
                 if body and "json" in self.headers.get("Content-Type", ""):
                     try:
                         record["body"] = json.loads(body)
+                        if isinstance(record["body"], dict):
+                            for key in ("env", "envs", "stdin"):
+                                if key in record["body"]:
+                                    record["body"][key] = "<redacted>"
                     except ValueError:
                         record["body"] = "<invalid JSON>"
                 fault = owner.choose(self.command, self.path)
                 record["fault"] = fault.action if fault else None
                 upstream = None
                 try:
+                    if fault and fault.action == "barrier":
+                        fault.accepted.set()
+                        if not fault.release.wait(15):
+                            record["barrier_expired"] = True
+                            self.disconnect()
+                            return
+                    if fault and fault.action == "missing_capability":
+                        assert self.path == "/v1/capabilities"
+                        payload = b'{"capabilities":[]}'
+                        record["status"] = 200
+                        self.send_response(200)
+                        self.send_header("Content-Type", "application/json")
+                        self.send_header("Content-Length", str(len(payload)))
+                        self.end_headers()
+                        self.wfile.write(payload)
+                        return
                     if fault and fault.action in {"status", "redirect"}:
                         record["status"] = fault.status
                         payload = json.dumps({"code": "injected_failure", "message": "E2E proxy fault"}).encode()
@@ -149,10 +175,19 @@ class FaultProxy:
                             if isinstance(decoded, dict):
                                 record["response_id"] = decoded.get("id")
                                 record["response_state"] = decoded.get("state")
+                                execution = decoded.get("execution", decoded)
+                                record["execution_id"] = execution.get("id") if isinstance(execution, dict) else None
+                                record["pid"] = execution.get("pid") if isinstance(execution, dict) else None
+                                record["attach_event_id"] = decoded.get("last_event_id")
                         except ValueError:
                             pass
                     if fault:
                         fault.accepted.set()
+                    if fault and fault.action == "barrier_after":
+                        if not fault.release.wait(15):
+                            record["barrier_expired"] = True
+                            self.disconnect()
+                            return
                     if fault and fault.action == "hold":
                         time.sleep(fault.delay)
                     if fault and fault.action == "old_response":
@@ -222,6 +257,10 @@ class FaultProxy:
             self.records.append(record)
             with self.trace_path.open("a", encoding="utf-8") as file:
                 file.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    def request_count(self):
+        with self.lock:
+            return self._request_count
 
     def requests(self, scenario: str, method: str | None = None, suffix: str | None = None):
         with self.lock:

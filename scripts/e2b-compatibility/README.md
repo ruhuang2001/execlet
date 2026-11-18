@@ -23,13 +23,13 @@ bash scripts/e2b-compatibility/setup.sh
 npm --prefix sandbox-ts ci
 docker build -t tiny-sandbox-e2b:local examples/e2b
 IMAGE=$(docker image inspect tiny-sandbox-e2b:local --format '{{.Id}}')
-PYTHON=python3.15 bash scripts/e2b-compatibility/installed.sh artifacts/e2b-installed "$IMAGE"
+PYTHON=python3.15 bash scripts/e2b-compatibility/installed.sh artifacts/e2b-installed "$IMAGE" --profile background
 ```
 
 Use an installed Python 3.11+ interpreter. Keep the output path short on macOS
 because each case creates a Unix socket. This script builds and installs the
 wheel/tarball in isolated consumers, checks their real entry points and strict
-TypeScript declarations, records image/package versions, runs all 38 rows, and
+TypeScript declarations, records image/package versions, runs all 80 rows, and
 calls compare. It verifies neither consumer has the E2B runtime installed.
 The reference SDK is used only for source/declaration checks.
 
@@ -40,7 +40,9 @@ The output includes `wheels/`, `npm/`, installation logs, resolved import paths,
 CI runs this installed-package gate as `e2b-compatibility` on pushes and pull
 requests, and the reusable CI also gates Release publication. It builds the
 local image from `examples/e2b`, pins the resulting digest, runs `selfcheck.py`,
-and requires the full 38-row comparison plus a zero-container check. Failed
+and requires the full 80-row background comparison plus a zero-container check.
+It also runs the deployment policy/recovery/fault suite and retains the tested
+distributions for the separate, opt-in SDK publication workflow. Failed
 runs still upload evidence and package files, excluding the virtualenv and
 consumer dependency tree. The suite may be absent only for an explicitly
 selected historical `v0.0.1` commit, not for current or new release revisions.
@@ -51,9 +53,9 @@ installed packages directly, no E2B key is needed:
 
 ```sh
 bash scripts/e2b-compatibility/run.sh tiny artifacts/e2b-tiny \
-  --image sha256:<local-compatibility-image>
+  --image sha256:<local-compatibility-image> --profile background
 scripts/e2b-compatibility/.venv/bin/python scripts/e2b-compatibility/runner.py \
-  compare artifacts/e2b-tiny/report.json
+  compare artifacts/e2b-tiny/report.json --profile background
 ```
 
 `--image` must name immutable content. There is no fallback to the native
@@ -61,8 +63,8 @@ Alpine/root default: the subset promises bash, a non-root `user`, `/home/user`
 and a guest Python, and that is a property of the image, not of the server.
 
 `--languages` and `--cases` narrow a run for diagnosis. A narrowed run is
-recorded as such and can never satisfy `compare`, which requires all 19 cases
-(parity targets and local guards) in both languages, the matching suite digest,
+recorded as such and can never satisfy `compare`, which requires all 40 background
+cases (19 for historical baseline) in both languages, the matching suite digest,
 and confirmed cleanup.
 `--list` prints the manifest without installing or calling anything.
 
@@ -84,6 +86,65 @@ bash scripts/e2b-compatibility/run.sh e2b artifacts/e2b-live --allow-cloud
 ```
 
 No live drift check is required for the source-derived gate.
+
+## Background-command profile
+
+The [background contract](../../docs/e2b-background-commands.md) has a separate
+profile used by current CI. It invokes the real installed adapters, not a
+probe implementation. It remains intentionally failing against v0.0.2, which
+has no background handles or capability gate.
+No E2B key or E2B runtime dependency is needed, and cloud mode is refused for
+this profile even with `--allow-cloud`.
+
+```sh
+IMAGE=$(docker image inspect tiny-sandbox-e2b:local --format '{{.Id}}')
+PYTHON=python3.15 bash scripts/e2b-compatibility/installed.sh artifacts/e2b-bg "$IMAGE" \
+  --profile background
+```
+
+This runs **40 cases × 2 languages**: the original 19, with A05/A12/A14/A16/W03
+expectations overlaid, plus B01–B20 and W04. The default remains the original
+19-case profile. A failed installed-type check is recorded in
+`background-types.log`/`.json` and does not prevent runtime cases from running.
+The script always attempts `compare`, including when runtime assertions fail.
+For separate comparison, pass the same profile explicitly:
+
+```sh
+python3 scripts/e2b-compatibility/runner.py compare artifacts/e2b-bg/run/report.json \
+  --profile background
+python3 scripts/e2b-compatibility/runner.py --list --profile background
+```
+
+`background-reference.json` pins the runtime reference and the actual v0.0.2
+server revision built by A16/B18. It requires every applicable assertion and
+triggered-fault evidence, not just a case marked passed. Missing assertions,
+wrong profile/revision, stale digest, partial selections and unconfirmed cleanup
+all fail comparison. `selfcheck.py` mutation-tests those rejection paths.
+
+The fixtures exercise real guest PID/start ticks, file gates, asymmetric Unicode
+streams, binary artifacts, fresh Python/Node controllers, SSE interruption,
+accepted-response loss, exact output/event limits, completed-record retention,
+Docker failure injection and independent owner-scoped cleanup. B08 additionally
+runs an opt-in backend test with a modeled Engine signal-dispatch race:
+
+```sh
+go test -tags=e2b_background_acceptance ./internal/dockerbackend \
+  -run '^TestBackgroundSignalLifetime$' -count=1 -v
+```
+
+That test models the Engine signal-dispatch boundary: a numeric-only signal
+can select a replacement incarnation; the current lifetime-bound protocol
+must reject it. It does not force real-kernel PID reuse or prove isolation from
+hostile same-UID code. The B08 scenario runs it as part of current CI; default
+Go tests alone do not include it.
+
+An absent API stops that case at its first failure. Later scenario code is
+**not exercised**, even though it is runnable once prerequisites exist. Do not
+interpret a full dispatch or passing harness selfcheck as 80 behavioral passes.
+Keep actual run results and cleanup evidence separate from source-derived
+expectations. Production methods now exist, but package publication and a new
+release remain separate actions. Do not run the historical baseline against
+new code and interpret its old local-timeout expectations as regressions.
 
 ## Evidence
 

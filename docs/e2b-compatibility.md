@@ -7,6 +7,13 @@ acceptance implemented in this checkout; publication is a separate step. The sub
 The baseline is source-derived; no E2B Cloud account or key is required.
 No live E2B comparison or full E2B compatibility is claimed.
 
+This document preserves the **v0.0.2 foreground baseline**, including its
+historical acceptance matrix and limitations. Current source extends it with
+the [background profile](e2b-background-commands.md), whose timeout, capability
+and handle rules supersede the corresponding rows here. Current CI selects
+that profile explicitly (40 cases per language); the old 19-case profile is
+for historical code, not the current adapter.
+
 ## 1. What compatibility means
 
 The first release targets **E2B basic Sandbox application-source compatibility**
@@ -110,14 +117,25 @@ bytes/text and per-stream ordering, not callback counts or a total ordering
 between stdout and stderr. Await TypeScript callbacks in sequence. Preserve
 ordinary callback failures without retrying the command or killing the process.
 
-### Waiting is not remote cancellation
+### v0.0.2 waiting behavior and upstream mismatch
+
+**Known compatibility gap (source review, 2026-11-18):** the following describes
+the implemented v0.0.2 adapter, not proven E2B run-timeout parity. The inspected
+upstream runtime also enforces the timeout passed to command Start as a remote
+process deadline. A connection timeout on an existing command is different.
+The [next background-command profile](e2b-background-commands.md#1-reference-and-a-correction-to-the-previous-profile)
+pins that runtime source and specifies the correction plus replacement
+acceptance. A05/W03 and A14's continuation checks below remain evidence of
+local v0.0.2 behavior only until migrated; passing them does not settle the
+upstream claim. No released implementation or executable test changes here.
 
 The published Python command implementation applies `timeout` to the process
 connection; the TypeScript bundle similarly applies `timeoutMs` to the RPC stream.
-The compatibility deadline therefore stops waiting and reports TimeoutException
+The v0.0.2 adapter deadline stops waiting and reports TimeoutException
 / TimeoutError; it does not set native ExecuteRequest.timeout_seconds and does
 not invoke native automatic cancellation. A later file side effect must still
-occur if the process and sandbox remain healthy. This needs a live reference test.
+occur if the process and sandbox remain healthy. This local behavior alone
+does not establish the upstream server's timeout semantics.
 The same distinction applies when the start response is lost: do not pass the
 compatibility wait deadline into a native recovery path that cancels the process.
 Recover a known invocation with its original key, without starting another one;
@@ -143,9 +161,9 @@ nonzero command exit. These diagnostic extensions are outside the parity promise
 
 A create without an idempotency key is not automatically replayed after an
 ambiguous response. Execution starts retain native keyed recovery. Keeping a
-stream alive or reconnecting it does not renew sandbox lifetime. Native server
-restart still loses state; this subset does not provide E2B persistence or VM
-isolation guarantees.
+stream alive or reconnecting it does not renew sandbox lifetime. In-memory
+server restart still loses state. Current source adds separate
+[conservative recovery](operations.md), not E2B persistence or VM isolation.
 
 ## 5. Explicitly deferred
 
@@ -154,6 +172,11 @@ PTY, interactive stdin, background command handles, PID-based connect/kill,
 pause/resume/snapshots, port URLs, network policies, volumes, secrets, template
 builds, custom cloud template IDs, user switching, custom shell, bulk/streaming
 file transfers, metadata filters, or create idempotency in the first release.
+
+Background handles now have an implemented [next-profile contract](e2b-background-commands.md)
+and [runnable acceptance profile](testing/e2b-background-failures.md). They are
+still absent from v0.0.2; current source implements them without rewriting that
+release's allowlist. The historical baseline gate is unchanged.
 
 Native capabilities such as one-shot stdin, tar transfers and pause remain
 available through native APIs; their existence does not establish E2B parity.
@@ -265,7 +288,7 @@ declarations, and runs A01–A16/W01–W03 plus compare. Import paths are the re
 package entry points, without probe overrides. See the
 [acceptance instructions](../scripts/e2b-compatibility/README.md).
 
-### Evidence boundaries (2026-11-18)
+### Historical foreground evidence boundaries (2026-11-18)
 
 Earlier disposable probe results demonstrated server prerequisites only. The
 formal installed-package gate additionally checks finite-timeout callbacks,

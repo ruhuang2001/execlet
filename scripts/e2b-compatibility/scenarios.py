@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 import time
 
-from runner import CASE_NAMES, Worker, observer, NotRun
+from runner import Worker, observer, NotRun
 
 FIX = json.loads((Path(__file__).parent / 'fixtures.json').read_text())
 # Shell-embedded fixtures keep real characters: ensure_ascii would turn an
@@ -27,9 +27,12 @@ class Context:
         self.worker = self.spawn()
 
     # -- transport helpers ---------------------------------------------------
-    def spawn(self, **overrides):
+    def spawn(self, language=None, **overrides):
+        language = language or self.language
         env = dict(self.env, CONTRACT_OWNED=str(self.out / 'owned.jsonl'), **overrides)
-        worker = Worker(self.language, env, self.out / f'worker-{len(self.workers)}.jsonl',
+        if self.local and language != self.language:
+            env.update(self.local.environment(language))
+        worker = Worker(language, env, self.out / f'worker-{len(self.workers)}.jsonl',
                         max(60, min(self.deadline - time.monotonic(), 240)))
         self.workers.append(worker)
         return worker
@@ -353,7 +356,7 @@ def a11(ctx):
 
 
 # ------------------------------------------------------------------ A12
-def a12(ctx):
+def a12(ctx, background_invalid=True):
     creates = len(ctx.container_creates()) if ctx.local else 0
     sid = ctx.create(duration=60)
     text_file(ctx, sid, '/home/user/guard.txt', 'original')
@@ -366,7 +369,8 @@ def a12(ctx):
         ('user', lambda: ctx.error('create', 'user switching', options={'user': 'root'})),
         ('metadata', lambda: ctx.error('create', 'metadata filters', options={'metadata': {'a': 'b'}})),
         ('stdin', lambda: ctx.error('run', 'stdin true', id=sid, command='true', options={'stdin': True})),
-        ('background', lambda: ctx.error('run', 'background', id=sid, command='true', options={'background': True})),
+        ('background', lambda: ctx.error('run', 'background', id=sid, command='true',
+                                         options={'background': True if background_invalid else 'true'})),
         ('retain', lambda: ctx.error('run', 'retain_output false', id=sid, command='true', options={'retain_output': False})),
         ('depth', lambda: ctx.error('list', 'recursive list', id=sid, path='/home/user', options={'depth': 2})),
         ('misspelled', lambda: ctx.error('create', 'misspelled option', options={'timeoutt': 30})),
@@ -596,4 +600,4 @@ SCENARIOS = {name.upper(): fn for name, fn in [
     ('a01', a01), ('a02', a02), ('a03', a03), ('a04', a04), ('a05', a05), ('a06', a06),
     ('a07', a07), ('a08', a08), ('a09', a09), ('a10', a10), ('a11', a11), ('a12', a12),
     ('a13', a13), ('a14', a14), ('a15', a15), ('a16', a16), ('w01', w01), ('w02', w02), ('w03', w03)]}
-assert set(SCENARIOS) == set(CASE_NAMES), set(SCENARIOS) ^ set(CASE_NAMES)
+assert len(SCENARIOS) == 19

@@ -31,6 +31,10 @@ class DockerFault:
         self.path = str(path)
         self.lock = threading.Lock()
         self.fail_remove = False
+        self.fail_exec = False
+        self.fail_identity = False
+        self.failed_identities = []
+        self.failed_execs = []
         self.requests = []
         upstream_path = os.environ.get('DOCKER_HOST') or subprocess.run(
             ['docker', 'context', 'inspect', '--format', '{{.Endpoints.docker.Host}}'],
@@ -56,11 +60,31 @@ class DockerFault:
                 # Docker is addressed with a negotiated version prefix such
                 # as /v1.52, so never match the path from the first byte.
                 path = line.split(' ')[1] if ' ' in line else ''
+                head, body = data.split(b'\r\n\r\n', 1)
+                if line.startswith('POST ') and path.endswith('/exec'):
+                    length = next((int(h.split(b':', 1)[1]) for h in head.split(b'\r\n')
+                                   if h.lower().startswith(b'content-length:')), 0)
+                    while len(body) < length:
+                        chunk = self.request.recv(min(65536, length - len(body)))
+                        if not chunk:
+                            return
+                        body += chunk
+                    data = head + b'\r\n\r\n' + body
                 with outer.lock:
                     outer.requests.append(line)
                     fail = outer.fail_remove and line.startswith('DELETE ') and '/containers/' in path
+                    if outer.fail_identity and line.startswith('POST ') and path.endswith('/exec'):
+                        command = json.loads(body).get('Cmd', [])
+                        if (len(command) == 2 and command[0] == 'cat'
+                                and command[1].startswith('/run/tiny-sandbox/')
+                                and not command[1].endswith('.result')):
+                            outer.failed_identities.append(line)
+                            fail = True
+                    if outer.fail_exec and line.startswith('POST ') and '/containers/' in path and path.endswith('/exec'):
+                        outer.failed_execs.append(line)
+                        fail = True
                 if fail:
-                    body = b'{"message":"injected removal failure"}'
+                    body = b'{"message":"injected Docker operation failure"}'
                     self.request.sendall(
                         b'HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\nContent-Length: '
                         + str(len(body)).encode() + b'\r\nConnection: close\r\n\r\n' + body)
@@ -77,23 +101,20 @@ class DockerFault:
                             length = int(value.strip())
                     head = b'\r\n'.join(x for x in head.split(b'\r\n') if not x.lower().startswith(b'connection:'))
                     upstream.sendall(head + b'\r\nConnection: close\r\n\r\n' + body)
-                    open_reads = 2
-                    while open_reads:
+                    while True:
                         reads = [upstream] if length is None or len(body) >= length else [upstream, self.request]
-                        ready, _, _ = select.select(reads, [], [], 30)
+                        ready, _, _ = select.select(reads, [], [], 1)
                         if not ready:
-                            return
+                            # A silent Docker exec is still running. The case
+                            # watchdog and owned-container cleanup bound it; an
+                            # idle proxy timeout must not fabricate process EOF.
+                            continue
                         for peer in ready:
                             chunk = peer.recv(65536)
                             if not chunk:
-                                open_reads -= 1
-                                if peer is self.request:
-                                    # Client finished its body; keep draining upstream.
-                                    try:
-                                        upstream.shutdown(socket.SHUT_WR)
-                                    except OSError:
-                                        pass
-                                continue
+                                return
+                            if peer is self.request:
+                                body += chunk
                             (upstream if peer is self.request else self.request).sendall(chunk)
 
         self.server = Server(self.path, Handler)
@@ -102,6 +123,12 @@ class DockerFault:
     def arm(self, fail):
         with self.lock:
             self.fail_remove = fail
+
+    def deny_exec(self, fail):
+        # Arm only after READY. Independent CLI observers bypass this private
+        # socket, while all daemon signal helpers fail at the real Docker API.
+        with self.lock:
+            self.fail_exec = fail
 
     def removals(self):
         with self.lock:
@@ -186,6 +213,8 @@ class Local:
                 self.process.wait()
         if self.docker:
             self.docker.close()
+        if self.faults:
+            self.faults.close()
 
 
 PROXY = _load('e2b_fault_proxy', ROOT / 'sandbox-python/e2e/proxy.py')

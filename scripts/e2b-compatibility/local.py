@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import http.client
 import json
 import os
 from pathlib import Path
@@ -36,6 +37,10 @@ class DockerFault:
         self.failed_identities = []
         self.failed_execs = []
         self.requests = []
+        self.start_fault = None
+        self.start_targets = {}
+        self.start_faults = []
+        self.release_start = threading.Event()
         upstream_path = os.environ.get('DOCKER_HOST') or subprocess.run(
             ['docker', 'context', 'inspect', '--format', '{{.Endpoints.docker.Host}}'],
             capture_output=True, text=True, check=True).stdout.strip()
@@ -59,7 +64,7 @@ class DockerFault:
                 line = data.split(b'\r\n', 1)[0].decode('latin-1')
                 # Docker is addressed with a negotiated version prefix such
                 # as /v1.52, so never match the path from the first byte.
-                path = line.split(' ')[1] if ' ' in line else ''
+                path = line.split(' ')[1].partition('?')[0] if ' ' in line else ''
                 head, body = data.split(b'\r\n\r\n', 1)
                 if line.startswith('POST ') and path.endswith('/exec'):
                     length = next((int(h.split(b':', 1)[1]) for h in head.split(b'\r\n')
@@ -72,6 +77,12 @@ class DockerFault:
                     data = head + b'\r\n\r\n' + body
                 with outer.lock:
                     outer.requests.append(line)
+                    capture_start = False
+                    if outer.start_fault and line.startswith('POST ') and path.endswith('/exec'):
+                        command = json.loads(body).get('Cmd', [])
+                        capture_start = any('RELIABILITY_READY' in arg for arg in command) or (
+                            command[:3] == ['python3', '-I', '-c'] and command[4:5] == ['start'])
+                    start_mode = outer.start_targets.get(path.split('/')[-2]) if '/exec/' in path and path.endswith('/start') else None
                     fail = outer.fail_remove and line.startswith('DELETE ') and '/containers/' in path
                     if outer.fail_identity and line.startswith('POST ') and path.endswith('/exec'):
                         command = json.loads(body).get('Cmd', [])
@@ -101,6 +112,33 @@ class DockerFault:
                             length = int(value.strip())
                     head = b'\r\n'.join(x for x in head.split(b'\r\n') if not x.lower().startswith(b'connection:'))
                     upstream.sendall(head + b'\r\nConnection: close\r\n\r\n' + body)
+                    if capture_start:
+                        response = http.client.HTTPResponse(upstream)
+                        response.begin()
+                        payload = response.read()
+                        if response.status == 201:
+                            with outer.lock:
+                                outer.start_targets[json.loads(payload)['Id']] = outer.start_fault
+                        lines = ['HTTP/1.1 %d %s' % (response.status, response.reason),
+                                 'Content-Type: application/json', 'Content-Length: %d' % len(payload),
+                                 'Connection: close', '', '']
+                        self.request.sendall(bytes([13, 10]).join(x.encode() for x in lines) + payload)
+                        return
+                    if start_mode:
+                        upstream.settimeout(10)
+                        observed = b''
+                        while b'RELIABILITY_READY' not in observed:
+                            chunk = upstream.recv(65536)
+                            if not chunk:
+                                raise RuntimeError('start fault did not observe user command output')
+                            observed += chunk
+                            if len(observed) > 65536:
+                                raise RuntimeError('start fault exceeded observation limit')
+                        with outer.lock:
+                            outer.start_faults.append(dict(mode=start_mode, exec_id=path.split('/')[-2], marker_seen=True))
+                        if start_mode == 'stall':
+                            outer.release_start.wait(12)
+                        return
                     while True:
                         reads = [upstream] if length is None or len(body) >= length else [upstream, self.request]
                         ready, _, _ = select.select(reads, [], [], 1)
@@ -110,12 +148,17 @@ class DockerFault:
                             # idle proxy timeout must not fabricate process EOF.
                             continue
                         for peer in ready:
-                            chunk = peer.recv(65536)
-                            if not chunk:
+                            try:
+                                chunk = peer.recv(65536)
+                                if not chunk:
+                                    return
+                                if peer is self.request:
+                                    body += chunk
+                                (upstream if peer is self.request else self.request).sendall(chunk)
+                            except (BrokenPipeError, ConnectionResetError):
+                                # Deadlines and container removal deliberately
+                                # close connections while a reply is in flight.
                                 return
-                            if peer is self.request:
-                                body += chunk
-                            (upstream if peer is self.request else self.request).sendall(chunk)
 
         self.server = Server(self.path, Handler)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -135,6 +178,7 @@ class DockerFault:
             return [r for r in self.requests if r.startswith('DELETE ') and '/containers/' in r]
 
     def close(self):
+        self.release_start.set()
         self.server.shutdown()
         self.server.server_close()
         Path(self.path).unlink(missing_ok=True)

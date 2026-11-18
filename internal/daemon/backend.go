@@ -150,6 +150,9 @@ type Backend interface {
 	// command itself, and returns its process. The process runs in its own
 	// process group. A non-nil process with an error means start was accepted
 	// but identity confirmation failed: retain and observe it, never replay it.
+	// With a nil process, errors must wrap ErrStartUnconfirmed if user code
+	// may have started; other errors guarantee it was not dispatched. The
+	// context bounds startup, not the lifetime of a returned process.
 	Exec(ctx context.Context, containerID string, spec ExecSpec) (Process, error)
 	// Liveness reports whether the container exists and is running.
 	Liveness(ctx context.Context, containerID string) (Liveness, error)

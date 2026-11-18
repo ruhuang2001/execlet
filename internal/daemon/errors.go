@@ -59,6 +59,10 @@ func CodeOf(err error) Code {
 // such as a file, does not exist. The daemon maps it to not_found.
 var ErrNotFound = errors.New("daemon: not found")
 
+// ErrStartUnconfirmed means user code may have started but the backend has no
+// process observer. A caller must retain the invocation and prevent replay.
+var ErrStartUnconfirmed = errors.New("daemon: execution start unconfirmed")
+
 // backendError wraps a container-runtime failure. A backend that reports
 // ErrNotFound keeps the not_found code so file reads do not become 502s.
 func backendError(err error) error {

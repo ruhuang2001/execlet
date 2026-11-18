@@ -208,7 +208,9 @@ The client can exhaust its own deadline before server cleanup finishes,
 so `cancel_unconfirmed` must not be treated as confirmed termination. The
 error branch can occur at any point during the remote cleanup shown below.
 A received response can contain a nonterminal snapshot after fallback; the
-SDK does not validate terminal state before returning `ErrCanceled`.
+Go SDK verifies the requested IDs, terminal state and a known outcome before
+returning `ErrCanceled`. Nonterminal, unknown or mismatched responses return
+`ErrCancelUnconfirmed` without changing the caller's recovery identity.
 
 ```mermaid
 sequenceDiagram
@@ -241,10 +243,10 @@ sequenceDiagram
         Runtime-->>Server: Exit status and drained output
         Server->>Server: Finalize execution with canceled intent
     end
-    alt SDK receives cancellation response
+    alt SDK receives matching confirmed terminal outcome
         Server-->>SDK: Execution snapshot
-        SDK-->>Caller: Snapshot and ErrCanceled (check execution state)
-    else Request fails or SDK deadline expires
+        SDK-->>Caller: Snapshot and ErrCanceled
+    else Request fails, deadline expires or outcome is unconfirmed
         SDK-->>Caller: ErrCancelUnconfirmed with execution ID
         Note over Caller,Server: Cleanup may continue, verify the remote outcome
     end
@@ -409,7 +411,7 @@ Recorded because earlier builds hit them, not as hypotheticals:
 5. **A chunk boundary is a byte boundary, not a character boundary.** Output events are JSON strings encoded one at a time, so a cut inside a UTF-8 sequence becomes two U+FFFD and the bytes are gone. The pump carries an incomplete trailing rune into the next read, and the splitter backs up to a rune boundary. A test pins it.
 6. **Cleanup must not inherit the caller's deadline.** The cancel escalation and container removal run on `context.WithoutCancel` with their own bounds. A client that gives up on the request would otherwise skip SIGTERM's grace and destroy the sandbox.
 7. **A background reader must be joined.** The SSE ping goroutine writes to the response writer; the handler waits for it before returning, because net/http reuses that writer for the next request on the connection.
-8. **A backend call must not be unbounded under a lock.** The reaper skips a sandbox whose lock is held, so a runtime call that never returns under `sb.mu` can prevent that sandbox's lifecycle timeouts from running. Exec creation, identity probes and the OOM baseline read use `BackendCallTimeout`, but Docker `ExecStart` detaches the context so its output stream can outlive the request. That call currently has no separate response-header deadline: a stalled Docker start can hold the sandbox lock. This remains a runtime-failure limitation, not a bounded-start guarantee.
+8. **A backend call must not be unbounded under a lock.** The reaper skips a sandbox whose lock is held. Exec creation, the Docker start handshake and managed identity probes share `BackendCallTimeout`; only a successful output stream detaches from that budget. The OOM baseline and cleanup have separate bounded budgets. If start may have executed code but returned no observer, retain an unknown/truncated execution and retire the sandbox before admitting any replay, even without durable storage. Cleanup may also evict sibling work; failed removal stays visible and retryable. See the [failure model](testing/reliability-failures.md).
 9. **Shutdown needs to tell streams.** `http.Server.Shutdown` waits for handlers but does not cancel their contexts, so an open SSE stream would hold the shutdown until its deadline and the container would outlive the process. The handler ends streams when the shutdown signal closes, and the store then attempts bounded, best-effort removal of its containers.
 10. **Pause must be measured, not asserted.** Prove it with a counter that advances across pause and resume, not with the state field.
 11. **Execution context must survive the wrapper.** Change directories inside the wrapper so unusable paths return exit 126 on stderr; use physical path resolution. Apply environment overrides through the image env utility after shell startup. See the [execution request contract](api.md#post-v1sandboxessandbox_idexecutions) for limits, image requirements, and the command-path exception.

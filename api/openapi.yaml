@@ -367,6 +367,12 @@ paths:
         the same command without a retained key starts a new execution.
         Reusing a key with a different command, cwd, env, or stdin returns 409
         idempotency_conflict.
+        A lost Docker start acknowledgment without a process observer returns
+        502 and retains an unknown execution with null exit code and truncated
+        output. The sandbox is retired and removal requested; further starts,
+        including keyed replays, return 409 invalid_state. Cleanup failures
+        remain visible and retryable. The five-second runtime start handshake
+        budget does not limit a successfully attached output stream.
       requestBody:
         required: true
         content:
@@ -1241,12 +1247,16 @@ components:
             execution slot, OOM counters are not attributed to an execution and
             an otherwise unexplained exit 137 is unknown. Exit code 137 alone
             never implies oom. Interrupted work in durable recovery becomes
-            unknown with a null exit code, never re-executed.
+            unknown with a null exit code, never re-executed. The same applies
+            to unconfirmed runtime startup without a process observer; sibling
+            work lost to its conservative cleanup is evicted unless an earlier
+            cancellation or timeout intent already won.
         output_truncated:
           type: boolean
           description: >-
             True when output exceeded the retention limit of 1 MiB or 4096
-            events, or live output was lost during durable restart recovery.
+            events, or output was lost during durable restart recovery or
+            unconfirmed runtime startup.
         started_at:
           type: string
           format: date-time

@@ -347,12 +347,11 @@ and seconds-based deadlines remain unchanged.
 Important differences:
 
 1. Python's `max_retries=0` disables retries; Go's zero uses its default.
-2. Python automatic cancellation requires a terminal snapshot before returning
-   `canceled`. Go currently accepts a successful cancel response without that
-   check and may return a nonterminal snapshot.
-3. Python always wraps callback exceptions as `callback`, without retrying.
-   Go currently passes through callback errors already typed as its SDK error,
-   which can make a retryable callback error reconnect.
+2. Both SDKs require confirmed terminal outcomes during automatic cancellation.
+   Python polls a nonterminal response within the remaining cleanup budget; Go
+   returns `ErrCancelUnconfirmed` immediately without that polling step.
+3. Both SDKs wrap callback failures as `callback`, even SDK-typed failures, and
+   stop observation without retrying or canceling the remote execution.
 4. Python's `matches("nonzero_exit")` also matches retained nonzero exit codes
    from timeout, OOM, or other reasons. Go requires an `exited` reason for this
    fallback. Check Python's exact `error.code` to distinguish these outcomes.

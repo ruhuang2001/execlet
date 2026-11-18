@@ -91,9 +91,9 @@ container liveness, and finally the exit code:
 | `canceled` | the server terminated it because of a cancel request or sandbox deletion |
 | `timeout` | the sandbox lifetime with action `kill`, native `timeout_seconds`, or managed `timeout_ms` expired |
 | `oom` | positive cgroup OOM evidence during an execution in a sandbox configured for one slot |
-| `evicted` | the container stopped or disappeared without the server asking for it |
+| `evicted` | the container stopped or disappeared, or sibling work was lost to conservative uncertain-start cleanup |
 | `exited` | the process exited without a higher-priority reason; unexplained 137 is included only with one configured slot |
-| `unknown` | unexplained exit 137 with multiple configured slots, or interrupted execution after durable restart recovery; a non-success SDK outcome |
+| `unknown` | unexplained exit 137 with multiple configured slots, unconfirmed runtime start without a process observer, or interrupted execution after durable restart recovery; a non-success SDK outcome |
 
 `canceled` and `timeout` are intents the server records before it acts; a later intent does not replace the first. The periodic eviction sweep can also finalize an execution directly as `evicted` when the container is gone. Exit code 137 alone never implies `oom`.
 
@@ -338,6 +338,29 @@ A removal the runtime refuses is `502 backend_error` with `unconfirmed container
 - Same key with a different command, `cwd`, `env`, or `stdin`: `409 idempotency_conflict`.
 - Execution slots are full: `409 busy`. The immutable create-time max_concurrent_executions accepts 1–8 and defaults to 1. Identical keyed replays do not consume slots.
 
+#### Unconfirmed runtime startup
+
+The Docker start handshake shares the five-second `BackendCallTimeout` with
+exec creation and identity confirmation. After the handshake succeeds, output
+observation outlives that budget and the initiating HTTP request. The preceding
+OOM baseline read and any cleanup have separate bounded budgets; five seconds
+is not an end-to-end HTTP latency guarantee. Docker start is never retried.
+
+If Docker may have accepted user code but no process observer was obtained,
+the server returns `502 backend_error` identifying the retained execution.
+With or without durable state, the invocation/key remains recorded with
+`state: completed`, `termination_reason: unknown`, null exit code and
+`output_truncated: true`. The server retires the sandbox and requests container
+removal; further starts, including keyed replays, return `409 invalid_state`.
+Sibling executions are lost with reason `evicted` unless an earlier cancellation
+or timeout intent already won. A `killed` record alone does not prove removal:
+cleanup failures remain visible and are retried. Inspect the original outcome
+before retrying business work in a different sandbox.
+
+If a managed process observer exists but PID confirmation fails, the existing
+observer and remote deadline remain active instead; the key stays retained and
+no duplicate is started. See the [background contract](e2b-background-commands.md).
+
 #### One-shot stdin
 
 The ExecuteRequest stdin field sends UTF-8 text once, followed by EOF. At most
@@ -536,9 +559,9 @@ has its own five-second cancellation deadline, so it can return
 `ErrCancelUnconfirmed` while server cleanup is still in progress.
 
 Container removal is best effort in `terminateLocked`. A sandbox can be recorded
-as `killed` even if Docker removal fails; the error is not returned by the delete
-endpoint and a repeated delete of that killed record returns the stored record
-without retrying removal. A removal that fails or exceeds the server's backend
+as `killed` even if Docker removal fails; deletion returns `502 backend_error`,
+including repeated deletes while removal remains pending. Once removal is
+confirmed, deletion returns the stored record with `200`. A removal that fails or exceeds the server's backend
 call timeout is recorded for the periodic reaper, which retries it on later
 beats with a bounded budget per pass, so a slow runtime does not starve timeout
 and eviction checks. Retries continue for the life of the process, but nothing

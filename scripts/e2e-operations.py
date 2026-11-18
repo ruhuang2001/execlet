@@ -129,12 +129,87 @@ def main():
     def kill(sid):
         assert http('/v1/sandboxes/' + sid, 'DELETE')[0] == 200
 
+    def start_reliability(durable, managed, fault):
+        label = 'start %s durable=%s managed=%s' % (fault, durable, managed)
+        extra = ['-state-dir', str(out / ('start-state-' + str(managed) + '-' + fault))] if durable else []
+        start(extra)
+        status, sb = create(max_concurrent_executions=2, timeout_seconds=3)
+        assert status == 201, sb
+        sid = sb['id']
+        sibling = begin(sid, ['python3', '-c', 'import time; time.sleep(60)'])
+        container = owned()[0]
+        status, other = create()
+        assert status == 201, other
+        request = dict(command=['python3', '-u', '-c',
+            "from pathlib import Path; import time; p=Path('/tmp/reliability-count'); p.write_text(p.read_text()+'x' if p.exists() else 'x'); print('RELIABILITY_READY',flush=True); time.sleep(60)"],
+            idempotency_key='lost-start')
+        if managed:
+            request['timeout_ms'] = 0
+        with proxy.lock:
+            proxy.start_fault = fault
+            proxy.start_faults.clear()
+            proxy.release_start.clear()
+            proxy.fail_remove = fault == 'drop'
+        began = time.monotonic()
+        with ThreadPoolExecutor(max_workers=1) as worker:
+            pending = worker.submit(http, '/v1/sandboxes/' + sid + '/executions', 'POST', request)
+            until = time.monotonic() + 5
+            while not proxy.start_faults and time.monotonic() < until:
+                time.sleep(.01)
+            check(label + ' fault follows real user code', bool(proxy.start_faults), list(proxy.start_faults))
+            check(label + ' independent sandbox stays usable',
+                  run(other['id'], 'print(73)')['stdout'].strip() == '73')
+            status, response = pending.result(timeout=15)
+        elapsed = time.monotonic() - began
+        check(label + ' bounded uncertainty response', status == 502 and elapsed < 9,
+              dict(status=status, response=response, elapsed_seconds=elapsed))
+        with proxy.lock:
+            proxy.start_fault = None
+        repeat, replay = http('/v1/sandboxes/' + sid + '/executions', 'POST', request)
+        records = http('/v1/sandboxes/' + sid + '/executions')[1]['executions']
+        uncertain = next((ex for ex in records if ex['id'] != sibling['id']), None)
+        check(label + ' retained unknown prevents replay', repeat == 409 and len(records) == 2
+              and uncertain is not None and uncertain['id'] in response['message']
+              and uncertain['termination_reason'] == 'unknown' and uncertain['exit_code'] is None
+              and uncertain['output_truncated'], dict(replay=replay, executions=records))
+        lost = wait(sid, sibling['id'])
+        check(label + ' sibling loss is visible', lost['termination_reason'] == 'evicted', lost)
+        check(label + ' sandbox no longer accepts work', http('/v1/sandboxes/' + sid)[1]['state'] == 'killed')
+        if fault == 'drop':
+            check(label + ' one side effect despite replay',
+                  cli('exec', container, 'cat', '/tmp/reliability-count') == 'x')
+            check(label + ' failed removal remains visible',
+                  http('/v1/sandboxes/' + sid, 'DELETE')[0] == 502
+                  and 'tiny_sandbox_cleanup_pending 1' in http('/metrics')[1])
+        check(label + ' exactly one Docker start', len(proxy.start_faults) == 1, list(proxy.start_faults))
+        proxy.arm(False)
+        proxy.release_start.set()
+        until = time.monotonic() + 10
+        while container in owned() and time.monotonic() < until:
+            time.sleep(.1)
+        check(label + ' cleanup confirmed independently', container not in owned())
+        kill(other['id'])
+        stop()
+
     try:
         check('pinned local image', cli('image', 'inspect', args.image, '--format', '{{.Id}}') == args.image)
         (out / 'environment.json').write_text(json.dumps(dict(image=args.image,
             docker=json.loads(cli('version', '--format', '{{json .}}')),
             server_sha256=hashlib.sha256(Path(binary).read_bytes()).hexdigest()), indent=2))
+        for durable in [False, True]:
+            for managed in [False, True]:
+                for fault in ['drop', 'stall']:
+                    start_reliability(durable, managed, fault)
         start(['-policy', str(policy)])
+        status, sb = create()
+        assert status == 201, sb
+        long_command = ['python3', '-u', '-c', "import time; print('before',flush=True); time.sleep(6); print('after')"]
+        initial = begin(sb['id'], long_command, 'long-stream')
+        final = wait(sb['id'], initial['id'])
+        replay = begin(sb['id'], long_command, 'long-stream')
+        check('normal stream outlives handshake and initiating request', final['stdout'] == 'before\nafter\n'
+              and final['exit_code'] == 0 and replay['id'] == initial['id'], final)
+        kill(sb['id'])
         check('metrics authentication', http('/metrics', auth=False)[0] == 401)
         check('capability authentication', http('/v1/capabilities', auth=False)[0] == 401)
         check('unapproved image denied before create', create(image='unapproved:latest')[0] == 400 and not owned())
@@ -360,6 +435,8 @@ def main():
         (out / 'cleanup.json').write_text(json.dumps(dict(owner=owner, remaining=after)))
         assert not after
         shutil.rmtree(state, ignore_errors=True)
+        for private_state in out.glob('start-state-*'):
+            shutil.rmtree(private_state)
 
 
 if __name__ == '__main__':

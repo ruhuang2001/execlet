@@ -18,9 +18,8 @@ import (
 //
 // On a disconnect it reconnects with Last-Event-ID set to the last delivered
 // ID and drops any event not newer than it, which makes the replay lossless
-// and duplicate-free. Reconnects use the retry backoff and reset their attempt
-// counter whenever a new event arrives; after MaxRetries consecutive failures
-// the call returns an error.
+// and duplicate-free. Reconnects use the retry backoff, allowing MaxRetries
+// reconnects over the whole call; receiving events does not reset the budget.
 //
 // If onEvent returns an error the stream closes and the error is returned. The
 // execution keeps running: a rendering bug must not kill remote work.
@@ -36,12 +35,11 @@ func (c *Client) StreamExecution(ctx context.Context, sandboxID, executionID str
 		if complete {
 			return ex, nil
 		}
+		if sdkErr, ok := errors.AsType[*Error](err); ok && sdkErr.Code == "callback" {
+			return nil, err
+		}
 		if ctx.Err() != nil {
 			return c.cancelAfterContext(ctx, sandboxID, executionID, err)
-		}
-		var sdkErr *Error
-		if errors.As(err, &sdkErr) && sdkErr.Code == "callback" {
-			return nil, err
 		}
 		if err == nil || !retryableStreamError(err) {
 			return nil, err
@@ -52,7 +50,7 @@ func (c *Client) StreamExecution(ctx context.Context, sandboxID, executionID str
 			return nil, &Error{
 				StatusCode: statusOf(err),
 				Code:       "stream",
-				Message:    fmt.Sprintf("sandbox: stream failed %d times without delivering an event", failures),
+				Message:    fmt.Sprintf("sandbox: stream failed %d times during observation", failures),
 				Cause:      err,
 			}
 		}
@@ -135,7 +133,7 @@ func (c *Client) cancelAfterContext(_ context.Context, sandboxID, executionID st
 	fresh, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	ex, err := c.CancelExecution(fresh, sandboxID, executionID)
+	ex, err := c.cancelConfirmed(fresh, sandboxID, executionID)
 	if err != nil {
 		return nil, &Error{
 			Code:      "cancel_unconfirmed",
@@ -152,12 +150,9 @@ func (c *Client) cancelAfterContext(_ context.Context, sandboxID, executionID st
 	}
 }
 
-// callbackError wraps an onEvent failure, which is never retried.
+// callbackError always marks provenance, even for a retryable SDK error.
+// The caller's error remains available through errors.Is and errors.As.
 func callbackError(err error) error {
-	var sdkErr *Error
-	if errors.As(err, &sdkErr) {
-		return err
-	}
 	return &Error{Code: "callback", Message: "sandbox: event handler failed", Cause: err}
 }
 
@@ -335,15 +330,10 @@ func (c *Client) ExecStream(ctx context.Context, sandboxID string, command []str
 	}
 	ex, err := c.StreamExecution(ctx, sandboxID, started.ID, onEvent)
 	if err != nil {
-		if ex != nil {
-			return ex, &Error{
-				Code:      string(ReasonCanceled),
-				Message:   "sandbox: execution canceled",
-				Execution: ex,
-				Cause:     err,
-			}
+		if ex == nil {
+			ex = executionOf(err)
 		}
-		return executionOf(err), err
+		return ex, err
 	}
 	if err := outcomeError(ex); err != nil {
 		return ex, err

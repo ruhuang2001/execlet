@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"maps"
 	"net/http"
 	"net/url"
@@ -99,7 +100,15 @@ func (c *Client) recoverStart(sandboxID string, req ExecuteRequest) (*Execution,
 			Cause:          err,
 		}
 	}
-	canceled, err := c.CancelExecution(recoverCtx, sandboxID, ex.ID)
+	if ex.ID == "" || ex.SandboxID != sandboxID {
+		return nil, &Error{
+			Code:           "cancel_unconfirmed",
+			Message:        "sandbox: recovered start did not confirm the requested sandbox identity",
+			Execution:      &Execution{SandboxID: sandboxID},
+			IdempotencyKey: req.IdempotencyKey,
+		}
+	}
+	canceled, err := c.cancelConfirmed(recoverCtx, sandboxID, ex.ID)
 	if err != nil {
 		return nil, &Error{
 			Code:           "cancel_unconfirmed",
@@ -151,8 +160,9 @@ func (c *Client) ListExecutions(ctx context.Context, sandboxID string) ([]*Execu
 	return list.Executions, nil
 }
 
-// CancelExecution terminates the execution's process group and returns it once
-// it is completed. Idempotent on a completed execution.
+// CancelExecution requests termination of the execution's process group. The
+// bounded server fallback can return a running snapshot; inspect State before
+// treating it as confirmed termination. Idempotent on a completed execution.
 func (c *Client) CancelExecution(ctx context.Context, sandboxID, executionID string) (*Execution, error) {
 	resp, err := c.do(ctx, request{
 		method:     http.MethodPost,
@@ -167,6 +177,26 @@ func (c *Client) CancelExecution(ctx context.Context, sandboxID, executionID str
 		return nil, err
 	}
 	return &ex, nil
+}
+
+// cancelConfirmed is shared by automatic stream cleanup and start recovery.
+// Unknown outcomes (including failed persistence) do not prove termination.
+func (c *Client) cancelConfirmed(ctx context.Context, sandboxID, executionID string) (*Execution, error) {
+	ex, err := c.CancelExecution(ctx, sandboxID, executionID)
+	if err != nil {
+		return nil, err
+	}
+	if ex.ID == executionID && ex.SandboxID == sandboxID && ex.State == "completed" && ex.TerminationReason != nil {
+		switch *ex.TerminationReason {
+		case ReasonCanceled, ReasonTimeout, ReasonOOM, ReasonEvicted:
+			return ex, nil
+		case ReasonExited:
+			if ex.ExitCode != nil {
+				return ex, nil
+			}
+		}
+	}
+	return nil, errors.New("sandbox: cancellation response did not confirm the requested execution's terminal outcome")
 }
 
 func executionPath(sandboxID, executionID string) string {

@@ -3,8 +3,9 @@
 Status: normative. Contract for `sandbox-go` (package `sandbox`). The SDK speaks the contract in [api.md](api.md).
 
 For the synchronous Python client, see [sdk-python.md](sdk-python.md), including
-its differences in zero-retry configuration, callback errors, error matching,
-and automatic cancellation confirmation.
+its differences in zero-retry configuration, error matching, and automatic
+cancellation polling. Both SDKs reject unconfirmed automatic cancellation and
+stop observation on callback errors without canceling remote work.
 
 The [TypeScript SDK](sdk-typescript.md) uses the same HTTP contract with async
 iteration, AbortSignal and discriminated outcomes. Its additions do not change
@@ -197,7 +198,7 @@ func (e *Error) Retryable() bool
 var (
     ErrNonZeroExit       // termination_reason "exited" with a nonzero exit code
     ErrTimeout           // termination_reason "timeout": the sandbox lifetime, or the execution's own deadline
-    ErrCanceled          // canceled outcome or an accepted SDK cancellation response; inspect execution state
+    ErrCanceled          // canceled outcome, or local cancellation with confirmed remote termination
     ErrUnknown           // termination_reason "unknown"
     ErrOOM               // termination_reason "oom"
     ErrEvicted           // termination_reason "evicted"
@@ -222,7 +223,7 @@ The sentinels are mutually exclusive. An execution matches the sentinel for its 
 1. If `ExecuteRequest.IdempotencyKey` is empty, generate 128 random bits, hex-encoded.
 2. If the context is already done, return its error without sending anything.
 3. Send the start request, retrying as above with the same key.
-4. If the context ends while the start is in flight, the SDK cannot know whether the server accepted it. Using a fresh context with a 5-second deadline, it repeats the start with the same key (the server returns the existing execution, or creates one if the original request was never accepted), then cancels that execution. Result: `ErrCanceled` with the Execution. If this recovery fails, return `ErrCancelUnconfirmed` with `IdempotencyKey` set, so the caller can clean up.
+4. If the context ends while the start is in flight, the SDK cannot know whether the server accepted it. Using a fresh context with a 5-second deadline, it repeats the start with the same key (the server returns the existing execution, or creates one if the original request was never accepted), validates the returned sandbox identity, then cancels that execution. Only a matching, confirmed terminal response yields `ErrCanceled` with the Execution. A failed or unconfirmed recovery returns `ErrCancelUnconfirmed` with `IdempotencyKey` and the original identity when known. It never switches keys.
 
 Reusing a retained key with the same command, environment, directory, and stdin
 returns the original execution.
@@ -235,9 +236,15 @@ new key to start a new execution with a different timeout.
 - On disconnect it reconnects with `Last-Event-ID` set to the last delivered ID and drops any event with an ID not greater than it.
 - Reconnect attempts use the retry backoff. The current implementation allows up to `MaxRetries` reconnects during one `StreamExecution` call; receiving output does not reset this budget.
 - It returns the Execution from the `complete` event. `StreamExecution` does not turn a nonzero exit or termination reason into an outcome error; `Exec` and `ExecStream` do that.
-- If `onEvent` returns an ordinary error, the SDK closes the stream and returns a callback error wrapping it. The execution keeps running: a rendering bug in the caller must not terminate remote work. Call `CancelExecution` explicitly when the command itself should stop.
-- If the caller's context ends, the SDK calls `CancelExecution` with a fresh 5-second context, because the original one can no longer carry requests. Success: `ErrCanceled` with the Execution. Failure: `ErrCancelUnconfirmed` with an Execution holding the IDs.
+- If `onEvent` returns any error, including a typed or wrapped `*sandbox.Error`, the SDK closes the stream and returns `Error{Code: "callback"}` wrapping it. `errors.Is` can still match the original error. It never reconnects or cancels remote work, even when the callback also ends the local context. Call `CancelExecution` explicitly when the command itself should stop.
+- If the caller's context ends without a callback failure, the SDK calls `CancelExecution` with a fresh 5-second context. It checks both IDs, `state: completed`, and a recognized terminal reason other than `unknown` (`exited` also requires an exit code). Only then does it return `ErrCanceled` with the Execution. Otherwise it returns `ErrCancelUnconfirmed` carrying the requested IDs. Go does not poll after a nonterminal cancellation response.
 - Ending a stream for any other reason never cancels the execution.
+
+Automatic cleanup reports local cancellation even when the command won the
+race and already exited; inspect the retained Execution for its actual reason.
+The raw `CancelExecution` method still returns the server's latest snapshot,
+which may be nonterminal. `ExecStream` preserves uncertainty rather than
+relabeling it as confirmed cancellation.
 
 ### Current streaming limitations
 
@@ -246,13 +253,6 @@ These are implementation limits, not additional guarantees:
 - Reconnects count against one budget per call, even when events arrive between
   disconnections. The counter does not reset on progress.
 - SSE reconnects do not apply the response's `Retry-After` header.
-- Callback errors already typed as `*sandbox.Error` are passed through. A
-  retryable SDK error returned by a callback may therefore trigger a reconnect;
-  return an application error to stop consumption reliably.
-- In context-cancellation recovery, a successful cancel HTTP response becomes
-  `ErrCanceled` without
-  checking that the snapshot is terminal. During the server's removal fallback,
-  inspect the execution state; see [cancellation and removal](api.md#cancellation-and-removal).
 - Replay covers retained output only. A `truncated` event means further output
   was discarded; reconnecting cannot recover it.
 - Output is treated as UTF-8 text. Bytes that are not valid UTF-8 arrive as

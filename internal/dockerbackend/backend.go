@@ -12,8 +12,8 @@
 //     execs the real command, keeping the PID. Signal reads that file and
 //     kills the group from inside the container.
 //   - Exec streams must outlive the request that started them. The engine
-//     hands Exec the HTTP request's context, which net/http cancels when the
-//     handler returns, so ExecStart detaches from it.
+//     bounds the start handshake separately; after it succeeds, output
+//     observation is detached until the command's stream closes.
 package dockerbackend
 
 import (
@@ -281,9 +281,22 @@ func (b *Backend) Exec(ctx context.Context, containerID string, spec daemon.Exec
 	if err != nil {
 		return nil, fmt.Errorf("dockerbackend: exec create: %w", err)
 	}
-	stream, err := b.api.ExecStart(context.WithoutCancel(ctx), execID)
+	// Only the handshake inherits the start budget. Once headers arrive, the
+	// observer owns streamCtx; canceling the initiating request cannot cut off
+	// later output. A cancellation already in progress wins this handoff.
+	streamCtx, stopStream := context.WithCancel(context.WithoutCancel(ctx))
+	stopHandshake := context.AfterFunc(ctx, stopStream)
+	stream, err := b.api.ExecStart(streamCtx, execID)
+	if !stopHandshake() {
+		stopStream()
+		if stream != nil {
+			_ = stream.Close()
+		}
+		err = ctx.Err()
+	}
 	if err != nil {
-		return nil, fmt.Errorf("dockerbackend: exec start: %w", err)
+		stopStream()
+		return nil, fmt.Errorf("dockerbackend: exec start: %w", errors.Join(daemon.ErrStartUnconfirmed, err))
 	}
 
 	outW := newBufferedStream()
@@ -301,6 +314,7 @@ func (b *Backend) Exec(ctx context.Context, containerID string, spec daemon.Exec
 	}
 	go func() {
 		defer close(p.done)
+		defer stopStream()
 		err := dockerapi.Demux(stream, outW, errW)
 		_ = stream.Close()
 		_ = outW.Close()

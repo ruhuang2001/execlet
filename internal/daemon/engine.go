@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"strings"
@@ -356,20 +357,28 @@ func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req Ex
 	cancel()
 	startErr := err
 	if err != nil && proc == nil {
-		if s.journal != nil {
-			// Any backend error can follow accepted work. Preserve the key and
-			// stop this container before a client can retry into another process.
-			_ = s.terminateLocked(context.WithoutCancel(ctx), sb, KillEvicted)
+		if s.journal != nil || req.TimeoutMS != nil || errors.Is(err, ErrStartUnconfirmed) {
+			// No observer can establish whether user code ran. Retain the
+			// invocation even without a journal, then retire the sandbox so a
+			// lost start acknowledgment cannot admit a second incarnation.
+			if s.journal == nil {
+				sb.executions = append(sb.executions, ex)
+				if ex.key != "" {
+					sb.idempotency[ex.key] = ex
+				}
+			}
+			removeErr := s.terminateLocked(context.WithoutCancel(ctx), sb, KillEvicted)
+			ex.log.mu.Lock()
+			ex.log.truncateLocked()
+			ex.log.mu.Unlock()
 			ex.finish(s.now(), -1, ExecOutcome{Reason: ReasonUnknown})
+			sb.pruneExecutionsLocked()
 			sb.mu.Unlock()
-			return Execution{}, false, errorf(CodeBackendError, "start unconfirmed; sandbox terminated; execution %s", ex.id)
-		}
-		if req.TimeoutMS != nil {
-			// A lost managed-start handshake may have executed user code. Do
-			// not allow a retry to create a second incarnation in this sandbox.
-			removeErr := s.terminateLocked(context.WithoutCancel(ctx), sb, KillRequested)
-			sb.mu.Unlock()
-			return Execution{}, false, errorf(CodeBackendError, "managed start unconfirmed; sandbox terminated to prevent duplicate execution (cleanup error: %v)", removeErr)
+			message := "start unconfirmed; sandbox retired; retained execution " + ex.id
+			if removeErr != nil {
+				message += "; cleanup unconfirmed: " + removeErr.Error()
+			}
+			return Execution{}, false, &Error{Code: CodeBackendError, Message: message, Err: err}
 		}
 		sb.mu.Unlock()
 		return Execution{}, false, backendError(err)

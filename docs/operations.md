@@ -138,7 +138,12 @@ python3 scripts/e2e-operations.py --server bin/sandboxd --image "$IMAGE" \
 Evidence includes `report.json`, Docker/proxy/server logs, `cleanup.json`,
 Prometheus samples and `baseline.json`. Faults cover resource races, removal
 failures, uncertain PID handshake, crash/graceful restart, corrupt journals
-and storage outages. Cleanup is scoped to the run's owner, not all Docker.
+and storage outages. Startup faults first observe real user code, then drop or
+stall its Docker response, with durable state and managed commands on and off.
+They verify single execution, bounded return, unknown/truncated results, sibling
+loss and visible cleanup failure; a normal stream exceeds the handshake budget
+without losing output. See the [reliability failure model](testing/reliability-failures.md).
+Cleanup is scoped to the run's owner, not all Docker.
 
 The baseline reports sample counts, medians, empirical p95 and raw samples for fresh containers
 using an already-local image, commands on reused containers and time to first

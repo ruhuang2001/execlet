@@ -1,5 +1,6 @@
 """Real daemon/Docker concurrency matrix; run by scripts/e2e.sh."""
 import concurrent.futures
+import http.client
 import json
 import pathlib
 import subprocess
@@ -7,24 +8,35 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import uuid
 
 if not __debug__:
     raise RuntimeError("concurrency E2E requires enabled assertions")
 
 base, artifact = sys.argv[1:]
-report = {"checks": [], "owned": [], "cleanup": []}
 owned = []
+report = {"checks": [], "owned": owned, "cleanup": [], "request_errors": [], "passed": False}
+# This runner targets its own daemon, never the host's ambient HTTP proxy.
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 def call(method, path, body=None, expected=200):
+    request_id = uuid.uuid4().hex
     req = urllib.request.Request(base + path, method=method,
-        data=None if body is None else json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+        data=None if body is None else json.dumps(body).encode(),
+        headers={"Content-Type": "application/json", "X-Request-ID": request_id})
     try:
-        r = urllib.request.urlopen(req, timeout=25)
-    except urllib.error.HTTPError as e:
-        r = e
-    result = json.loads(r.read())
-    assert r.status == expected, (method, path, r.status, expected, result)
+        try:
+            response = opener.open(req, timeout=25)
+        except urllib.error.HTTPError as error:
+            response = error
+        with response:
+            result = json.loads(response.read())
+    except (OSError, http.client.HTTPException, ValueError) as error:
+        report["request_errors"].append({"method": method, "path": path, "request_id": request_id,
+            "error_type": type(error).__name__, "error": str(error)})
+        raise
+    assert response.status == expected, (method, path, response.status, expected, result, request_id)
     return result
 
 
@@ -64,9 +76,16 @@ def cancel(sb, ex):
 
 
 def check(name, fn):
-    evidence = fn()
-    report["checks"].append({"name": name, "passed": True, "evidence": evidence})
-    pathlib.Path(artifact).write_text(json.dumps(report, indent=2))
+    try:
+        evidence = fn()
+    except Exception as error:
+        report["checks"].append({"name": name, "passed": False,
+            "error_type": type(error).__name__, "error": str(error)})
+        raise
+    else:
+        report["checks"].append({"name": name, "passed": True, "evidence": evidence})
+    finally:
+        pathlib.Path(artifact).write_text(json.dumps(report, indent=2) + "\n")
     print("PASS", name, flush=True)
 
 
@@ -275,9 +294,20 @@ try:
 except Exception as error:
     report["passed"] = False
     report["error"] = str(error)
+    report["error_type"] = type(error).__name__
     raise
 finally:
     for sb in owned:
-        report["cleanup"].append({"sandbox": sb, "state": call("DELETE", "/v1/sandboxes/" + sb)["state"]})
-    report["owned"] = owned
+        try:
+            state = call("DELETE", "/v1/sandboxes/" + sb)["state"]
+            assert state == "killed", (sb, state)
+            report["cleanup"].append({"sandbox": sb, "state": state})
+        except Exception as error:
+            report["passed"] = False
+            report["cleanup"].append({"sandbox": sb, "error_type": type(error).__name__, "error": str(error)})
+            print("FAIL cleanup", sb, repr(error), file=sys.stderr)
     pathlib.Path(artifact).write_text(json.dumps(report, indent=2) + "\n")
+
+# Reached only without an original exception; cleanup failure still fails CI.
+if not report["passed"]:
+    raise SystemExit(1)

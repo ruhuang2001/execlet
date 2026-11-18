@@ -236,22 +236,120 @@ func TestStreamDropsEventsAtOrBelowTheCursor(t *testing.T) {
 }
 
 func TestStreamCallbackErrorStopsWithoutCancel(t *testing.T) {
-	f := newFakeServer(t)
-	f.setHandler(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.WriteHeader(http.StatusOK)
-		_, _ = io.WriteString(w, sseFrame(1, EventStdout, `{"data":"x"}`))
-		_, _ = io.WriteString(w, sseFrame(2, EventComplete, completePayload("exe_1")))
-	})
-
-	c := f.client(t, 3)
-	boom := errors.New("renderer failed")
-	_, err := c.StreamExecution(context.Background(), "sbx_1", "exe_1", func(Event) error { return boom })
-	if !errors.Is(err, boom) {
-		t.Fatalf("err = %v, want the callback error", err)
+	for _, boom := range []error{errors.New("renderer failed"), &Error{Code: "transport"}, fmt.Errorf("render: %w", &Error{StatusCode: 503})} {
+		for _, endContext := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%T/context-ended=%v", boom, endContext), func(t *testing.T) {
+				f := newFakeServer(t)
+				f.setHandler(func(w http.ResponseWriter, _ *http.Request) {
+					w.Header().Set("Content-Type", "text/event-stream")
+					_, _ = io.WriteString(w, sseFrame(1, EventStdout, `{"data":"x"}`))
+					_, _ = io.WriteString(w, sseFrame(2, EventComplete, completePayload("exe_1")))
+				})
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				callbacks := 0
+				_, err := f.client(t, 1).StreamExecution(ctx, "sbx_1", "exe_1", func(event Event) error {
+					callbacks++
+					if event.Type != EventStdout {
+						return nil
+					}
+					if endContext {
+						cancel()
+					}
+					return boom
+				})
+				if !errors.Is(err, boom) {
+					t.Errorf("err = %v, want original callback error %v", err, boom)
+				}
+				if callbacks != 1 {
+					t.Errorf("callbacks = %d, want 1", callbacks)
+				}
+				if n := f.count(http.MethodGet, "/v1/sandboxes/sbx_1/executions/exe_1/events"); n != 1 {
+					t.Errorf("observations = %d, want 1", n)
+				}
+				if n := f.count(http.MethodPost, "/v1/sandboxes/sbx_1/executions/exe_1/cancel"); n != 0 {
+					t.Errorf("callback canceled remote work %d times", n)
+				}
+			})
+		}
 	}
-	if n := f.count(http.MethodPost, "/v1/sandboxes/sbx_1/executions/exe_1/cancel"); n != 0 {
-		t.Errorf("cancel was sent %d times; a callback error must not cancel", n)
+}
+
+func TestAutomaticCancelRequiresTerminalIdentity(t *testing.T) {
+	for _, entry := range []string{"stream", "exec", "start"} {
+		for _, response := range []string{"running", "wrong-execution", "wrong-sandbox", "missing-reason", "unknown-reason", "invalid-reason", "exited", "completed"} {
+			t.Run(entry+"/"+response, func(t *testing.T) {
+				f := newFakeServer(t)
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				var starts atomic.Int32
+				f.setHandler(func(w http.ResponseWriter, r *http.Request) {
+					switch {
+					case strings.HasSuffix(r.URL.Path, "/executions"):
+						if entry == "start" && starts.Add(1) == 1 {
+							cancel()
+							<-r.Context().Done()
+							return
+						}
+						writeJSON(w, http.StatusOK, Execution{ID: "exe_1", SandboxID: "sbx_1", State: "running"})
+					case strings.HasSuffix(r.URL.Path, "/cancel"):
+						ex := Execution{ID: "exe_1", SandboxID: "sbx_1", State: "completed", TerminationReason: new(ReasonCanceled)}
+						switch response {
+						case "running":
+							ex.State = "running"
+							ex.TerminationReason = nil
+						case "wrong-execution":
+							ex.ID = "exe_other"
+						case "wrong-sandbox":
+							ex.SandboxID = "sbx_other"
+						case "missing-reason":
+							ex.TerminationReason = nil
+						case "unknown-reason":
+							ex.TerminationReason = new(ReasonUnknown)
+						case "invalid-reason":
+							ex.TerminationReason = new(Reason("future-reason"))
+						case "exited":
+							ex.TerminationReason = new(ReasonExited)
+							ex.ExitCode = new(0)
+						}
+						writeJSON(w, http.StatusOK, ex)
+					default:
+						w.Header().Set("Content-Type", "text/event-stream")
+						_, _ = io.WriteString(w, sseFrame(1, EventStdout, `{"data":"ready"}`))
+						w.(http.Flusher).Flush()
+						<-r.Context().Done()
+					}
+				})
+				c := f.client(t, -1)
+				callback := func(Event) error { cancel(); return nil }
+				var err error
+				switch entry {
+				case "start":
+					_, err = c.StartExecution(ctx, "sbx_1", ExecuteRequest{Command: []string{"true"}, IdempotencyKey: "original-key"})
+				case "exec":
+					_, err = c.ExecStream(ctx, "sbx_1", []string{"true"}, callback)
+				default:
+					_, err = c.StreamExecution(ctx, "sbx_1", "exe_1", callback)
+				}
+				want := ErrCancelUnconfirmed
+				if response == "completed" || response == "exited" {
+					want = ErrCanceled
+				}
+				if !errors.Is(err, want) {
+					t.Fatalf("err = %v, want %v", err, want)
+				}
+				if errors.Is(want, ErrCancelUnconfirmed) && errors.Is(err, ErrCanceled) {
+					t.Fatal("unconfirmed cancellation also matched ErrCanceled")
+				}
+				sdkErr, ok := errors.AsType[*Error](err)
+				if !ok || sdkErr.Execution == nil || sdkErr.Execution.ID != "exe_1" || sdkErr.Execution.SandboxID != "sbx_1" {
+					t.Fatalf("lost requested identity: %+v", sdkErr)
+				}
+				if entry == "start" && errors.Is(want, ErrCancelUnconfirmed) && sdkErr.IdempotencyKey != "original-key" {
+					t.Fatalf("lost start key: %+v", sdkErr)
+				}
+			})
+		}
 	}
 }
 

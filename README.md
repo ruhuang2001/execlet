@@ -15,13 +15,16 @@ a command-line client, and HTTP API.
 - **Concurrency:** 1–8 execution slots per sandbox; default 1. Pause freezes all
   processes. Sandboxes configured for multiple execution slots report
   ambiguous exit 137 as `unknown`.
-- **Operations:** structured logs, request IDs, process liveness at `/healthz`,
-  and Docker readiness at `/readyz`.
+- **Background commands:** Python/TypeScript E2B-style handles with guest PID,
+  fresh-client attachment, remote deadlines, disconnect and confirmed kill.
+- **Operations:** structured logs, request IDs, authenticated Prometheus metrics,
+  readiness, opt-in deployment budgets/network restrictions and restart recovery.
 
 Documentation on `main` describes the current source. Published binaries can
 lag behind it; use the documentation at your release tag for that contract.
-Build from this checkout to use all capabilities listed above. New SDK fields
-may be silently ignored by older servers; see [versioning](docs/versioning.md).
+Build from this checkout to use all capabilities listed above. Current SDKs
+check advertised capabilities before sending optional execution controls to
+older servers; see [versioning](docs/versioning.md).
 
 ## Install
 
@@ -88,13 +91,19 @@ checkout; this is not full E2B or HTTP-protocol compatibility.
 
 ## Scope
 
-The server uses Docker container isolation and keeps its state in memory.
-It does not provide hardened isolation or multi-tenant access controls. Server
-restarts lose execution history; owner-label cleanup reclaims its containers,
-best effort when Docker is unavailable. Archive uploads require coordinated
-writers and are not transactional once extraction begins. See [design and
-limitations](docs/design.md), the [archive contract](docs/api.md#tar-transfer),
-and [unimplemented future directions](docs/future.md).
+The server uses Docker container isolation, not hardened isolation or tenant
+authorization. State is in memory by default. Opt-in `-state-dir` preserves
+completed results and reconciles idle containers; interrupted commands become
+`unknown` and their containers are removed, never replayed. This is not process
+memory restoration or E2B persistence parity.
+
+Opt-in `-policy` enforces aggregate reservations, allowed images and either
+`none` (no external network) or unrestricted `bridge`; filtered internet access
+is not implemented. The managed-command supervisor is not protected from
+same-UID guest code. Archive uploads require coordinated writers and are not
+transactional once extraction begins. See [deployment and recovery](docs/operations.md),
+[design](docs/design.md), the [archive contract](docs/api.md#tar-transfer), and
+[future directions](docs/future.md).
 
 ## Documentation
 
@@ -105,6 +114,8 @@ and [unimplemented future directions](docs/future.md).
 - [Python SDK reference](docs/sdk-python.md)
 - [TypeScript SDK reference](docs/sdk-typescript.md)
 - [E2B compatibility subset and acceptance](docs/e2b-compatibility.md)
+- [Background-command contract](docs/e2b-background-commands.md)
+- [Deployment policy, recovery and metrics](docs/operations.md)
 - [HTTP API reference](docs/api.md)
 - [Versioning and releases](docs/versioning.md)
 - [Contributing](CONTRIBUTING.md)

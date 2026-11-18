@@ -1,6 +1,6 @@
 # Design
 
-tiny-sandbox provides Docker-backed code execution for AI agents through Go, Python, and TypeScript SDKs, a CLI, and an HTTP API. It uses in-memory state and does not provide hardened isolation or multi-tenant access controls.
+tiny-sandbox provides Docker-backed code execution for AI agents through Go, Python, and TypeScript SDKs, a CLI, and an HTTP API. It uses in-memory state by default, with opt-in local restart recovery. It does not provide hardened isolation or multi-tenant access controls.
 
 This document is the design source for the implementation. `api.md`, `sdk.md` and `cli.md` are normative contracts; where this document disagrees with them, they win.
 
@@ -27,7 +27,7 @@ This project answers those questions with working code and tests rather than pro
 
 ## Non-goals
 
-Templates, snapshots, volumes, secrets, multi-tenancy, billing, browser automation, additional SDK languages, durable server state, and hardened isolation (microVMs, gVisor). Each has an extension point and a design sketch in [future.md](future.md).
+Templates, memory snapshots, volumes, secrets, multi-tenancy, billing, browser automation, additional SDK languages, live-process recovery, distributed control state, and hardened isolation (microVMs, gVisor). See [future.md](future.md).
 
 ## Architecture
 
@@ -313,6 +313,10 @@ safe error codes in logs, because raw runtime text can contain user payloads.
 Public /healthz answers independently of Docker; public /readyz bounds a Docker
 /_ping check to two seconds and reports 503 when the runtime is unavailable.
 Readiness is an optional backend capability, leaving the execution interface stable.
+With durable state enabled, a journal failure also closes readiness and new
+create/start admission until storage is repaired and the daemon restarted.
+Authenticated `/metrics` exposes bounded-label latency, refusal and cleanup
+observations; see [operations](operations.md).
 Completion logs are synchronous at the terminal transition so runner and eviction
 paths record exactly one stored outcome. A blocked log sink can therefore delay
 sandbox operations; deploy with a continuously drained stderr sink. Asynchronous
@@ -320,7 +324,7 @@ logging would require a separate bounded queue and explicit record-loss policy.
 
 ### Server state
 
-State lives in memory, and it is bounded on four axes so a long-running agent cannot grow it without limit:
+Live state is held in memory and bounded on four axes:
 
 - live sandboxes (`MaxSandboxes`): a create beyond it is `rate_limited`, so an agent loop that never deletes is refused rather than allowed to exhaust the host;
 - killed records (`MaxRetainedSandboxes`): dropped oldest first, because they exist for idempotent delete and history, not for their own sake;
@@ -329,7 +333,20 @@ State lives in memory, and it is bounded on four axes so a long-running agent ca
 
 The event log is the only copy of an execution's output; `stdout` and `stderr` are assembled from it when a client asks, which keeps one execution near one retained byte per byte of output instead of three.
 
-On startup, the server attempts to remove containers carrying its own owner label (`tiny-sandbox.owner=<owner>`, the `-owner` flag, defaulting to the listen address). An ordinary stop closes streams, drains HTTP requests for up to ten seconds, then attempts container removal within a separate ten-second budget. Removal is best effort; startup cleanup covers crashes and failed removals. Pin `-owner` when the listen address can change. The end-to-end harness performs its own container cleanup. Durable state and runtime reconciliation remain [future directions](future.md).
+Without `-state-dir`, startup removes containers carrying its owner label
+(`tiny-sandbox.owner=<owner>`, `-owner` defaults to the listen address);
+incomplete cleanup prevents admission. An ordinary stop closes streams, drains
+HTTP for up to ten seconds, then attempts bounded container removal. Pin
+`-owner` when the listen address can change.
+
+With `-state-dir`, a private, single-writer journal persists start intents and
+terminal output. Recovery validates records before Docker reconciliation,
+preserves eligible idle containers and completed identities, and marks
+interrupted commands `unknown` while removing their containers. Live output
+is not journaled; an old nonzero cursor cannot silently resume across that
+loss. Graceful shutdown preserves idle containers but ends active work. This
+does not restore process memory. [Operations](operations.md) specifies failure
+handling, policy adoption, trust and storage limits.
 
 ## Verification
 
@@ -369,7 +386,7 @@ The reusable CI workflow has these jobs:
 | `e2e` | Docker-backed suite with coverage instrumentation; enforces the merged coverage gate; uploads `artifacts/`; asserts no containers remain |
 | `python-sdk` | distribution build and install on Python 3.10 and 3.15, real-Docker fault scenarios, reports and cleanup evidence |
 | `typescript` | strict consumer types, real-Docker fault-injection E2E, browser-safe bundle check, installed npm tarball |
-| `e2b-compatibility` | local compatibility image by digest, installed Python/npm adapters, 19 cases per language, reference comparison, reports and independent cleanup; no E2B Cloud |
+| `e2b-compatibility` | local image by digest, installed Python/npm adapters, 40 cases per language and reference comparison, deployment/recovery fault suite and independent cleanup; no E2B Cloud |
 
 CI builds GoReleaser snapshots: four platform archives (Linux/macOS on
 amd64/arm64) plus a checksum file. Windows is not supported.
@@ -392,7 +409,7 @@ Recorded because earlier builds hit them, not as hypotheticals:
 5. **A chunk boundary is a byte boundary, not a character boundary.** Output events are JSON strings encoded one at a time, so a cut inside a UTF-8 sequence becomes two U+FFFD and the bytes are gone. The pump carries an incomplete trailing rune into the next read, and the splitter backs up to a rune boundary. A test pins it.
 6. **Cleanup must not inherit the caller's deadline.** The cancel escalation and container removal run on `context.WithoutCancel` with their own bounds. A client that gives up on the request would otherwise skip SIGTERM's grace and destroy the sandbox.
 7. **A background reader must be joined.** The SSE ping goroutine writes to the response writer; the handler waits for it before returning, because net/http reuses that writer for the next request on the connection.
-8. **A backend call must not be unbounded under a lock.** The reaper skips a sandbox whose lock is held, so a runtime call that never returns under `sb.mu` would disable that sandbox's timeouts permanently. Start-execution calls and the OOM baseline read are bounded by `BackendCallTimeout`; the process still outlives them.
+8. **A backend call must not be unbounded under a lock.** The reaper skips a sandbox whose lock is held, so a runtime call that never returns under `sb.mu` can prevent that sandbox's lifecycle timeouts from running. Exec creation, identity probes and the OOM baseline read use `BackendCallTimeout`, but Docker `ExecStart` detaches the context so its output stream can outlive the request. That call currently has no separate response-header deadline: a stalled Docker start can hold the sandbox lock. This remains a runtime-failure limitation, not a bounded-start guarantee.
 9. **Shutdown needs to tell streams.** `http.Server.Shutdown` waits for handlers but does not cancel their contexts, so an open SSE stream would hold the shutdown until its deadline and the container would outlive the process. The handler ends streams when the shutdown signal closes, and the store then attempts bounded, best-effort removal of its containers.
 10. **Pause must be measured, not asserted.** Prove it with a counter that advances across pause and resume, not with the state field.
 11. **Execution context must survive the wrapper.** Change directories inside the wrapper so unusable paths return exit 126 on stderr; use physical path resolution. Apply environment overrides through the image env utility after shell startup. See the [execution request contract](api.md#post-v1sandboxessandbox_idexecutions) for limits, image requirements, and the command-path exception.

@@ -957,14 +957,16 @@ components:
           default: 0
           description: >-
             CPU limit in units of 1e-9 CPUs; 1000000000 is one CPU. 0 means no
-            limit.
+            limit without deployment policy. Policy mode rejects explicit zero
+            and defaults to the smaller of one CPU and its total CPU budget.
         network:
           type: string
           enum: [bridge, none]
           default: bridge
           description: >-
             bridge gives the sandbox outbound network access; none removes
-            networking entirely. Host networking is not offered.
+            external networking. Host networking is not offered. Policy mode
+            restricts allowed modes and defaults to its first permitted mode.
         timeout_seconds:
           type: integer
           minimum: 0

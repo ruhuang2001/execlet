@@ -5,9 +5,10 @@ package dockerapi
 // by the kernel OOM killer; it is the fallback when the cgroup file cannot be
 // read, for example because the container is out of memory.
 type ContainerInspect struct {
-	ID    string         `json:"Id"`
-	Name  string         `json:"Name"`
-	State ContainerState `json:"State"`
+	ID         string         `json:"Id"`
+	Name       string         `json:"Name"`
+	State      ContainerState `json:"State"`
+	HostConfig HostConfig     `json:"HostConfig"`
 }
 
 // ContainerState is the inspected state of a container.

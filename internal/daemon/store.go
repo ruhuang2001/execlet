@@ -238,6 +238,17 @@ func (s *Sandboxes) Create(ctx context.Context, req CreateRequest) (Sandbox, err
 	if err := s.durableReady(); err != nil {
 		return Sandbox{}, err
 	}
+	if defaults, ok := s.backend.(interface {
+		DefaultNetwork() NetworkMode
+		DefaultNanoCPUs() int64
+	}); ok {
+		if req.Network == nil {
+			req.Network = new(defaults.DefaultNetwork())
+		}
+		if req.NanoCPUs == nil {
+			req.NanoCPUs = new(defaults.DefaultNanoCPUs())
+		}
+	}
 	opts, err := req.resolve()
 	if err != nil {
 		return Sandbox{}, err

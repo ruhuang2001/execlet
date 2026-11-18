@@ -28,6 +28,7 @@ func main() {
 	dockerHost := flag.String("docker", defaultDockerSocket(), "Docker socket path")
 	owner := flag.String("owner", "", "container ownership label; defaults to the listen address")
 	showVersion := flag.Bool("version", false, "print version and exit")
+	policyPath := flag.String("policy", "", "administrator deployment policy JSON file")
 	stateDir := flag.String("state-dir", "", "private local directory for conservative restart recovery")
 	flag.Parse()
 
@@ -40,6 +41,16 @@ func main() {
 		slog.Error("refusing non-loopback listener without authentication", "addr", *addr)
 		os.Exit(1)
 	}
+	var policy *daemon.DeploymentPolicy
+	if *policyPath != "" {
+		value, err := daemon.LoadPolicy(*policyPath)
+		if err != nil {
+			slog.Error("invalid deployment policy", "error", err)
+			os.Exit(1)
+		}
+		policy = &value
+	}
+
 	if *owner == "" {
 		*owner = *addr
 	}
@@ -73,7 +84,15 @@ func main() {
 		}
 	}
 
-	store := daemon.New(backend, daemon.WithOwnerLabel(*owner))
+	var runtime daemon.Backend = backend
+	if policy != nil {
+		runtime, err = daemon.NewPolicyBackend(backend, *policy)
+		if err != nil {
+			slog.Error("unsupported deployment policy", "error", err)
+			os.Exit(1)
+		}
+	}
+	store := daemon.New(runtime, daemon.WithOwnerLabel(*owner))
 	if journal != nil {
 		if err := store.Recover(ctx, journal, backend); err != nil {
 			slog.Error("recovery failed; refusing admission", "error", err)

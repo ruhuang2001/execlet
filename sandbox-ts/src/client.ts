@@ -3,7 +3,7 @@ import { Transport } from './http.js';
 import { consume, streamEvents } from './stream.js';
 import type {
   FileList, ListFilesOptions, ClientConfig, CompletedExecution, CreateSandboxRequest, Event, EventHandler,
-  ExecuteRequest, Execution, ExecutionOutcome, RequestOptions, Sandbox,
+  ExecuteRequest, Execution, ExecutionOptions, ExecutionOutcome, RequestOptions, Sandbox, UpdateSandboxRequest,
 } from './types.js';
 
 function sandboxPath(id: string): string { return '/v1/sandboxes/' + encodeURIComponent(id); }
@@ -51,6 +51,11 @@ export class Client {
     return this.transport.json('GET', sandboxPath(sandboxID), true, options.signal);
   }
 
+  /** Relative lifetime updates are sent once, never replayed after uncertainty. */
+  updateSandbox(sandboxID: string, request: UpdateSandboxRequest, options: RequestOptions = {}): Promise<Sandbox> {
+    return this.transport.json('PATCH', sandboxPath(sandboxID), false, options.signal, request);
+  }
+
   async listSandboxes(options: RequestOptions = {}): Promise<Sandbox[]> {
     const list = await this.transport.json<{ sandboxes: Sandbox[] }>('GET', '/v1/sandboxes', true, options.signal);
     return list.sandboxes;
@@ -68,7 +73,7 @@ export class Client {
     return this.transport.json('DELETE', sandboxPath(sandboxID), true, options.signal);
   }
 
-  async startExecution(sandboxID: string, request: ExecuteRequest, options: RequestOptions = {}): Promise<Execution> {
+  async startExecution(sandboxID: string, request: ExecuteRequest, options: ExecutionOptions = {}): Promise<Execution> {
     // An already aborted start sends nothing, including recovery requests.
     checkSignal(options.signal);
     if (!Array.isArray(request.command) || request.command.length === 0 || request.command.some(arg => typeof arg !== 'string')) {
@@ -81,7 +86,20 @@ export class Client {
     try {
       return await this.start(sandboxID, keyed, options.signal);
     } catch (cause) {
-      if (!options.signal?.aborted) throw cause;
+      if (!options.signal?.aborted) {
+        if (cause instanceof SandboxError) {
+          throw new SandboxError(cause.code, cause.message, {
+            statusCode: cause.statusCode, cause, idempotencyKey: keyed.idempotency_key!,
+            ...(cause.execution ? { execution: cause.execution } : {}),
+          });
+        }
+        throw cause;
+      }
+      if (options.cancelRemote === false) {
+        throw new SandboxError('wait_timeout', 'stopped waiting; remote start may have been accepted', {
+          cause, idempotencyKey: keyed.idempotency_key!,
+        });
+      }
       throw await this.recover(sandboxID, undefined, options.signal.reason, keyed);
     }
   }
@@ -106,13 +124,17 @@ export class Client {
     return this.transport.json('POST', executionPath(sandboxID, executionID) + '/cancel', true, options.signal);
   }
 
-  streamExecution(sandboxID: string, executionID: string, options?: RequestOptions): AsyncIterableIterator<Event>;
-  streamExecution(sandboxID: string, executionID: string, onEvent: EventHandler, options?: RequestOptions): Promise<Execution>;
+  streamExecution(sandboxID: string, executionID: string, options?: ExecutionOptions): AsyncIterableIterator<Event>;
+  streamExecution(sandboxID: string, executionID: string, onEvent: EventHandler, options?: ExecutionOptions): Promise<Execution>;
   streamExecution(sandboxID: string, executionID: string,
-    handlerOrOptions: EventHandler | RequestOptions = {}, options: RequestOptions = {}): AsyncIterableIterator<Event> | Promise<Execution> {
+    handlerOrOptions: EventHandler | ExecutionOptions = {}, options: ExecutionOptions = {}): AsyncIterableIterator<Event> | Promise<Execution> {
     const opts = typeof handlerOrOptions === 'function' ? options : handlerOrOptions;
     const events = streamEvents(this.transport, executionPath(sandboxID, executionID) + '/events', opts,
-      () => this.recover(sandboxID, executionID, opts.signal?.reason));
+      () => opts.cancelRemote === false
+        ? Promise.resolve(new SandboxError('wait_timeout', 'stopped waiting; remote execution was not canceled', {
+          execution: { id: executionID, sandbox_id: sandboxID }, cause: opts.signal?.reason,
+        }))
+        : this.recover(sandboxID, executionID, opts.signal?.reason));
     return typeof handlerOrOptions === 'function' ? consume(events, handlerOrOptions) : events;
   }
 

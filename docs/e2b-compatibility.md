@@ -1,7 +1,7 @@
 # E2B compatibility subset and acceptance
 
-Status: acceptance harness and server prerequisites implemented; published
-adapter and compatibility release still pending. The subset was decided on
+Status: Python and TypeScript adapters, local image recipe and installed-package
+acceptance implemented in this checkout; publication is a separate step. The subset was decided on
 2026-11-16 against tiny-sandbox source revision
 `840fc84082a80022bfdb0b84b274f26382834d83`. Only E2B is the migration reference.
 The baseline is source-derived; no E2B Cloud account or key is required.
@@ -17,8 +17,9 @@ its dependency, imports, connection configuration, and documented runtime-image
 selection; its command strings, callback code, result access and error branches
 remain unchanged. This is not E2B HTTP/envd protocol compatibility: the original
 E2B SDK cannot simply point at sandboxd. Do not replace or impersonate the `e2b`
-package. Proposed entry points are `tiny_sandbox.e2b` and
-`@tiny-sandbox/sdk/e2b`; these modules do not exist yet.
+package. The entry points are `tiny_sandbox.e2b` and
+`@tiny-sandbox/sdk/e2b`, included in the existing SDK distributions without
+an E2B runtime dependency. See the [migration example](../examples/e2b/README.md).
 
 Keep native Go/Python/TypeScript APIs and argv execution unchanged. The optional
 compatibility surface uses the same execution, retention and cleanup machinery.
@@ -222,39 +223,55 @@ run directory. Missing adapters, images or other required prerequisites are
 `runner.py compare <tiny-report.json>` checks one report against `reference.json`;
 it does not need a second cloud report. It requires all 19 cases in both
 languages, the current suite digest, every required affirmative check and
-confirmed cleanup. The current profile has 130 Python and 131 TypeScript
-expectations (261 total): the TypeScript millisecond-conversion check is
-language-specific. An `any` entry requires at least one listed alternative; it
+confirmed cleanup. The current profile has 147 expectations per language
+(294 total): millisecond conversion is TypeScript-only and context cleanup
+failure chaining is Python-only. An `any` entry requires at least one listed alternative; it
 does not claim unexecuted branches passed. A successful probe comparison alone
 is not the release gate: probe identity, untested contract requirements and
 native regressions still matter.
 
-## 8. Implementation order and present state
+## 8. Implemented adapters and delivery
 
-1. Freeze runnable migration fixtures and source-derived expectations. This
-   harness supplies A01–A16 and W01–W03, pinned SDKs, fault injection, independent
-   cleanup and a fail-closed comparison gate.
-2. Supply only the native server prerequisites needed by the subset. The
-   accompanying server changes add create-time env, lifetime replacement and
-   extension, guest file metadata/ownership, write confirmation, output-prefix
-   retention and errors for unconfirmed container removal.
-3. Implement and package `tiny_sandbox.e2b`, `@tiny-sandbox/sdk/e2b` and a pinned
-   compatibility image. These are not delivered by the harness. Native command
-   timeouts must keep their kill semantics; the facade implements wait-only
-   deadlines by ending its local wait without cancelling the remote execution.
-4. Close the assertion gaps, run the shipped pair through acceptance and native
-   regression gates, then publish the support matrix and migration guide.
-   Expand only when a concrete migration workflow needs it.
+The facades reuse native keyed starts, SSE replay, files and lifecycle updates.
+They opt into `cancel_remote=False` / `cancelRemote: false` for command waits;
+the native clients retain remote cancellation by default. Relative lifetime
+PATCH requests are sent once, because replaying a relative deadline can extend
+it again. Truncation stops local waiting with partial output and an execution
+ID. A command may still occupy the execution slot after a timeout, callback
+failure or truncation; no automatic retry or kill is implied.
 
-### Evidence boundaries (2026-11-17)
+| Configuration | Python | TypeScript | Meaning |
+|---|---|---|---|
+| Endpoint | `endpoint` | `endpoint` | Native SDK defaults: `SANDBOX_DOMAIN`, then localhost:8080 |
+| Credential | `api_key` | `apiKey` | tiny-sandbox credential; defaults to `SANDBOX_API_KEY`, never `E2B_API_KEY` |
+| Request budget | `request_timeout` | `requestTimeoutMs` | Positive seconds / milliseconds; defaults to 30 / 30000 for lifecycle and each file operation, including its pagination |
+| Local base image | `image` | `image` | Create-only digest, or `SANDBOX_E2B_IMAGE`; no tag-only or Alpine fallback |
 
-The executable harness lives in
-[scripts/e2b-compatibility](../scripts/e2b-compatibility/README.md). Local
-development uses a disposable probe under `.amp/in/` to map the facade shape to
-the native SDK and raw HTTP where needed. It is excluded from Git. Its results
-can demonstrate server support for the exercised scenarios, but cannot prove
-that a published adapter is available, installable or compatible. A custom
-probe run must identify its module in the report.
+Command waiting uses its own `timeout` / `timeoutMs`, not the connection request
+budget. `get_info(id)` / `getInfo(id)` is a read-only observation helper exposing
+only ID, state, local template name and end time; it does not renew lifetime or
+promise E2B's complete SandboxInfo schema. Pass connection configuration when
+not using environment defaults.
+
+The [image recipe](../examples/e2b/Dockerfile) pins its Debian base, installs
+Bash/Python/coreutils and runs as UID 1000 `user`. Its apt repositories are not
+snapshot-pinned: rebuilding can change package versions and the final digest.
+Build once, select the resulting immutable image ID and record guest versions
+with acceptance. No image or SDK is published by the test scripts.
+
+`installed.sh` builds a wheel and npm tarball, installs each into an isolated
+consumer, verifies E2B is absent at runtime, checks the installed TypeScript
+declarations, and runs A01–A16/W01–W03 plus compare. Import paths are the real
+package entry points, without probe overrides. See the
+[acceptance instructions](../scripts/e2b-compatibility/README.md).
+
+### Evidence boundaries (2026-11-18)
+
+Earlier disposable probe results demonstrated server prerequisites only. The
+formal installed-package gate additionally checks finite-timeout callbacks,
+accepted-start deadline uncertainty with retained keys and no cancellation,
+SDK callback exception identity, repeated failed cleanup and Python cause
+chaining. Unsupported explicit options fail before side effects.
 
 W03 now observes a distinct marker produced only by the timed-out command: it
 must be absent before the command and immediately after the local timeout, then

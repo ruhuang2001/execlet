@@ -8,7 +8,7 @@ import type * as Reference from 'e2b';
 type SDK = typeof Reference;
 type Sandbox = InstanceType<SDK['Sandbox']>;
 type Query = { op: string; id: string; duration?: number; options?: Record<string, unknown>;
-  command: string; callbacks?: boolean; callback_error?: boolean; path: string; text?: string;
+  command: string; callbacks?: boolean; callback_error?: boolean | 'sdk'; path: string; text?: string;
   bytes: string; bytearray?: boolean; raise_error?: boolean; method: string; wait?: number; millis?: number };
 const emit = (value: unknown) => process.stdout.write(JSON.stringify(value) + '\n');
 const options = JSON.parse(process.env.CONTRACT_OPTIONS || '{}');
@@ -115,7 +115,10 @@ async function dispatch(q: Query, callbacks: Callbacks) {
   }
   const s = sandboxes.get(q.id)!;
   if (q.op === 'kill') { const v = await s.kill(opts); assert.equal(typeof v, 'boolean'); return v; }
-  if (q.op === 'timeout') { await s.setTimeout(opts.timeoutMs as number); return null; }
+  if (q.op === 'timeout') {
+    const { timeoutMs, ...requestOptions } = opts;
+    await s.setTimeout(timeoutMs as number, requestOptions); return null;
+  }
   if (q.op === 'info') {
     const i = await sdk.Sandbox.getInfo(q.id);
     assert.equal(i.sandboxId, q.id);
@@ -123,7 +126,7 @@ async function dispatch(q: Query, callbacks: Callbacks) {
   }
   if (q.op === 'run') {
     if (q.wait !== undefined) opts.timeoutMs = q.wait * 1000;
-    const sentinel = new Error('callback-sentinel');
+    const sentinel = q.callback_error === 'sdk' ? new sdk.TimeoutError('callback-sentinel') : new Error('callback-sentinel');
     let active = false;
     const callback = async (stream: 'stdout'|'stderr', chunk: string) => {
       assert.equal(typeof chunk, 'string');

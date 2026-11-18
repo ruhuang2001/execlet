@@ -1,9 +1,9 @@
 # E2B compatibility acceptance
 
 This runs the acceptance cases in [the plan](../../docs/e2b-compatibility.md).
-It does not implement the adapter; the cases fail or report `not_run` until
-`tiny_sandbox.e2b` and `@tiny-sandbox/sdk/e2b` exist. A passing run is evidence
-for the cases it covers and nothing wider.
+The production adapters are `tiny_sandbox.e2b` and `@tiny-sandbox/sdk/e2b` in
+the SDK packages. A passing run is evidence for the cases it covers and nothing
+wider; a missing module still reports `not_run`, never a pass.
 
 ## Setup
 
@@ -16,8 +16,30 @@ virtualenv base.
 
 ## Running
 
+Prefer the installed-package gate from the repository root:
+
+```sh
+bash scripts/e2b-compatibility/setup.sh
+npm --prefix sandbox-ts ci
+docker build -t tiny-sandbox-e2b:local examples/e2b
+IMAGE=$(docker image inspect tiny-sandbox-e2b:local --format '{{.Id}}')
+PYTHON=python3.15 bash scripts/e2b-compatibility/installed.sh artifacts/e2b-installed "$IMAGE"
+```
+
+Use an installed Python 3.11+ interpreter. Keep the output path short on macOS
+because each case creates a Unix socket. This script builds and installs the
+wheel/tarball in isolated consumers, checks their real entry points and strict
+TypeScript declarations, records image/package versions, runs all 38 rows, and
+calls compare. It verifies neither consumer has the E2B runtime installed.
+The reference SDK is used only for source/declaration checks.
+
+The output includes `wheels/`, `npm/`, installation logs, resolved import paths,
+`installed-types.log`, `image.json`, `guest.txt`, `run/report.json` and
+`compare.log`. No registry publication or E2B Cloud call occurs.
+
 Run from the repository root. The required reference is the pinned SDK source
-recorded in `reference.json`, not an E2B Cloud account. No E2B key is needed:
+recorded in `reference.json`, not an E2B Cloud account. If testing already
+installed packages directly, no E2B key is needed:
 
 ```sh
 bash scripts/e2b-compatibility/run.sh tiny artifacts/e2b-tiny \
@@ -40,9 +62,11 @@ and confirmed cleanup.
 It exists for harness validation and experiments; the default is
 `tiny_sandbox.e2b` (`@tiny-sandbox/sdk/e2b` in TypeScript).
 For a combined run using custom modules, pass the Python name via `--module`
-and the TypeScript module name or file URL via `CONTRACT_TS_MODULE`. Worker
-identities in the report record what actually ran. A throwaway probe passing
-does not mean the proposed published adapter exists or is compatible.
+and the TypeScript module name or file URL via `CONTRACT_TS_MODULE`.
+`CONTRACT_TS_WORKER` selects the compiled worker location for isolated package
+resolution; `installed.sh` copies the same compiled application into its npm
+consumer and clears module overrides. Worker identities record what actually
+ran. A throwaway probe passing does not establish installed-package support.
 
 An optional live drift check is separate from `compare`, billable, and requires
 explicit approval through `--allow-cloud` and an `E2B_API_KEY` environment variable:
@@ -77,8 +101,13 @@ with `passed: true`; a missing verdict is not success.
 alternative outcomes, at least one of which must be present and passing. Its
 optional `language` limits the expectation to that language. A06's millisecond
 conversion is TypeScript-only; A13 accepts either complete event output or an
-explicit event-cap error. All eight A12 option rejections remain independently
-required. Counts include language-specific expectations, not unexecuted branches.
+explicit event-cap error. Python cleanup cause chaining is language-specific.
+All A12 option rejections remain independently required. The gate requires
+294 expectations (147 per language), not unexecuted alternative branches.
+Truncation requires the diagnostic code and an affirmative truncation flag;
+finding the word in a field name is not evidence. Independent output-limit
+probes clean up before starting another sandbox, since truncation does not kill
+the remote execution.
 
 ## Boundaries
 

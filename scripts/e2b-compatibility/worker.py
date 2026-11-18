@@ -113,6 +113,12 @@ def dispatch(q, callbacks):
             except RuntimeError as e:
                 assert e is sentinel
                 return {"id": sid, "application_error": True}
+            except Exception as e:
+                if not q.get("cleanup_error"):
+                    raise
+                assert e is not sentinel and e.__cause__ is sentinel
+                assert getattr(e, 'code', '') == 'backend_error' and 'unconfirmed' in str(e), str(e)
+                return {"id": sid, "cleanup_error_preserved": True}
             assert not q.get("raise_error"), "context swallowed application error"
             return {"id": sid, "application_error": False}
         return {"id": sid}
@@ -134,7 +140,7 @@ def dispatch(q, callbacks):
         assert i.sandbox_id == q["id"]
         return {"id": i.sandbox_id, "state": str(i.state), "template": i.template_id, "end": i.end_at.timestamp()}
     if op == "run":
-        sentinel = RuntimeError("callback-sentinel")
+        sentinel = sdk.TimeoutException("callback-sentinel") if q.get("callback_error") == 'sdk' else RuntimeError("callback-sentinel")
         if "wait" in q:
             kwargs["timeout"] = q["wait"]
         def callback(stream, chunk):

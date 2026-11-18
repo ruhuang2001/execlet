@@ -62,11 +62,18 @@ cancellation. Authentication uses the HTTP contract's Bearer token.
 
 Requests are typed dataclasses. `CreateSandboxRequest` accepts `image`,
 `memory_mb`, `max_concurrent_executions`, `pids_limit`, `nano_cpus`, `network`, `timeout_seconds`,
-`timeout_action`, `idle_timeout_seconds`, and `idle_timeout_action`.
+`timeout_action`, `idle_timeout_seconds`, `idle_timeout_action`, and `env`.
 An optional value of `None` is omitted from JSON. Explicit zero is sent to the
 server, preserving the difference between omission and disabling a timeout.
 The [HTTP resource and request tables](api.md#resources) define units, defaults,
 and accepted values; the client does not invent different defaults.
+Create-time `env` belongs to the sandbox; execution `env` overrides it for one
+invocation. Neither is echoed in resource metadata.
+
+`UpdateSandboxRequest(timeout_seconds=..., extend_seconds=...)` sets exactly
+one lifetime operation: replace the deadline or extend without shortening it.
+`update_sandbox(id, request)` sends one PATCH, without automatic replay after an
+ambiguous response. See the [lifecycle contract](api.md) for state constraints.
 
 ```python
 from tiny_sandbox import CreateSandboxRequest, ExecuteRequest
@@ -130,7 +137,7 @@ keyword-only `cancel=token`; omitting it means no caller deadline.
 
 | Area | Methods |
 |---|---|
-| Sandboxes | `create_sandbox(request)`, `get_sandbox(sandbox_id)`, `list_sandboxes()`, `pause_sandbox(sandbox_id)`, `resume_sandbox(sandbox_id)`, `kill_sandbox(sandbox_id)` |
+| Sandboxes | `create_sandbox(request)`, `get_sandbox(sandbox_id)`, `update_sandbox(sandbox_id, request)`, `list_sandboxes()`, `pause_sandbox(sandbox_id)`, `resume_sandbox(sandbox_id)`, `kill_sandbox(sandbox_id)` |
 | Executions | `start_execution(sandbox_id, request)`, `get_execution(sandbox_id, execution_id)`, `list_executions(sandbox_id)`, `cancel_execution(sandbox_id, execution_id)` |
 | Streaming | `stream_execution(sandbox_id, execution_id, *, on_event=None, on_stdout=None, on_stderr=None)` |
 | Conveniences | `exec(sandbox_id, command)`, `exec_stream(sandbox_id, command, *, on_event=None, on_stdout=None, on_stderr=None)` |
@@ -181,6 +188,15 @@ key on an independent five-second budget, then cancels the recovered execution.
 The same total budget covers start replay, cancellation, and confirmation; each
 step does not receive a new five seconds. During streaming, caller cancellation
 uses a fresh five-second total budget to cancel and confirm the execution.
+
+For explicit wait-only behavior, `start_execution` and `stream_execution`
+accept `cancel_remote=False`. An interrupted in-flight wait raises `wait_timeout`
+with the start key or execution identity, without remote cancellation. Pass it
+to both calls when composing a start and stream. Pre-canceled starts still send
+nothing. The default remains `True`; `exec`/`exec_stream` keep remote cancellation.
+The optional [E2B facade](e2b-compatibility.md), imported as `tiny_sandbox.e2b`,
+uses this wait-only path, Bash command strings and compatible error families.
+It does not change the native argv API or require an E2B dependency.
 
 Confirmation requires a terminal execution snapshot. If the cancel response
 is still running, the SDK polls within the remaining budget. If confirmation

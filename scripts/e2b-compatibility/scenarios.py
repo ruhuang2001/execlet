@@ -204,8 +204,16 @@ def a04(ctx):
 # ------------------------------------------------------------------ A05
 def a05(ctx):
     sid = ctx.create(duration=60)
-    error = ctx.error('run', 'wait deadline', id=sid, command=f'python3 -c {src(FIX["late"])}', wait=1.25)
+    reply = ctx.call('run', id=sid, command="printf 'before-out'; printf 'before-err' >&2; "
+                     + f'python3 -c {src(FIX["late"])}', wait=1.25, callbacks=True, quiet=True)
+    assert not reply['ok'], reply
+    error = reply['error']
     ctx.check('deadline raises timeout', error['family'] == 'timeout', error)
+    ctx.check('finite wait streams callbacks', ''.join(reply['callbacks']['stdout']) == 'before-outstarted\n'
+              and ''.join(reply['callbacks']['stderr']) == 'before-err', reply['callbacks'])
+    if ctx.provider == 'tiny':
+        ctx.check('timeout retains output and execution identity', bool(error.get('execution_id'))
+                  and error.get('stdout') == 'before-outstarted\n' and error.get('stderr') == 'before-err', error)
     ctx.check('marker written before the deadline', ctx.wait_until(
         lambda: ctx.call('read', id=sid, path='/tmp/started', quiet=True)['ok'], 15))
     ctx.check('work continues after the wait', ctx.wait_until(
@@ -214,9 +222,17 @@ def a05(ctx):
     ctx.must_run(sid, "printf '%s' alive")
     value = ctx.must_run(sid, "printf '%s' zero", wait=0)
     ctx.check('zero disables only the local deadline', value['stdout'] == 'zero')
-    reply = ctx.call('run', id=sid, command="printf '%s' cb", callback_error=True, quiet=True)
+    reply = ctx.call('run', id=sid, command="printf '%s' cb; sleep 1; echo alive > /tmp/callback-alive",
+                     callback_error=True, quiet=True)
     ctx.check('callback error is not retried', reply.get('value', {}).get('callback_error_preserved') is True, reply)
-    ctx.check('callback error does not kill the process', ctx.state(sid)['alive'] is True)
+    ctx.check('callback error does not kill the process', ctx.wait_until(
+        lambda: ctx.call('read', id=sid, path='/tmp/callback-alive', quiet=True).get('value') == 'alive\n', 10))
+    # A file side effect precedes execution reaping. Do not assume it releases
+    # the single-execution slot; the next independent probe gets a new sandbox.
+    ctx.ok('kill', 'kill', id=sid)
+    sid = ctx.create(duration=60)
+    reply = ctx.call('run', id=sid, command="printf '%s' sdk-cb", callback_error='sdk', quiet=True)
+    ctx.check('SDK callback error preserves identity', reply.get('value', {}).get('callback_error_preserved') is True, reply)
     ctx.ok('kill', 'kill', id=sid)
 
 
@@ -341,7 +357,10 @@ def a12(ctx):
     creates = len(ctx.container_creates()) if ctx.local else 0
     sid = ctx.create(duration=60)
     text_file(ctx, sid, '/home/user/guard.txt', 'original')
+    result = ctx.must_run(sid, 'printf defaults', options={'background': False, 'stdin': False, 'retain_output': True})
+    ctx.check('explicit default command options accepted', result['stdout'] == 'defaults')
     after_create = len(ctx.container_creates())
+    starts = len([r for r in ctx.local.faults.records if r['method'] == 'POST' and r['path'].endswith('/executions')])
     cases = [
         ('template', lambda: ctx.error('create', 'custom template', options={'template': 'custom/base'})),
         ('user', lambda: ctx.error('create', 'user switching', options={'user': 'root'})),
@@ -351,6 +370,13 @@ def a12(ctx):
         ('retain', lambda: ctx.error('run', 'retain_output false', id=sid, command='true', options={'retain_output': False})),
         ('depth', lambda: ctx.error('list', 'recursive list', id=sid, path='/home/user', options={'depth': 2})),
         ('misspelled', lambda: ctx.error('create', 'misspelled option', options={'timeoutt': 30})),
+        ('zero lifetime', lambda: ctx.error('create', 'zero lifetime', duration=0)),
+        ('negative wait', lambda: ctx.error('run', 'negative wait', id=sid, command='true', wait=-1)),
+        ('text stdin', lambda: ctx.error('run', 'text stdin', id=sid, command='true', options={'stdin': 'payload'})),
+        ('unknown write', lambda: ctx.error('write', 'unknown write option', id=sid, path='/home/user/guard.txt',
+                                            text='changed', options={'unexpected': True})),
+        ('unknown timeout', lambda: ctx.error('timeout', 'unknown timeout option', id=sid, duration=30,
+                                              options={'unexpected': True})),
     ]
     for name, call in cases:
         error = call()
@@ -359,6 +385,8 @@ def a12(ctx):
     ctx.check('deferred method fails explicitly', error['family'] in {'invalid', 'other'}, error)
     if ctx.local:
         ctx.check('no extra container was created', len(ctx.container_creates()) == after_create, ctx.container_creates())
+        ctx.check('rejected options started no processes', starts == len([r for r in ctx.local.faults.records
+                  if r['method'] == 'POST' and r['path'].endswith('/executions')]))
         ctx.check('no container before the valid create', creates in (0, after_create - 1))
     ctx.check('guard file unchanged', ctx.read(sid, '/home/user/guard.txt') == 'original')
     ctx.ok('kill', 'kill', id=sid)
@@ -372,19 +400,29 @@ def a13(ctx):
     ctx.write(sid, '/home/user/limit.txt', text=exact)
     ctx.check('exactly 10 MiB is accepted', len(ctx.read(sid, '/home/user/limit.txt')) == limit)
     error = ctx.error('write', 'over-limit upload', id=sid, path='/home/user/limit.txt', text=exact + 'x')
-    ctx.check('over-limit upload fails', 'payload' in json.dumps(error).lower() or error['family'] == 'other', error)
+    ctx.check('over-limit upload fails', error.get('code') == 'payload_too_large', error)
     ctx.check('over-limit upload kept the old bytes', len(ctx.read(sid, '/home/user/limit.txt')) == limit)
     out = ctx.call('run', id=sid, command="python3 -c \"import sys;sys.stdout.write('x' * 1048576)\"", quiet=True)
     ctx.check('exactly 1 MiB output is normal', out['ok'] and len(out['value']['stdout']) == 1 << 20, out.get('error'))
     over = ctx.call('run', id=sid, command="python3 -c \"import sys;sys.stdout.write('x' * 1048577)\"", quiet=True)
     ctx.check('over-limit output is never a normal success', not over['ok'], 'returned ' + str(len(over.get('value', {}).get('stdout', ''))))
-    ctx.check('truncation is explicit with evidence', over['error'].get('output_truncated') is True
-              or 'truncated' in json.dumps(over['error']).lower(), over['error'])
+    error = over['error']
+    ctx.check('truncation is explicit with evidence', error.get('code') == 'output_truncated'
+              and error.get('output_truncated') is True and bool(error.get('execution_id'))
+              and len(error.get('stdout', '')) == 1 << 20,
+              {k: len(v) if k in ('stdout', 'stderr') else v for k, v in error.items()})
+    # Truncation stops waiting immediately, without terminating the process.
+    # Explicit cleanup isolates the next probe from that still-running work.
+    ctx.ok('kill', 'kill', id=sid)
+    sid = ctx.create(duration=120)
     events = ctx.call('run', id=sid, command="python3 -c \"import sys\nfor i in range(4200): print(i, flush=True)\"", quiet=True)
     if events['ok']:
         ctx.check('event-capped success keeps every line', events['value']['stdout'].count('\n') == 4200)
     else:
-        ctx.check('event cap is explicit', 'truncated' in json.dumps(events['error']).lower(), events['error'])
+        ctx.check('event cap is explicit', events['error'].get('code') == 'output_truncated'
+                  and events['error'].get('output_truncated') is True, events['error'])
+    ctx.ok('kill', 'kill', id=sid)
+    sid = ctx.create(duration=120)
     ctx.must_run(sid, f'python3 -c {json.dumps("import pathlib; p=pathlib.Path(\'/home/user/scan\'); p.mkdir(exist_ok=True); [ (p/f\'f{i:05}\').write_text(\'x\') for i in range(10001) ]")}')
     scan = ctx.call('list', id=sid, path='/home/user/scan', quiet=True)
     ctx.check('scan cap is never a short list', not scan['ok'] or len(scan['value']) == 10001,
@@ -423,6 +461,20 @@ def a14(ctx):
     lines = [line for line in reply.get('value', {}).get('stdout', '').splitlines() if line.startswith('item-')]
     ctx.check('reconnect resumes without gaps or duplicates', lines == [f'item-{i:02}' for i in range(24)], lines[:5] + ['...'] + lines[-3:])
     ctx.check('second run incremented once', ctx.read(sid, '/tmp/counter') == '2')
+    held = Fault('POST', rf'/v1/sandboxes/{re.escape(sid)}/executions', 'hold', delay=3)
+    ctx.local.faults.arm('held-start', held)
+    error = ctx.error('run', 'deadline during accepted start', id=sid, wait=.6,
+                      command="sleep 2; echo once >> /tmp/held-start")
+    ctx.check('accepted start deadline was injected', held.accepted.is_set())
+    ctx.check('uncertain start retains its key', error['family'] == 'timeout' and bool(error.get('idempotency_key')), error)
+    ctx.check('accepted start continues after timeout', ctx.wait_until(
+        lambda: ctx.call('read', id=sid, path='/tmp/held-start', quiet=True).get('value') == 'once\n', 12))
+    ctx.check('held start request completed', ctx.wait_until(
+        lambda: bool(ctx.local.faults.requests('held-start', 'POST', '/executions')), 8))
+    requests = ctx.local.faults.requests('held-start', 'POST')
+    ctx.check('wait deadline sent no cancel or duplicate start', len(requests) == 1
+              and requests[0]['body'].get('idempotency_key') == error['idempotency_key'], requests)
+    ctx.local.faults.arm('idle')
     ctx.ok('kill', 'kill', id=sid)
 
 
@@ -432,23 +484,26 @@ def a15(ctx):
     ctx.local.docker.arm(True)
     reply = ctx.call('kill', id=sid, quiet=True)
     ctx.check('removal failure was injected', bool(ctx.local.docker.removals()))
-    # Recorded survey target: a failed removal must not read as confirmed
-    # cleanup. The native contract currently returns 200 and schedules a retry,
-    # so this states the gap instead of hiding it.
     ctx.check('unconfirmed removal is not success', not reply['ok'] and reply.get('value') is not True,
-              {'reply': reply, 'gap': 'native kill reports success while container removal is retried'})
+              reply)
     ctx.check('uncertainty is reported', 'unconfirmed' in json.dumps(reply).lower() or reply['error']['family'] == 'other', reply)
-    ctx.local.docker.arm(False)
+    again = ctx.call('kill', id=sid, quiet=True)
+    ctx.check('repeated unconfirmed kill remains an error', not again['ok'] and again['error']['family'] == 'other', again)
+    if ctx.language == 'python':
+        reply = ctx.call('context', raise_error=True, cleanup_error=True, quiet=True)
+        ctx.check('context cleanup failure preserves application cause', reply.get('value', {}).get('cleanup_error_preserved') is True, reply)
     ctx.check('orphan container still exists while the retry is pending', ctx.state(sid)['exists'] is True)
     ctx.check('observer can remove only its own container',
               observer('tiny', 'sweep', '-', ctx.env, ctx.env['CONTRACT_OWNER'])['removed'] >= 1)
+    ctx.local.docker.arm(False)
     ctx.check('no orphan remains', ctx.count() == 0, ctx.count())
 
 
 # ------------------------------------------------------------------ A16
 def a16(ctx):
     before = ctx.count()
-    bad = ctx.spawn(CONTRACT_OPTIONS=json.dumps({**json.loads(ctx.env['CONTRACT_OPTIONS']), 'api_key': 'wrong-' + 'x' * 20}))
+    key = 'apiKey' if ctx.language == 'typescript' else 'api_key'
+    bad = ctx.spawn(CONTRACT_OPTIONS=json.dumps({**json.loads(ctx.env['CONTRACT_OPTIONS']), key: 'wrong-' + 'x' * 20}))
     error = ctx.error('create', 'wrong credentials', bad)
     ctx.check('wrong key is an auth error', error['family'] == 'auth', error)
     ctx.check('failed auth created nothing', ctx.count() == before, ctx.count())

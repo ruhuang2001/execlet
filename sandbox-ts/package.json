@@ -5,7 +5,10 @@
   "type": "module",
   "engines": { "node": ">=22" },
   "files": ["dist", "README.md", "LICENSE"],
-  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./e2b": { "types": "./dist/e2b.d.ts", "import": "./dist/e2b.js" }
+  },
   "types": "./dist/index.d.ts",
   "sideEffects": false,
   "scripts": {

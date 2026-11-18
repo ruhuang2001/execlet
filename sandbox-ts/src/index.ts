@@ -3,5 +3,5 @@ export { SandboxError } from './errors.js';
 export type { SandboxErrorDetails } from './errors.js';
 export type {
   FileEntry, FileList, ListFilesOptions, Action, ClientConfig, CompletedExecution, CreateSandboxRequest, Event, EventHandler,
-  ExecuteRequest, Execution, ExecutionOutcome, OpenString, RequestOptions, Sandbox, TerminationReason,
+  ExecuteRequest, Execution, ExecutionOptions, ExecutionOutcome, OpenString, RequestOptions, Sandbox, TerminationReason, UpdateSandboxRequest,
 } from './types.js';

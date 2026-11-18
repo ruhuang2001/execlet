@@ -63,7 +63,7 @@ class Worker:
         self.queue = queue.Queue()
         self.env = env
         command = ([env.get('CONTRACT_PYTHON', str(HERE / '.venv/bin/python')), str(HERE / 'worker.py')]
-                   if language == 'python' else [env.get('NODE', 'node'), str(HERE / 'dist/suite.js')])
+                   if language == 'python' else [env.get('NODE', 'node'), env.get('CONTRACT_TS_WORKER', str(HERE / 'dist/suite.js'))])
         self.process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                         text=True, encoding='utf-8', env=env, cwd=HERE)
         def output():

@@ -63,6 +63,7 @@ Optional fields use undefined; explicit zero is transmitted unchanged.
 ~~~ts
 createSandbox(request?: CreateSandboxRequest, options?: RequestOptions): Promise<Sandbox>
 getSandbox(sandboxID, options?): Promise<Sandbox>
+updateSandbox(sandboxID, request: UpdateSandboxRequest, options?): Promise<Sandbox>
 listSandboxes(options?): Promise<Sandbox[]>
 pauseSandbox(sandboxID, options?): Promise<Sandbox>
 resumeSandbox(sandboxID, options?): Promise<Sandbox>
@@ -88,12 +89,20 @@ writeFile(sandboxID, path, bytes: Uint8Array, options?): Promise<void>
 EventHandler returns void or Promise<void>; callbacks are awaited in order.
 Execution stdout/stderr are optional because lists omit them. All request and
 response interfaces, Event, ExecutionOutcome, SandboxError and executionOutcome
-are exported from the package root. Deep imports are not supported.
+are exported from the package root. Internal deep imports are not supported.
+The explicit `@tiny-sandbox/sdk/e2b` subpath provides the optional
+[E2B application-source subset](e2b-compatibility.md) for Node, without an E2B
+runtime dependency. It does not change native argv or browser behavior.
 
 `CreateSandboxRequest` accepts optional `image`, `memory_mb`,
 `max_concurrent_executions`, `pids_limit`, `nano_cpus`, `network`,
-`timeout_seconds`, `timeout_action`, `idle_timeout_seconds`, and
-`idle_timeout_action`. See the [resource contract](api.md#sandbox) for defaults
+`timeout_seconds`, `timeout_action`, `idle_timeout_seconds`,
+`idle_timeout_action`, and `env`. Create-time env persists with the sandbox;
+execution env overrides it for that invocation. Neither is echoed in metadata.
+`UpdateSandboxRequest` accepts exactly one of `timeout_seconds` (replace) and
+`extend_seconds` (extend without shortening). `updateSandbox` sends one PATCH,
+without replaying a relative deadline after uncertainty.
+See the [resource contract](api.md#sandbox) for defaults
 and accepted values. `ExecuteRequest` requires `command` and optionally takes
 `idempotency_key`, `timeout_seconds`, `env`, `cwd`, and `stdin`. Omitted or zero
 execution timeout means no separate execution deadline; sandbox lifetime
@@ -208,7 +217,8 @@ connection uses the same implementation and guarantees.
 Repeatable ordinary requests retry transport failures (including interrupted
 response bodies) and HTTP 429/500/502/503/504. Repeatable operations are GET,
 DELETE, ordinary file PUT (archive PUT excluded), pause/resume/cancel and keyed starts. Creation is attempted
-once. A complete malformed JSON body is a decode error, not a transport retry.
+once, as are relative lifetime PATCH requests. A complete malformed JSON body
+is a decode error, not a transport retry.
 
 Delay is sampled uniformly between half and all of the cap
 min(2000ms, 200ms * 2^attempt). Positive integer Retry-After seconds override
@@ -222,6 +232,13 @@ startExecution copies the request, including its command array and env
 record, and, absent a supplied key, generates 128 random bits as a 32-digit
 hex idempotency key. Retries reuse the key and the complete invocation, including stdin.
 A signal already aborted before starting sends no request.
+
+`startExecution` and both `streamExecution` forms accept `ExecutionOptions`,
+which adds `cancelRemote` to `RequestOptions`. Its default is true. Explicit
+false stops local I/O on abort and reports `wait_timeout` with the start key or
+execution identity, without canceling the remote process. Pass false to both
+start and stream when composing them. The E2B facade uses this opt-in; native
+`exec` and `execStream` keep their existing cancellation behavior.
 
 An aborted in-flight start triggers a fresh five-second deadline: repeat the
 start with the same key, learn the ID, then cancel it. Failed or nonterminal

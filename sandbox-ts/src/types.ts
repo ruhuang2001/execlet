@@ -66,7 +66,10 @@ export interface CreateSandboxRequest {
   timeout_action?: Action;
   idle_timeout_seconds?: number;
   idle_timeout_action?: Action;
+  env?: Readonly<Record<string, string>>;
 }
+
+export interface UpdateSandboxRequest { timeout_seconds?: number; extend_seconds?: number }
 
 export interface ExecuteRequest {
   command: readonly string[];
@@ -81,6 +84,11 @@ export interface ExecuteRequest {
 }
 
 export interface RequestOptions { signal?: AbortSignal }
+
+export interface ExecutionOptions extends RequestOptions {
+  /** Default true. False aborts only local I/O and never cancels remote work. */
+  cancelRemote?: boolean;
+}
 
 export type Event =
   | { id: number; type: 'stdout' | 'stderr'; data: string }

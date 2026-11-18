@@ -166,8 +166,9 @@ class Local:
 
     def environment(self, language):
         """Adapter connection configuration. Native names, no E2B cloud fallback."""
+        key = 'apiKey' if language == 'typescript' else 'api_key'
         return {'SANDBOX_DOMAIN': self.domain, 'SANDBOX_API_KEY': self.api_key,
-                'CONTRACT_OPTIONS': json.dumps({'endpoint': self.domain, 'api_key': self.api_key,
+                'CONTRACT_OPTIONS': json.dumps({'endpoint': self.domain, key: self.api_key,
                                                 'image': self.image})}
 
     def restart(self):

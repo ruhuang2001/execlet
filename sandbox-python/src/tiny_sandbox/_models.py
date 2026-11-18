@@ -116,6 +116,13 @@ class CreateSandboxRequest(_Request):
     timeout_action: str | None = None
     idle_timeout_seconds: int | None = None
     idle_timeout_action: str | None = None
+    env: dict[str, str] | None = None
+
+
+@dataclass(kw_only=True)
+class UpdateSandboxRequest(_Request):
+    timeout_seconds: int | None = None
+    extend_seconds: int | None = None
 
 
 @dataclass(kw_only=True)

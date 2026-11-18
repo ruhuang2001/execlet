@@ -45,6 +45,23 @@ case can pass.
 
 ## Delivery checks
 
+The production adapters must also cover gaps a disposable probe can hide:
+
+- A finite command deadline must still deliver incremental callbacks. Expiring
+  during an accepted-but-lost start must retain its key and never send cancel.
+  Ordinary callback exceptions must preserve identity, including SDK exceptions.
+- Explicit false stdin/background and true retain-output are accepted; true
+  stdin/background, false retain-output, invalid durations and unknown options
+  fail before requests with side effects. Timeout zero disables only waiting.
+- Repeated kill during failed removal must remain an error, not false. Python
+  context cleanup errors must surface and retain any application exception.
+- Runtime exit evidence and guest metadata must not be invented. Truncation,
+  OOM, eviction and uncertain starts remain diagnostic errors, not exit zero.
+- Installed wheels and npm tarballs must expose the real compatibility entry
+  points without the E2B package, source paths or disposable probe modules.
+- Native cancellation behavior, stream recovery, public types and browser
+  packaging remain regression gates after sharing transport with the facade.
+
 Check Python compilation, TypeScript against the pinned SDK declarations,
 --list and missing-prerequisite exits, and comparison rejection of failed,
 partial, mismatched and missing reports. Exercise guest fixtures in real

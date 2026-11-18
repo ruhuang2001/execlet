@@ -141,12 +141,15 @@
       "budget": 120,
       "checks": [
         "deadline raises timeout",
+        "finite wait streams callbacks",
+        "timeout retains output and execution identity",
         "marker written before the deadline",
         "work continues after the wait",
         "sandbox still healthy",
         "zero disables only the local deadline",
         "callback error is not retried",
-        "callback error does not kill the process"
+        "callback error does not kill the process",
+        "SDK callback error preserves identity"
       ],
       "expects": {
         "wait deadline": "TimeoutException/TimeoutError",
@@ -282,6 +285,13 @@
         "retain rejected before side effects",
         "depth rejected before side effects",
         "misspelled rejected before side effects",
+        "explicit default command options accepted",
+        "zero lifetime rejected before side effects",
+        "negative wait rejected before side effects",
+        "text stdin rejected before side effects",
+        "unknown write rejected before side effects",
+        "unknown timeout rejected before side effects",
+        "rejected options started no processes",
         "no extra container was created",
         "no container before the valid create"
       ],
@@ -321,7 +331,12 @@
         "side effect happened once",
         "SSE cut was injected",
         "reconnect resumes without gaps or duplicates",
-        "second run incremented once"
+        "second run incremented once",
+        "accepted start deadline was injected",
+        "uncertain start retains its key",
+        "accepted start continues after timeout",
+        "held start request completed",
+        "wait deadline sent no cancel or duplicate start"
       ],
       "expects": {
         "accepted start loss": "one side effect",
@@ -336,6 +351,8 @@
         "removal failure was injected",
         "unconfirmed removal is not success",
         "uncertainty is reported",
+        "repeated unconfirmed kill remains an error",
+        {"language": "python", "any": ["context cleanup failure preserves application cause"]},
         "orphan container still exists while the retry is pending",
         "observer can remove only its own container",
         "no orphan remains"

@@ -56,3 +56,16 @@ bash scripts/e2e-typescript.sh artifacts/typescript-e2e
 ```
 
 Evidence is retained under `artifacts/typescript-e2e`.
+
+## Optional E2B facade
+
+`import { Sandbox, CommandExitError } from '@tiny-sandbox/sdk/e2b'` exposes the
+E2B 2.64.0 basic Sandbox subset for Node: lifecycle, Bash commands with callbacks
+and compatible errors, text/binary files and complete bounded directory lists.
+It has no E2B runtime dependency or cloud-key requirement. Set
+`SANDBOX_E2B_IMAGE` to a local compatibility image digest and use the matching
+server checkout. Command timeouts stop waiting, not remote work; use
+`finally { await sandbox.kill(); }` for cleanup. See the
+[migration example](../examples/e2b/README.md) and
+[supported subset](../docs/e2b-compatibility.md). The native package root
+retains its browser support and default remote-cancel behavior.

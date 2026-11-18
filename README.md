@@ -80,6 +80,12 @@ streaming, typed errors, cancellation, and sandbox context managers.
 The [agent tool example](examples/agent-tool/README.md) shows how to expose
 the SDK as a `run_python` tool with structured results and error handling.
 
+Migrating E2B basic Sandbox applications? The optional `tiny_sandbox.e2b` and
+`@tiny-sandbox/sdk/e2b` entry points implement a [bounded compatibility subset](docs/e2b-compatibility.md),
+with a [local image and migration example](examples/e2b/README.md). No E2B
+Cloud account or key is required. Build the adapters and server from the same
+checkout; this is not full E2B or HTTP-protocol compatibility.
+
 ## Scope
 
 The server uses Docker container isolation and keeps its state in memory.
@@ -98,6 +104,7 @@ and [unimplemented future directions](docs/future.md).
 - [Go SDK reference](docs/sdk.md)
 - [Python SDK reference](docs/sdk-python.md)
 - [TypeScript SDK reference](docs/sdk-typescript.md)
+- [E2B compatibility subset and acceptance](docs/e2b-compatibility.md)
 - [HTTP API reference](docs/api.md)
 - [Versioning and releases](docs/versioning.md)
 - [Contributing](CONTRIBUTING.md)

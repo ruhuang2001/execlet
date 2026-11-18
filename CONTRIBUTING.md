@@ -34,6 +34,7 @@ make typescript
 | Request IDs and readiness | `bash scripts/e2e-observability.sh artifacts/observability-e2e` | Real Docker fault-proxy responses, logs and SSE |
 | Python SDK | `PYTHON=python3.15 bash scripts/e2e-python.sh artifacts/python-e2e` | Installed wheel and real Docker fault scenarios |
 | TypeScript SDK | `bash scripts/e2e-typescript.sh artifacts/typescript-e2e` | Types, browser bundle, installed tarball and Docker scenarios |
+| E2B adapter subset | `PYTHON=python3.15 bash scripts/e2b-compatibility/installed.sh artifacts/e2b-installed "$SANDBOX_E2B_IMAGE"` | Installed wheel/tarball without E2B runtime, 19 cases per language, reference comparison and cleanup |
 
 `PYTHON=python3.15` is an example; use an installed Python 3.10+ interpreter.
 The Python runner builds and installs a wheel in an isolated virtual environment.
@@ -50,6 +51,9 @@ Other runners choose their own ports and owner labels. Their cleanup targets
 only their own containers. Do not use global Docker cleanup while other work runs.
 The file runner prepares its pinned image before scenarios, retaining pull and
 inspect diagnostics; setup retries do not retry scenario requests.
+The E2B subset has its own [setup and acceptance requirements](scripts/e2b-compatibility/README.md),
+including a compatible image digest, Python 3.11+ and Node 22.19+. Its source-derived
+reference does not require an E2B Cloud account or key.
 
 ### Coverage and CI
 

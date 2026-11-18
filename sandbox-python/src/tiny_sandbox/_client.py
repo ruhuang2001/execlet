@@ -45,6 +45,7 @@ class Client(SandboxAPI):
         on_stdout: Callable[[str], None] | None = None,
         on_stderr: Callable[[str], None] | None = None,
         cancel: CancellationToken | None = None,
+        cancel_remote: bool = True,
     ) -> Execution:
         cursor = 0
         try:
@@ -98,6 +99,11 @@ class Client(SandboxAPI):
                         ) from exc
                 _sleep(_backoff(attempt), cancel)
         except _Cancellation as exc:
+            if not cancel_remote:
+                raise Error(
+                    "wait_timeout", "stopped waiting; remote execution was not canceled",
+                    execution=Execution(id=execution_id, sandbox_id=sandbox_id), cause=exc,
+                ) from exc
             return self._cancel_remote(sandbox_id, execution_id, cause=exc)
         raise Error("stream", "stream ended without completion")
 

@@ -12,7 +12,7 @@ from urllib.parse import quote, urlencode
 
 from ._cancel import CancellationToken, _Cancellation
 from ._errors import Error
-from ._models import CreateSandboxRequest, ExecuteRequest, Execution, FileEntry, FileList, Sandbox
+from ._models import CreateSandboxRequest, ExecuteRequest, Execution, FileEntry, FileList, Sandbox, UpdateSandboxRequest
 from ._transport import Transport
 
 _P = ParamSpec("_P")
@@ -77,6 +77,17 @@ class SandboxAPI(Transport, ABC):
         )
 
     @_public_cancellation
+    def update_sandbox(
+        self, sandbox_id: str, request: UpdateSandboxRequest, *,
+        cancel: CancellationToken | None = None,
+    ) -> Sandbox:
+        """Replace or extend the lifetime once; relative deadlines are not replayed."""
+        return Sandbox.from_dict(self._json(
+            "PATCH", self._sandbox_path(sandbox_id), json_body=request.to_dict(),
+            cancel=cancel, retry=False,
+        ))
+
+    @_public_cancellation
     def list_sandboxes(
         self, *, cancel: CancellationToken | None = None
     ) -> list[Sandbox]:
@@ -113,8 +124,9 @@ class SandboxAPI(Transport, ABC):
         request: ExecuteRequest,
         *,
         cancel: CancellationToken | None = None,
+        cancel_remote: bool = True,
     ) -> Execution:
-        """Start once across retries, recovering uncertain starts on cancellation."""
+        """Start once across retries; cancel_remote=False only abandons the wait."""
         # The keyed request owns copies of the caller's list and dict, so a
         # caller that changes them while the start is in flight cannot change
         # what a recovery replays under the same key.
@@ -138,6 +150,11 @@ class SandboxAPI(Transport, ABC):
             )
             return Execution.from_dict(payload)
         except _Cancellation as exc:
+            if not cancel_remote:
+                raise Error(
+                    "wait_timeout", "stopped waiting; remote start may have been accepted",
+                    idempotency_key=keyed_request.idempotency_key, cause=exc,
+                ) from exc
             if not exc.dispatched:
                 raise Error("canceled", cause=exc) from exc
             return self._cancel_remote(

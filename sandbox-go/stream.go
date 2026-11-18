@@ -60,9 +60,6 @@ func (c *Client) StreamExecution(ctx context.Context, sandboxID, executionID str
 	}
 }
 
-// streamOnce reads one connection. It reports complete when the terminal
-// event arrived; otherwise the returned error says whether another attempt is
-// worth making.
 func (c *Client) streamOnce(ctx context.Context, sandboxID, executionID string, lastID uint64, onEvent func(Event) error, cursor *uint64) (ex *Execution, complete bool, err error) {
 	url := c.domain + executionPath(sandboxID, executionID) + "/events"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -110,8 +107,6 @@ func (c *Client) streamOnce(ctx context.Context, sandboxID, executionID string, 
 		*cursor = event.ID
 
 		if event.Type == EventComplete {
-			// parseEvent already decoded the payload into Execution; the raw
-			// Data field is only used by output events.
 			if event.Execution == nil {
 				return nil, false, &Error{Code: "stream", Message: "sandbox: the complete event carried no execution"}
 			}
@@ -156,8 +151,6 @@ func callbackError(err error) error {
 	return &Error{Code: "callback", Message: "sandbox: event handler failed", Cause: err}
 }
 
-// retryableStreamError decides whether a broken connection is worth another
-// attempt. A contract error such as 404 is not.
 func retryableStreamError(err error) bool {
 	var sdkErr *Error
 	if errors.As(err, &sdkErr) {
@@ -166,7 +159,6 @@ func retryableStreamError(err error) bool {
 	return true
 }
 
-// statusOf extracts a status for the final stream error.
 func statusOf(err error) int {
 	var sdkErr *Error
 	if errors.As(err, &sdkErr) {
@@ -201,8 +193,6 @@ const maxEventBytes = 16 << 20
 
 func newSSEReader(r io.Reader) *sseReader {
 	scanner := bufio.NewScanner(r)
-	// A cap below the worst case makes a command that printed control bytes
-	// fail to stream even though it completed.
 	scanner.Buffer(make([]byte, 64<<10), maxEventBytes)
 	return &sseReader{scanner: scanner}
 }

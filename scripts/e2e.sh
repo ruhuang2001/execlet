@@ -1,11 +1,5 @@
 #!/usr/bin/env bash
-# End-to-end suite for tiny-sandbox: a real sandboxd, a real Docker daemon, and
-# the real CLI. Every assertion in docs/cli.md is exercised here.
-#
-#   bash scripts/e2e.sh [artifact-dir]
-#
-# The script starts its own sandboxd on a free loopback port, runs the CLI
-# against it, records evidence, and removes its containers on exit.
+# Real Docker/daemon/CLI acceptance. Usage: bash scripts/e2e.sh [artifact-dir]
 set -uo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -43,7 +37,6 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# check NAME CONDITION-DESCRIPTION ACTUAL EXPECTED
 pass() { printf 'ok   %s\n' "$1" | tee -a "$RESULTS"; }
 fail() {
   printf 'FAIL %s: %s (got %s, want %s)\n' "$1" "$2" "$3" "$4" | tee -a "$RESULTS"
@@ -250,10 +243,6 @@ check "exec-timeout survives" "the sandbox is still running after the command ti
 contains "exec-timeout state" "the sandbox was not killed" "$OUT/exec-timeout-inspect.txt" "state: running"
 "$BIN/sandboxctl" kill "$exec_timeout_sandbox" >/dev/null 2>&1
 
-# --env and --cwd belong to the execution, so the proof is the same probe as
-# the resource flags: what the process itself can see, not what the request
-# body said. Both variables have to arrive, one of them splitting on the first
-# "=" of its value, and the directory has to be the one the process reports.
 "$BIN/sandboxctl" run --env GREETING=hi --env 'PAIR=a=b' --cwd /tmp -- \
   sh -c 'printf "%s|%s|%s" "$GREETING" "$PAIR" "$(pwd)"' \
   >"$OUT/env-cwd.out" 2>"$OUT/env-cwd.err"
@@ -261,9 +250,6 @@ check "env-cwd exit" "the probe command succeeds" "$?" "0"
 check "env-cwd applied" "the execution sees its environment and directory" \
   "$(cat "$OUT/env-cwd.out")" "hi|a=b|/tmp"
 
-# The environment is per execution, so a second run on the same sandbox must
-# not inherit it. The variable has to be absent, which a probe can state
-# unambiguously.
 env_sandbox=$(sed -n 's/^sandbox: \(sbx_[a-z0-9]*\).*/\1/p' "$OUT/env-cwd.err" | head -1)
 "$BIN/sandboxctl" run --sandbox "$env_sandbox" -- \
   sh -c 'printf "%s" "${GREETING-<unset>}"' >"$OUT/env-second.out" 2>"$OUT/env-second.err"
@@ -320,7 +306,6 @@ contains "bad-cwd status" "the failure is distinguishable from a missing command
 bad_cwd_sandbox=$(sed -n 's/^sandbox: \(sbx_[a-z0-9]*\).*/\1/p' "$OUT/bad-cwd.err" | head -1)
 [ -n "$bad_cwd_sandbox" ] && "$BIN/sandboxctl" kill "$bad_cwd_sandbox" >/dev/null 2>&1
 
-# A relative path never reaches the runtime at all: the daemon rejects it.
 "$BIN/sandboxctl" run --rm --cwd relative/dir -- true >"$OUT/relative-cwd.out" 2>"$OUT/relative-cwd.err"
 check "relative-cwd exit" "a relative directory is rejected" "$?" "1"
 contains "relative-cwd message" "the rejection names the requirement" \
@@ -346,9 +331,6 @@ check "hardening exit" "the probe command succeeds" "$?" "0"
 contains "hardening pids" "pids limit reaches the cgroup" "$OUT/hardening.out" "1024"
 contains "hardening nonewprivs" "no-new-privileges is set" "$OUT/hardening.out" "NoNewPrivs:	1"
 
-# A caller-set pids limit must win over the default, in the cgroup and not
-# only in the response body. The request is the only place the value comes
-# from, so a mismatch here means the spec never reached Docker.
 "$BIN/sandboxctl" run --image python:3.12-alpine --pids-limit 128 -- \
   cat /sys/fs/cgroup/pids.max >"$OUT/pids-request.out" 2>"$OUT/pids-request.err"
 check "pids-request exit" "the probe command succeeds" "$?" "0"
@@ -446,9 +428,6 @@ check "404 exit" "a missing sandbox exits 1" "$?" "1"
 contains "404 hint" "404 hint" "$OUT/notfound.err" "hint: check the sandbox and execution IDs"
 
 note "busy hint"
-# One long execution holds the sandbox; a second start through the SDK's own
-# path must report busy. `run --sandbox` starts an execution, so it is the
-# honest way to produce a busy from the CLI.
 "$BIN/sandboxctl" run -- sleep 20 >"$OUT/busy-holder.out" 2>"$OUT/busy-holder.err" &
 holder_pid=$!
 sleep 2

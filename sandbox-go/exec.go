@@ -179,7 +179,6 @@ func (c *Client) CancelExecution(ctx context.Context, sandboxID, executionID str
 	return &ex, nil
 }
 
-// cancelConfirmed is shared by automatic stream cleanup and start recovery.
 // Unknown outcomes (including failed persistence) do not prove termination.
 func (c *Client) cancelConfirmed(ctx context.Context, sandboxID, executionID string) (*Execution, error) {
 	ex, err := c.CancelExecution(ctx, sandboxID, executionID)
@@ -203,7 +202,6 @@ func executionPath(sandboxID, executionID string) string {
 	return "/v1/sandboxes/" + url.PathEscape(sandboxID) + "/executions/" + url.PathEscape(executionID)
 }
 
-// newIdempotencyKey returns 128 random bits, hex-encoded, as sdk.md requires.
 func newIdempotencyKey() string {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {

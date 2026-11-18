@@ -34,7 +34,8 @@ make typescript
 | Request IDs and readiness | `bash scripts/e2e-observability.sh artifacts/observability-e2e` | Real Docker fault-proxy responses, logs and SSE |
 | Python SDK | `PYTHON=python3.15 bash scripts/e2e-python.sh artifacts/python-e2e` | Installed wheel and real Docker fault scenarios |
 | TypeScript SDK | `bash scripts/e2e-typescript.sh artifacts/typescript-e2e` | Types, browser bundle, installed tarball and Docker scenarios |
-| E2B adapter subset | `PYTHON=python3.15 bash scripts/e2b-compatibility/installed.sh artifacts/e2b-installed "$SANDBOX_E2B_IMAGE"` | Installed wheel/tarball without E2B runtime, 19 cases per language, reference comparison and cleanup |
+| E2B adapter subset | `PYTHON=python3.15 bash scripts/e2b-compatibility/installed.sh artifacts/e2b-installed "$SANDBOX_E2B_IMAGE" --profile background` | Installed wheel/tarball without E2B runtime, 40 cases per language, reference comparison and cleanup |
+| Deployment operations | `python3 scripts/e2e-operations.py --server bin/sandboxd --image "$SANDBOX_E2B_IMAGE" --out artifacts/operations` | Atomic budgets, network controls, restart/storage/runtime faults, metrics and latency samples |
 
 `PYTHON=python3.15` is an example; use an installed Python 3.10+ interpreter.
 The Python runner builds and installs a wheel in an isolated virtual environment.
@@ -59,13 +60,19 @@ reference does not require an E2B Cloud account or key.
 
 ~~~sh
 PYTHON=python3.15 E2E_COVERAGE=1 bash scripts/e2e.sh artifacts/e2e
-mkdir -p artifacts/cov-unit
+mkdir -p artifacts/cov-unit artifacts/operations-coverage artifacts/combined-e2e-coverage
 go test -race -covermode=atomic -coverpkg=./... ./... -args -test.gocoverdir="$PWD/artifacts/cov-unit"
-bash scripts/coverage.sh artifacts/cov-unit artifacts/e2e/coverage 70
+go build -cover -covermode=atomic -coverpkg=./... -o bin/sandboxd-coverage ./cmd/sandboxd
+GOCOVERDIR="$PWD/artifacts/operations-coverage" python3 scripts/e2e-operations.py \
+  --server bin/sandboxd-coverage --image "$SANDBOX_E2B_IMAGE" --out artifacts/operations
+go tool covdata merge -i=artifacts/e2e/coverage,artifacts/operations-coverage -o=artifacts/combined-e2e-coverage
+bash scripts/coverage.sh artifacts/cov-unit artifacts/combined-e2e-coverage 70
 ~~~
 
 With coverage enabled, the primary E2E script also runs instrumented file,
-archive and memory-HTTP probes into the same covdata directory. The current
+archive and memory-HTTP probes into the same covdata directory. Operations
+acceptance adds the policy/recovery paths through an instrumented daemon. Set
+`SANDBOX_E2B_IMAGE` to the local image digest prepared by the E2B harness. The current
 70% gate counts covered profile blocks; it is not the statement-weighted
 percentage shown by `go tool cover -func`. Do not compare those metrics as if
 they were interchangeable.

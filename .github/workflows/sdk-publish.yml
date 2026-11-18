@@ -1,0 +1,108 @@
+name: sdk-publish
+run-name: SDK distributions for ${{ inputs.tag }} (publish=${{ inputs.publish }})
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing versioned source tag containing the background profile
+        required: true
+        type: string
+      publish:
+        description: Publish the validated packages (false only validates)
+        type: boolean
+        default: false
+      registry:
+        description: Select one registry when resuming a partially completed publication
+        type: choice
+        options: [both, pypi, npm]
+        default: both
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sdk-publish-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.source.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: resolve immutable source and package versions
+        id: source
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          # OIDC/provenance must name the same source that CI tested.
+          test "$GITHUB_REF" = "refs/tags/$RELEASE_TAG"
+          sha=$(git rev-parse --verify "refs/tags/$RELEASE_TAG^{commit}")
+          test "$sha" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$sha" origin/main
+          git checkout --detach "$sha"
+          test -f scripts/e2e-operations.py
+          test -f scripts/e2b-compatibility/background-reference.json
+          python3 - <<'PY'
+          import json, os, pathlib, re, tomllib
+          version = os.environ['RELEASE_TAG'][1:]
+          assert tuple(map(int, version.split('.'))) > (0, 0, 2), 'Do not replace the released 0.0.2 contract'
+          assert tomllib.loads(pathlib.Path('sandbox-python/pyproject.toml').read_text())['project']['version'] == version
+          assert json.loads(pathlib.Path('sandbox-ts/package.json').read_text())['version'] == version
+          lock = json.loads(pathlib.Path('sandbox-ts/package-lock.json').read_text())
+          assert lock['version'] == lock['packages']['']['version'] == version
+          assert re.search(r'^  version: (\S+)$', pathlib.Path('api/openapi.yaml').read_text(), re.M)[1] == version
+          PY
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+  validate:
+    needs: resolve
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ needs.resolve.outputs.sha }}
+
+  pypi:
+    if: inputs.publish && (inputs.registry == 'both' || inputs.registry == 'pypi')
+    needs: [resolve, validate]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: sdk-distributions
+          path: packages
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: packages/wheels/
+
+  npm:
+    if: inputs.publish && (inputs.registry == 'both' || inputs.registry == 'npm')
+    needs: [resolve, validate]
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: sdk-distributions
+          path: packages
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: publish the tarball already installed and tested in CI
+        run: |
+          npm --version
+          node --input-type=module -e '
+            import { execFileSync } from "node:child_process";
+            const [major, minor, patch] = execFileSync("npm", ["--version"], { encoding: "utf8" }).trim().split(".").map(Number);
+            if (!(major > 11 || major === 11 && (minor > 5 || minor === 5 && patch >= 1))) throw new Error("npm >=11.5.1 is required for trusted publishing");
+          '
+          npm publish packages/npm/*.tgz --access public --provenance --ignore-scripts

@@ -11,7 +11,7 @@ Status: normative. [OpenAPI specification](../api/openapi.yaml) must describe ex
   that a newer default or capability took effect. See the [Python SDK](sdk-python.md).
 - Timestamps are RFC 3339 in UTC. Durations use the unit in their name: integer seconds (`_seconds`) or managed-command milliseconds (`timeout_ms`).
 - IDs are opaque strings. Clients must not parse them.
-- Authentication: if the server was started with `SANDBOX_API_KEY` set, every `/v1` request must carry `Authorization: Bearer <key>`, otherwise `401 unauthorized`. `/healthz` and `/readyz` never require authentication. The key is compared in constant time.
+- Authentication: if the server was started with `SANDBOX_API_KEY` set, every `/v1` request and `/metrics` must carry `Authorization: Bearer <key>`, otherwise `401 unauthorized`. `/healthz` and `/readyz` never require authentication. The key is compared in constant time.
 
 ## Errors
 
@@ -106,6 +106,14 @@ Flags describe the configured endpoint; mixed-version rolling servers are unsupp
 Current native SDKs preflight nonempty env/cwd/stdin, explicit concurrency and
 managed `timeout_ms` before create/start. Basic legacy calls need no discovery.
 File methods use dedicated endpoints; they do not silently downgrade to shell.
+
+### `GET /metrics`
+
+Uses the same bearer authentication as `/v1`. Returns Prometheus text containing
+bounded route/status HTTP latency histograms, create and execution-start latency,
+time to first output, cleanup failures/pending removals, live sandboxes and
+policy resource reservations. Counters reset on daemon restart. No command,
+image, sandbox ID, path, environment or credentials are metric labels.
 
 ### `GET /v1/sandboxes/{sandbox_id}/commands/{pid}`
 

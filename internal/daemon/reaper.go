@@ -189,6 +189,8 @@ func (s *Sandboxes) runRemovalPass(ctx context.Context) {
 		// ErrNotFound is success here: the container is gone either way.
 		if err == nil || errors.Is(err, ErrNotFound) {
 			s.forgetRemoval(id)
+		} else {
+			s.metrics.cleanupFailed()
 		}
 	}
 }
@@ -242,6 +244,7 @@ func (s *Sandboxes) finishRemovalPass() {
 // until the process restarts, and the set is bounded only by the number of
 // sandboxes this process has killed.
 func (s *Sandboxes) scheduleRemoval(containerID string) {
+	s.metrics.cleanupFailed()
 	s.retryMu.Lock()
 	defer s.retryMu.Unlock()
 	s.retryIDs[containerID] = struct{}{}

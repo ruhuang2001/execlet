@@ -52,12 +52,13 @@ type eventLog struct {
 	mu      sync.Mutex
 	changed chan struct{} // closed and replaced on every append
 
-	events       []Event
-	nextID       uint64
-	retained     int
-	outputEvents int
-	truncated    bool
-	complete     bool
+	events        []Event
+	nextID        uint64
+	retained      int
+	outputEvents  int
+	truncated     bool
+	complete      bool
+	onFirstOutput func()
 }
 
 func newEventLog() *eventLog {
@@ -129,6 +130,9 @@ func (l *eventLog) appendOutput(kind EventType, chunk []byte) {
 }
 
 func (l *eventLog) appendOutputLocked(kind EventType, data []byte) {
+	if l.outputEvents == 0 && l.onFirstOutput != nil {
+		l.onFirstOutput()
+	}
 	l.appendLocked(Event{Type: kind, Data: append([]byte(nil), data...)})
 	l.outputEvents++
 	l.retained += len(data)

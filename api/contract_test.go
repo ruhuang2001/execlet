@@ -186,7 +186,7 @@ func TestOperationsCoversEveryDocumentedEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse embedded spec: %v", err)
 	}
-	if len(ops) != 22 {
-		t.Fatalf("parsed %d operations, want 22: %v", len(ops), ops)
+	if len(ops) != 23 {
+		t.Fatalf("parsed %d operations, want 23: %v", len(ops), ops)
 	}
 }

@@ -211,6 +211,8 @@ func (ex *execution) summary() ExecutionSummary {
 // time, so an overlapping start is busy; and a reused idempotency key returns
 // the existing execution instead of starting a second process.
 func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req ExecuteRequest) (Execution, bool, error) {
+	start := time.Now()
+	defer s.metrics.observe("tiny_sandbox_execution_start_seconds{operation=\"start\"}", start)
 	if err := s.durableReady(); err != nil {
 		return Execution{}, false, err
 	}
@@ -326,6 +328,7 @@ func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req Ex
 	if req.TimeoutMS != nil {
 		ex.timeoutMS = new(*req.TimeoutMS)
 	}
+	ex.log.onFirstOutput = func() { s.metrics.observe("tiny_sandbox_first_output_seconds{operation=\"execution\"}", start) }
 	if s.journal != nil {
 		ex.persist = func(snapshot Execution, events []Event) error { return s.saveExecution(ex, snapshot, events) }
 		ex.forget = func() error { return s.forgetExecution(sb, ex) }

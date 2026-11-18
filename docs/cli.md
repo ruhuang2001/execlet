@@ -60,6 +60,12 @@ server. `--nano-cpus 1000000000` limits the sandbox to one CPU; `0` is unlimited
 `--network none` disables external networking. These options only apply when
 creating a sandbox.
 
+These are defaults without administrator policy. With `sandboxd -policy`,
+omitted CPU/network use policy defaults, explicit unlimited CPU is refused,
+and aggregate budgets and image/network allowlists also apply. See
+[deployment policy](operations.md#administrator-policy). The CLI does not add
+E2B-style background handles; use the Python/TypeScript adapters for those.
+
 ## Status lines (stderr)
 
 These formats are stable; end-to-end tests match them.

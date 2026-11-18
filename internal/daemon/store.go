@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -94,6 +95,7 @@ const (
 // waiting for it.
 type Sandboxes struct {
 	backend        Backend
+	metrics        metrics
 	clock          Clock
 	journal        *Journal
 	fingerprintKey [32]byte
@@ -234,7 +236,15 @@ func (sb *sandbox) pruneExecutionsLocked() {
 // ---------------------------------------------------------------- creation
 
 // Create starts a container and returns the sandbox once it is running.
-func (s *Sandboxes) Create(ctx context.Context, req CreateRequest) (Sandbox, error) {
+func (s *Sandboxes) Create(ctx context.Context, req CreateRequest) (result Sandbox, retErr error) {
+	start := time.Now()
+	defer func() {
+		outcome := "success"
+		if retErr != nil {
+			outcome = string(CodeOf(retErr))
+		}
+		s.metrics.observe("tiny_sandbox_create_seconds{outcome="+fmt.Sprintf("%q", outcome)+"}", start)
+	}()
 	if err := s.durableReady(); err != nil {
 		return Sandbox{}, err
 	}

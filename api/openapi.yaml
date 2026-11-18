@@ -22,6 +22,18 @@ tags:
   - name: executions
   - name: files
 paths:
+  /metrics:
+    get:
+      operationId: getMetrics
+      summary: Authenticated bounded operational metrics
+      responses:
+        '200':
+          description: Prometheus text format; process-local counters and histograms.
+          content:
+            text/plain:
+              schema: {type: string}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /v1/capabilities:
     get:
       operationId: getCapabilities

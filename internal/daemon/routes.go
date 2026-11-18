@@ -33,6 +33,7 @@ type Route struct {
 var routes = []Route{
 	{Operation{http.MethodGet, "/healthz"}, (*Handler).handleHealth},
 	{Operation{http.MethodGet, "/readyz"}, (*Handler).handleReady},
+	{Operation{http.MethodGet, "/metrics"}, (*Handler).handleMetrics},
 	{Operation{http.MethodGet, "/v1/capabilities"}, (*Handler).capabilities},
 	{Operation{http.MethodGet, "/v1/sandboxes/{sandbox_id}/commands/{pid}"}, (*Handler).attachCommand},
 	{Operation{http.MethodPost, "/v1/sandboxes/{sandbox_id}/executions/{execution_id}/kill"}, (*Handler).killExecution},

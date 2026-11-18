@@ -34,6 +34,11 @@ prefix is the API namespace, not a claim that the project has reached v1.0.0.
 - **major** may remove or reinterpret public API.
 
 Before `v1.0.0`, breaking changes are allowed but must be called out explicitly in the change description.
+For this initial-development release, `0.0.2` deliberately groups the additive
+SDK, execution, file and E2B-subset work rather than advancing to `0.1.0`. This
+is an explicit exception to the patch-only rule, not a claim that the release
+contains only fixes. OpenAPI and both Python/npm package versions are `0.0.2`;
+updating these declarations does not publish a release or a package.
 
 ## What counts as the contract
 
@@ -71,10 +76,11 @@ with `python3 -m pip install ./sandbox-python`.
 
 ## Release checklist
 
-Requires Go 1.27+, Docker CLI/Unix socket, curl, Node 22+, Python 3.10+,
+Requires Go 1.27+, Docker CLI/Unix socket, curl, Node 22.19+, Python 3.11+,
 golangci-lint, and GoReleaser. Ensure `python3` is a supported interpreter on
 `PATH`; `PYTHON` selects the interpreter for the Python and file SDK runners.
-Use fresh artifact directories.
+The higher interpreter requirement is for the E2B reference harness; the native
+Python SDK still supports 3.10. Use fresh artifact directories.
 
 ```sh
 go build ./...
@@ -95,7 +101,22 @@ bash scripts/coverage.sh artifacts/cov-unit artifacts/e2e/coverage 70
 python3 -m pip install build
 make python-build
 make python-e2e
+bash scripts/e2b-compatibility/setup.sh
+python3 scripts/e2b-compatibility/selfcheck.py
+docker build -t tiny-sandbox-e2b:local examples/e2b
+IMAGE=$(docker image inspect tiny-sandbox-e2b:local --format '{{.Id}}')
+bash scripts/e2b-compatibility/installed.sh artifacts/e2b-installed "$IMAGE"
 ```
+
+The `e2b-compatibility` CI job builds the image, selects its immutable digest,
+and tests the installed wheel and npm tarball: 19 cases in each language plus
+the reference comparison and independent cleanup. It uploads reports, logs,
+image metadata and package files even on failure, without uploading the test
+virtualenv or consumer dependencies. No E2B Cloud credentials or publication
+are involved. The Release workflow reuses this job through `validate`, so a
+failed or incomplete comparison blocks publication. Only an explicitly selected
+historical `v0.0.1` commit may lack this suite; missing it on current or new
+release revisions is an error.
 
 The coverage steps follow CI: the primary E2E run includes file/archive
 scenarios, and `coverage.sh` merges both profiles for the 70% profile-block

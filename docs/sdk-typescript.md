@@ -17,7 +17,7 @@ npm ci
 npm run check
 npm pack
 # In your application:
-npm install /path/to/tiny-sandbox/sandbox-ts/tiny-sandbox-sdk-0.0.1.tgz
+npm install /path/to/tiny-sandbox/sandbox-ts/tiny-sandbox-sdk-0.0.2.tgz
 ~~~
 
 ~~~ts

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: tiny-sandbox
-  version: 0.0.1
+  version: 0.0.2
   summary: Code-execution sandbox for AI agents
   description: |
     Normative HTTP contract for the tiny-sandbox reference server.

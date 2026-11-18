@@ -369,6 +369,7 @@ The reusable CI workflow has these jobs:
 | `e2e` | Docker-backed suite with coverage instrumentation; enforces the merged coverage gate; uploads `artifacts/`; asserts no containers remain |
 | `python-sdk` | distribution build and install on Python 3.10 and 3.15, real-Docker fault scenarios, reports and cleanup evidence |
 | `typescript` | strict consumer types, real-Docker fault-injection E2E, browser-safe bundle check, installed npm tarball |
+| `e2b-compatibility` | local compatibility image by digest, installed Python/npm adapters, 19 cases per language, reference comparison, reports and independent cleanup; no E2B Cloud |
 
 CI builds GoReleaser snapshots: four platform archives (Linux/macOS on
 amd64/arm64) plus a checksum file. Windows is not supported.

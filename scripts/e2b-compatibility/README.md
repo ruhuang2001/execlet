@@ -37,6 +37,14 @@ The output includes `wheels/`, `npm/`, installation logs, resolved import paths,
 `installed-types.log`, `image.json`, `guest.txt`, `run/report.json` and
 `compare.log`. No registry publication or E2B Cloud call occurs.
 
+CI runs this installed-package gate as `e2b-compatibility` on pushes and pull
+requests, and the reusable CI also gates Release publication. It builds the
+local image from `examples/e2b`, pins the resulting digest, runs `selfcheck.py`,
+and requires the full 38-row comparison plus a zero-container check. Failed
+runs still upload evidence and package files, excluding the virtualenv and
+consumer dependency tree. The suite may be absent only for an explicitly
+selected historical `v0.0.1` commit, not for current or new release revisions.
+
 Run from the repository root. The required reference is the pinned SDK source
 recorded in `reference.json`, not an E2B Cloud account. If testing already
 installed packages directly, no E2B key is needed:

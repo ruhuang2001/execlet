@@ -18,6 +18,88 @@ env:
   GOTOOLCHAIN: local
 
 jobs:
+  e2b-compatibility:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      PYTHON: python
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0
+      - name: require the installed-package acceptance suite
+        id: suite
+        env:
+          REQUESTED_REF: ${{ inputs.ref }}
+        run: |
+          if test -f scripts/e2b-compatibility/installed.sh; then
+            echo 'present=true' >> "$GITHUB_OUTPUT"
+          elif test -n "$REQUESTED_REF" &&
+               test "$(git rev-parse HEAD)" = "$(git rev-parse --verify 'refs/tags/v0.0.1^{commit}' 2>/dev/null)"; then
+            echo 'The published v0.0.1 source predates the E2B adapter.'
+          else
+            echo 'Missing required installed E2B acceptance suite.' >&2
+            exit 1
+          fi
+      - uses: actions/setup-go@v5
+        if: steps.suite.outputs.present == 'true'
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-node@v4
+        if: steps.suite.outputs.present == 'true'
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            sandbox-ts/package-lock.json
+            scripts/e2b-compatibility/package-lock.json
+      - uses: actions/setup-python@v5
+        if: steps.suite.outputs.present == 'true'
+        with:
+          python-version: '3.15'
+      - name: prepare pinned references and SDK build tools
+        if: steps.suite.outputs.present == 'true'
+        run: |
+          mkdir -p artifacts/e2b-setup
+          bash scripts/e2b-compatibility/setup.sh 2>&1 | tee artifacts/e2b-setup/references.log
+          npm --prefix sandbox-ts ci 2>&1 | tee artifacts/e2b-setup/sdk.log
+      - name: verify the comparison gate fails closed
+        if: steps.suite.outputs.present == 'true'
+        run: python scripts/e2b-compatibility/selfcheck.py | tee artifacts/e2b-setup/selfcheck.log
+      - name: build and pin the local compatibility image
+        if: steps.suite.outputs.present == 'true'
+        run: |
+          docker build --progress=plain -t tiny-sandbox-e2b:ci examples/e2b 2>&1 | tee artifacts/e2b-setup/image-build.log
+          image=$(docker image inspect tiny-sandbox-e2b:ci --format '{{.Id}}')
+          echo "SANDBOX_E2B_IMAGE=$image" >> "$GITHUB_ENV"
+      - name: installed Python and TypeScript acceptance plus compare
+        if: steps.suite.outputs.present == 'true'
+        run: bash scripts/e2b-compatibility/installed.sh artifacts/e2b-ci "$SANDBOX_E2B_IMAGE"
+      - name: no containers remain
+        if: always() && steps.suite.outputs.present == 'true'
+        run: |
+          mkdir -p artifacts/e2b-setup
+          docker ps -aq --filter 'label=tiny-sandbox.owner' > artifacts/e2b-setup/remaining-containers.txt
+          cat artifacts/e2b-setup/remaining-containers.txt
+          test ! -s artifacts/e2b-setup/remaining-containers.txt
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.suite.outputs.present == 'true'
+        with:
+          name: e2b-compatibility-artifacts
+          path: |
+            artifacts/e2b-setup/
+            artifacts/e2b-ci/
+            !artifacts/e2b-ci/venv/**
+            !artifacts/e2b-ci/consumer/**
+            !artifacts/e2b-ci/run/sandboxd
+            !artifacts/e2b-ci/**/*.sock
+          retention-days: 7
+
   stdin-e2e:
     runs-on: ubuntu-latest
     steps:

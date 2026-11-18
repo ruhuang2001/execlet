@@ -71,7 +71,7 @@ percentage shown by `go tool cover -func`. Do not compare those metrics as if
 they were interchangeable.
 
 The [CI workflow](.github/workflows/ci.yml) defines `lint`, `test`, `build`,
-`e2e`, `files-e2e`, `stdin-e2e`, `typescript`, and the two-version `python-sdk`
+`e2e`, `files-e2e`, `stdin-e2e`, `typescript`, `e2b-compatibility`, and the two-version `python-sdk`
 matrix. It builds release snapshots, enforces coverage, uploads E2E evidence,
 and checks container cleanup. [Versioning](docs/versioning.md) covers releases.
 

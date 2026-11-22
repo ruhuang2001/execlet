@@ -431,7 +431,11 @@ func TestFilesRoundTrip(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	if err := b.WriteFile(context.Background(), id, "/home/user/deep/dir/f.txt", []byte("hello")); err != nil {
+	entry, err := b.WriteFile(t.Context(), id, "/home/user/deep/dir/f.txt", []byte("hello"))
+	if err == nil && (entry.Type != daemon.FileTypeFile || entry.Size != 5 || entry.Name != "f.txt") {
+		t.Fatalf("unexpected write metadata: %+v", entry)
+	}
+	if err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	if got := f.file(id, "/home/user/deep/dir/f.txt"); string(got) != "hello" {
@@ -453,6 +457,25 @@ func TestFilesRoundTrip(t *testing.T) {
 	f.mu.Unlock()
 	if _, err := b.ReadFile(context.Background(), id, "/home/user/huge.bin"); daemon.CodeOf(err) != daemon.CodePayloadTooLarge {
 		t.Fatalf("read oversized file err = %v, want payload_too_large", err)
+	}
+}
+
+func TestWriteReportsObservedSymlink(t *testing.T) {
+	f := newFakeDaemon(t)
+	b := f.backend(t)
+	id, err := b.Create(t.Context(), daemon.ContainerSpec{Image: "alpine:3.20", MemoryMB: 64})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.setProgram(func(_ string, cmd []string) (string, string, int) {
+		if len(cmd) == 5 && cmd[2] == writeVerifyScript {
+			return "oksymlink\x00root:0\n---\nroot:0\x00B\x00out\x00\x00a1ff:4:0:0:0\n\x00out\x00dest\x00\x00", "", 0
+		}
+		return "", "", 0
+	})
+	entry, err := b.WriteFile(t.Context(), id, "/out", []byte("data"))
+	if err != nil || entry.Type != daemon.FileTypeSymlink || entry.SymlinkTarget != "dest" {
+		t.Fatalf("observed symlink: %+v, %v", entry, err)
 	}
 }
 
@@ -492,7 +515,7 @@ func TestWriteFileRequiresAbsolutePath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if err := b.WriteFile(context.Background(), id, "relative.txt", []byte("x")); err == nil {
+	if _, err := b.WriteFile(context.Background(), id, "relative.txt", []byte("x")); err == nil {
 		t.Fatal("write succeeded, want a path error")
 	}
 }

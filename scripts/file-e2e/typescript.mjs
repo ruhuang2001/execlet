@@ -9,6 +9,14 @@ do {
 assert.deepEqual(names, ['.hidden', 'a space', 'empty', 'link', 'nested', 'z', 'é']);
 console.log(JSON.stringify({sdk: 'typescript', names}));
 
+if (process.argv[3] === 'wide') {
+  const { Sandbox } = await import('../../sandbox-ts/dist/e2b.js');
+  const sb = await Sandbox.connect(process.argv[2]);
+  const written = await sb.files.write('/wide/typescript.txt', 'ok');
+  assert.deepEqual(written, {name:'typescript.txt',path:'/wide/typescript.txt',type:'file'});
+  console.log(JSON.stringify(written));
+}
+
 if (process.argv[3] === 'archive') {
   await c.writeArchive(process.argv[2], '/archives/typescript', readFileSync(process.argv[4]));
   const result = await c.readArchive(process.argv[2], '/archives/typescript/tree');

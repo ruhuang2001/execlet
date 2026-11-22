@@ -80,11 +80,11 @@ class HTTPFixture:
             def do_GET(self):
                 self.respond()
 
-            do_POST = do_PATCH = do_DELETE = do_GET
+            do_POST = do_PATCH = do_DELETE = do_PUT = do_GET
 
             def respond(self):
                 raw = self.rfile.read(int(self.headers.get("Content-Length", 0)))
-                body = json.loads(raw) if raw else None
+                body = raw if self.command == "PUT" else json.loads(raw) if raw else None
                 record = dict(method=self.command, path=self.path, body=body, headers=dict(self.headers))
                 fixture.records.append(record)
                 fixture.client_ports.append(self.client_address[1])
@@ -737,13 +737,16 @@ class BackgroundCommandsTests(unittest.TestCase):
                 self.native.list_files(SID, "/")
             self.assertEqual(caught.exception.code, "decode")
 
-    def test_e2b_write_rejects_missing_list_support_before_overwrite(self):
+    def test_e2b_write_accepts_symlink_metadata_without_list_support(self):
         self.http.put("GET", "/v1/capabilities", {"capabilities": []})
-        with patch.object(self.sandbox.files._client, "write_file") as write:
-            with self.assertRaises(AdapterError) as caught:
-                self.sandbox.files.write("/work/file", "replacement")
-            self.assertEqual(caught.exception.code, "incompatible_server")
-            write.assert_not_called()
+        route = BASE + "/files?path=%2Fwork%2Ffile"
+        self.http.put("PUT", route, dict(name="file", type="symlink", size=4, mode=0o777,
+                                        mtime="2026-11-18T00:00:00Z", is_dir=False, uid=0, gid=0,
+                                        symlink_target="dest"))
+        self.http.records.clear()
+        written = self.sandbox.files.write("/work/file", "replacement")
+        self.assertEqual((written.name, written.type.value, written.path), ("file", "symlink", "/work/file"))
+        self.assertEqual([(r["method"], r["path"]) for r in self.http.records], [("PUT", route)])
 
     def test_cancel_validates_every_snapshot_before_polling(self):
         token = CancellationToken()

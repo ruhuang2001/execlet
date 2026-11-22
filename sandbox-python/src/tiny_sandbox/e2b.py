@@ -666,13 +666,10 @@ class _Files:
         if len(payload) > 10 << 20:
             raise AdapterError("file exceeds 10 MiB", code="payload_too_large")
         token = CancellationToken(timeout=self._request_timeout)
-        self._call(lambda: self._client.require_capabilities("files.list.v1", cancel=token), token)
-        self._call(lambda: self._client.write_file(self._id, target, payload, cancel=token), token)
-        parent, _, name = target.rpartition("/")
-        found = next((entry for entry in self._list(parent or "/", token) if entry.name == name), None)
-        if found is None or found.type != FileType.FILE:
-            raise AdapterError("write metadata was not confirmed", code="write_unconfirmed")
-        return WriteInfo(found.name, found.type, found.path)
+        entry = self._call(lambda: self._client.write_file(self._id, target, payload, cancel=token), token)
+        if entry.type not in {"file", "symlink"}:
+            raise AdapterError("unexpected type in write response", code="incompatible_server")
+        return WriteInfo(entry.name, FileType(entry.type), target)
 
     @overload
     def read(self, path: str, *, format: Literal["text"] = "text") -> str: ...

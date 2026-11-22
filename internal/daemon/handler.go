@@ -273,11 +273,12 @@ func (h *Handler) writeFile(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if err := h.store.WriteFile(r.Context(), r.PathValue("sandbox_id"), path, data); err != nil {
+	entry, err := h.store.WriteFile(r.Context(), r.PathValue("sandbox_id"), path, data)
+	if err != nil {
 		writeDaemonError(r.Context(), w, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, entry)
 }
 
 func filePath(w http.ResponseWriter, r *http.Request) (string, bool) {

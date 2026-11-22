@@ -143,7 +143,8 @@ func TestTransitionTable(t *testing.T) {
 			t.Run(string(state), func(t *testing.T) {
 				h := newHarness(t)
 				sb := stateFor(t, h, state)
-				wantNoError(t, h.s.WriteFile(ctx, sb.ID, "/tmp/a", []byte("hi")))
+				_, err := h.s.WriteFile(ctx, sb.ID, "/tmp/a", []byte("hi"))
+				wantNoError(t, err)
 				data, err := h.s.ReadFile(ctx, sb.ID, "/tmp/a")
 				wantNoError(t, err)
 				if string(data) != "hi" {
@@ -159,24 +160,27 @@ func TestTransitionTable(t *testing.T) {
 		t.Run("killed", func(t *testing.T) {
 			h := newHarness(t)
 			sb := stateFor(t, h, daemon.StateKilled)
-			wantCode(t, h.s.WriteFile(ctx, sb.ID, "/tmp/a", []byte("hi")), daemon.CodeInvalidState)
-			_, err := h.s.ReadFile(ctx, sb.ID, "/tmp/a")
+			_, err := h.s.WriteFile(ctx, sb.ID, "/tmp/a", []byte("hi"))
+			wantCode(t, err, daemon.CodeInvalidState)
+			_, err = h.s.ReadFile(ctx, sb.ID, "/tmp/a")
 			wantCode(t, err, daemon.CodeInvalidState)
 		})
 		t.Run("relative path", func(t *testing.T) {
 			h := newHarness(t)
 			sb := stateFor(t, h, daemon.StateRunning)
 			for _, bad := range []string{"tmp/a", "/", "/tmp/../etc/passwd", "/tmp/bad\x00name"} {
-				wantCode(t, h.s.WriteFile(ctx, sb.ID, bad, nil), daemon.CodeInvalidRequest)
-				_, err := h.s.ReadFile(ctx, sb.ID, bad)
+				_, err := h.s.WriteFile(ctx, sb.ID, bad, nil)
+				wantCode(t, err, daemon.CodeInvalidRequest)
+				_, err = h.s.ReadFile(ctx, sb.ID, bad)
 				wantCode(t, err, daemon.CodeInvalidRequest)
 			}
 		})
 		t.Run("directory is not a regular file", func(t *testing.T) {
 			h := newHarness(t)
 			sb := stateFor(t, h, daemon.StateRunning)
-			wantNoError(t, h.s.WriteFile(ctx, sb.ID, "/tmp/dir/a", []byte("hi")))
-			_, err := h.s.ReadFile(ctx, sb.ID, "/tmp/dir")
+			_, err := h.s.WriteFile(ctx, sb.ID, "/tmp/dir/a", []byte("hi"))
+			wantNoError(t, err)
+			_, err = h.s.ReadFile(ctx, sb.ID, "/tmp/dir")
 			wantCode(t, err, daemon.CodeInvalidRequest)
 		})
 		t.Run("missing file", func(t *testing.T) {
@@ -189,7 +193,8 @@ func TestTransitionTable(t *testing.T) {
 			h := newHarness(t)
 			sb := stateFor(t, h, daemon.StateRunning)
 			big := make([]byte, daemon.MaxFileBytes+1)
-			wantCode(t, h.s.WriteFile(ctx, sb.ID, "/tmp/big", big), daemon.CodePayloadTooLarge)
+			_, err := h.s.WriteFile(ctx, sb.ID, "/tmp/big", big)
+			wantCode(t, err, daemon.CodePayloadTooLarge)
 		})
 	})
 
@@ -253,7 +258,8 @@ func TestPendingState(t *testing.T) {
 	wantCode(t, err, daemon.CodeInvalidState)
 	_, _, err = h.s.StartExecution(ctx, id, daemon.ExecuteRequest{Command: []string{"true"}})
 	wantCode(t, err, daemon.CodeInvalidState)
-	wantCode(t, h.s.WriteFile(ctx, id, "/a", nil), daemon.CodeInvalidState)
+	_, err = h.s.WriteFile(ctx, id, "/a", nil)
+	wantCode(t, err, daemon.CodeInvalidState)
 	if _, err := h.s.Get(id); err != nil {
 		t.Fatalf("get pending: %v", err)
 	}

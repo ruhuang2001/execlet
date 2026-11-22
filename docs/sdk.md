@@ -69,6 +69,7 @@ ReadArchive(ctx, sandboxID, path string) ([]byte, error)
 WriteArchive(ctx, sandboxID, path string, data []byte) error
 ReadFile(ctx, sandboxID, path string) ([]byte, error)
 WriteFile(ctx, sandboxID, path string, data []byte) error
+WriteFileInfo(ctx, sandboxID, path string, data []byte) (*FileEntry, error)
 ```
 
 Optional request fields use pointers (`*int`, `*int64`, `*string`, or `*Action`)

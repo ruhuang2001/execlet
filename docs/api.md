@@ -413,7 +413,7 @@ Server-sent events; see below.
 
 ### `PUT /v1/sandboxes/{sandbox_id}/files?path=/abs/path`
 
-Raw bytes in the body; creates parent directories; replaces existing files. `204`. Idempotent.
+The request body contains raw bytes. The daemon creates missing parent directories and replaces the destination file. A successful write returns HTTP 200 with the destination’s observed `FileEntry`, using the directory listing metadata fields. Docker replaces an existing destination symlink and preserves its target. A symlink observed during confirmation is reported as `type: symlink`. The write is idempotent.
 
 The file and every parent directory this write creates are owned by the container's default user, because the archive is extracted by a root process: without that, an uploaded file in a fresh directory is root-owned and a non-root guest cannot write its output beside it. Existing parents keep their own owner and mode.
 

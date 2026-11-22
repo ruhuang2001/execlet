@@ -376,8 +376,8 @@ func (f *fakeDaemon) programLocked(containerID string, c *fakeContainer, cmd []s
 	}
 	if len(cmd) == 5 && cmd[0] == "/bin/sh" && cmd[2] == writeVerifyScript {
 		for _, name := range []string{cmd[4], "/" + cmd[4]} {
-			if _, ok := c.files[name]; ok {
-				return "ok", "", 0
+			if data, ok := c.files[name]; ok {
+				return fmt.Sprintf("okfile\x00root:0\n---\nroot:0\x00B\x00%s\x00\x0081a4:%d:0:0:0\n\x00\x00", path.Base(name), len(data)), "", 0
 			}
 		}
 		return "missing", "", 0

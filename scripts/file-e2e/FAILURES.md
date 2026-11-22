@@ -38,3 +38,10 @@ These failure cases precede the repair implementation and exercise real HTTP plu
 - Bound aggregate archive path text to 1 MiB so destination preflight uses at most a few bounded exec batches; perform those checks as container root to match Docker extraction privileges.
 - Reject FIFO/nonregular local uploads promptly without resuming a paused sandbox; fail unwritable/missing local download destinations before remote access. Confirm materialized hardlink bytes, not only headers.
 - After replacing a hardlink target, memory ReadFile bytes and downloaded tar bytes must still agree for existing links. Uploads into implicit directories created by empty-directory descendants must succeed.
+
+## Single-file write metadata
+
+- A successful upload must return its metadata even when the parent exceeds 10,000 children. Verify both E2B adapters and native SDKs.
+- An upload can replace an existing symlink with a regular file. Verify the reported type and check that the old link target keeps its original bytes.
+- If the confirmation observes a symlink, return its own metadata and target. Reject directories, special files and missing entries during write confirmation.
+- Keep the legacy Go WriteFile compatible with a server that returns 204. WriteFileInfo requires a FileEntry response.

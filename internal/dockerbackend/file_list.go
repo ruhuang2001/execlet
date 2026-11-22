@@ -16,24 +16,15 @@ import (
 	"github.com/ruhuang2001/tiny-sandbox/internal/daemon"
 )
 
-const listDirScript = `dir=$1
-command -v stat >/dev/null 2>&1 && command -v readlink >/dev/null 2>&1 || exit 45
-if [ -L "$dir" ]; then exit 40; fi
-if [ ! -e "$dir" ]; then exit 45; fi
-if [ ! -d "$dir" ]; then exit 40; fi
-[ -r "$dir" ] && [ -x "$dir" ] || exit 45
-stat -c '%f:%s:%Y:%u:%g' / >/dev/null 2>&1 || exit 45
-if [ -f /etc/passwd ] && [ -r /etc/passwd ]; then cut -d: -f1,3 /etc/passwd 2>/dev/null; fi
+const statBatchScript = `if [ -f /etc/passwd ] && [ -r /etc/passwd ]; then cut -d: -f1,3 /etc/passwd 2>/dev/null; fi
 printf '\n---\n'
 if [ -f /etc/group ] && [ -r /etc/group ]; then cut -d: -f1,3 /etc/group 2>/dev/null; fi
 printf '\0'
-prefix=$dir/
-[ "$dir" = / ] && prefix=/
 flush() {
  [ "$#" -eq 0 ] && return 0
  printf 'B\0'
  for item do
-  printf '%s\0' "${item#"$prefix"}"
+  printf '%s\0' "${item##*/}"
  done
  printf '\0'
  stat -c '%f:%s:%Y:%u:%g' "$@" || exit 42
@@ -41,13 +32,24 @@ flush() {
  for item do
   if [ -L "$item" ]; then
    target=$(readlink "$item" && printf x) || continue
-   printf '%s\0' "${item#"$prefix"}"
+   printf '%s\0' "${item##*/}"
    printf '%s\0' "${target%?x}"
   fi
  done
  printf '\0'
 }
-count=0
+`
+
+const listDirScript = `dir=$1
+command -v stat >/dev/null 2>&1 && command -v readlink >/dev/null 2>&1 || exit 45
+if [ -L "$dir" ]; then exit 40; fi
+if [ ! -e "$dir" ]; then exit 45; fi
+if [ ! -d "$dir" ]; then exit 40; fi
+[ -r "$dir" ] && [ -x "$dir" ] || exit 45
+stat -c '%f:%s:%Y:%u:%g' / >/dev/null 2>&1 || exit 45
+prefix=$dir/
+[ "$dir" = / ] && prefix=/
+` + statBatchScript + `count=0
 set --
 for f in "$prefix"* "$prefix".[!.]* "$prefix"..?*; do
  [ -e "$f" ] || [ -L "$f" ] || continue
@@ -61,6 +63,58 @@ for f in "$prefix"* "$prefix".[!.]* "$prefix"..?*; do
 done
 flush "$@"
 `
+
+const writeVerifyScript = `set -e
+p=$1
+if [ -L "$p" ]; then printf 'oksymlink\0'
+elif [ -d "$p" ]; then printf 'okdir\0'
+elif [ -f "$p" ]; then printf 'okfile\0'
+elif [ -e "$p" ]; then printf 'notfile\0'
+else printf 'missing'; exit 0
+fi
+command -v stat >/dev/null 2>&1 && command -v readlink >/dev/null 2>&1 || exit 45
+[ "$p" != / ] || p=/.
+` + statBatchScript + `flush "$p"`
+
+func (b *Backend) statWrittenFile(ctx context.Context, id, p string) (daemon.FileEntry, error) {
+	out, err := b.captureExec(ctx, id, "0", []string{"/bin/sh", "-c", writeVerifyScript, "stat-file", p}, daemon.MaxFileScanBytes)
+	if err != nil {
+		if exitErr, ok := errors.AsType[*execExitError](err); ok && (exitErr.code == 45 || exitErr.code == 126 || exitErr.code == 127) {
+			return b.statFromArchive(ctx, id, p)
+		}
+		return daemon.FileEntry{}, fmt.Errorf("dockerbackend: stat %s: %w", p, err)
+	}
+	if string(out) == "missing" {
+		return daemon.FileEntry{}, daemon.ErrNotFound
+	}
+	_, record, ok := bytes.Cut(out, []byte{0})
+	if !ok {
+		return daemon.FileEntry{}, errors.New("dockerbackend: incomplete stat response")
+	}
+	entries, err := parseDirectListOutput(record, "", 1)
+	if err != nil {
+		return daemon.FileEntry{}, err
+	}
+	if len(entries) != 1 {
+		return daemon.FileEntry{}, errors.New("dockerbackend: expected one stat record")
+	}
+	entries[0].Name = path.Base(p)
+	return entries[0], nil
+}
+
+func (b *Backend) statFromArchive(ctx context.Context, id, p string) (daemon.FileEntry, error) {
+	rc, err := b.api.ArchiveGet(ctx, id, p)
+	if err != nil {
+		return daemon.FileEntry{}, notFound(err, "%s", p)
+	}
+	defer func() { _ = rc.Close() }()
+	h, err := tar.NewReader(io.LimitReader(rc, daemon.MaxFileScanBytes)).Next()
+	if err != nil {
+		return daemon.FileEntry{}, fmt.Errorf("dockerbackend: stat archive: %w", err)
+	}
+	entry := entryFromHeader(path.Base(p), h)
+	return b.resolveOwnership(ctx, id, []daemon.FileEntry{entry})[0], nil
+}
 
 func (b *Backend) ListFiles(ctx context.Context, id, p, after string, limit int) ([]daemon.FileEntry, error) {
 	out, err := b.captureExec(ctx, id, "", []string{"/bin/sh", "-c", listDirScript, "list-files", p}, daemon.MaxFileScanBytes)
@@ -287,19 +341,30 @@ func (b *Backend) listFilesFromArchive(ctx context.Context, id, p, after string,
 		if !utf8.ValidString(name) {
 			return nil, &daemon.Error{Code: daemon.CodeInvalidRequest, Message: "directory contains a non-UTF-8 name"}
 		}
-		entry := daemon.FileEntry{
-			Name:          name,
-			Size:          hdr.Size,
-			Mode:          hdr.Mode & 0o7777,
-			Mtime:         hdr.ModTime.UTC(),
-			IsDir:         hdr.FileInfo().IsDir(),
-			Type:          fileType(hdr),
-			UID:           hdr.Uid,
-			GID:           hdr.Gid,
-			SymlinkTarget: symlinkTarget(hdr),
-		}
+		entry := entryFromHeader(name, hdr)
 		entries = daemon.SelectFilePage(entries, entry, after, limit)
 	}
+}
+
+func entryFromHeader(name string, hdr *tar.Header) daemon.FileEntry {
+	entry := daemon.FileEntry{
+		Name:          name,
+		Size:          hdr.Size,
+		Mode:          hdr.Mode & 0o7777,
+		Mtime:         hdr.ModTime.UTC(),
+		IsDir:         hdr.FileInfo().IsDir(),
+		Type:          fileType(hdr),
+		UID:           hdr.Uid,
+		GID:           hdr.Gid,
+		SymlinkTarget: symlinkTarget(hdr),
+	}
+	if entry.IsDir {
+		entry.Size = 0
+	}
+	if entry.Type == daemon.FileTypeSymlink {
+		entry.Size = int64(len(hdr.Linkname))
+	}
+	return entry
 }
 
 func fileType(hdr *tar.Header) daemon.FileType {

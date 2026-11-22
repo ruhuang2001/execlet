@@ -671,28 +671,29 @@ func (s *Sandboxes) ReadFile(ctx context.Context, sandboxID, p string) ([]byte, 
 	return data, nil
 }
 
-func (s *Sandboxes) WriteFile(ctx context.Context, sandboxID, p string, data []byte) error {
+func (s *Sandboxes) WriteFile(ctx context.Context, sandboxID, p string, data []byte) (FileEntry, error) {
 	if err := validateRegularFilePath(p); err != nil {
-		return err
+		return FileEntry{}, err
 	}
 	p = path.Clean(p)
 	if len(data) > MaxFileBytes {
-		return errorf(CodePayloadTooLarge, "file exceeds %d bytes", MaxFileBytes)
+		return FileEntry{}, errorf(CodePayloadTooLarge, "file exceeds %d bytes", MaxFileBytes)
 	}
 	ctx, cancel := context.WithTimeout(ctx, FileOperationTimeout)
 	defer cancel()
 	sb, err := s.prepareFiles(ctx, sandboxID)
 	if err != nil {
-		return err
+		return FileEntry{}, err
 	}
 	sb.mu.Lock()
 	container := sb.container
 	sb.mu.Unlock()
 
-	if err := s.backend.WriteFile(ctx, container, p, data); err != nil {
-		return backendError(err)
+	entry, err := s.backend.WriteFile(ctx, container, p, data)
+	if err != nil {
+		return FileEntry{}, backendError(err)
 	}
-	return nil
+	return entry, nil
 }
 
 func validateRegularFilePath(p string) error {

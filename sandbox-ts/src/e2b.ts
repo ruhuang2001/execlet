@@ -556,14 +556,11 @@ class Files {
     const payload = typeof data === 'string' ? new TextEncoder().encode(data) : new Uint8Array(data);
     if (payload.length > 10 << 20) throw new AdapterError('file exceeds 10 MiB', { code: 'payload_too_large' });
     return request(this.requestTimeout, async signal => {
-      await this.call(() => this.native.requireCapabilities(['files.list.v1'], { signal }), signal);
-      await this.call(() => this.native.writeFile(this.id, target, payload, { signal }), signal);
-      const split = target.lastIndexOf('/');
-      const parent = target.slice(0, split) || '/';
-      const name = target.slice(split + 1);
-      const found = (await this.listAll(parent, signal)).find(item => item.name === name);
-      if (!found || found.type !== FileType.FILE) throw new AdapterError('write metadata was not confirmed', { code: 'write_unconfirmed' });
-      return { name: found.name, path: found.path, type: found.type };
+      const written = await this.call(() => this.native.writeFile(this.id, target, payload, { signal }), signal);
+      if (written.type !== FileType.FILE && written.type !== FileType.SYMLINK) {
+        throw new AdapterError('unexpected type in write response', { code: 'incompatible_server' });
+      }
+      return { name: written.name, path: target, type: written.type as FileType };
     });
   }
   read(path: string, options?: { format?: 'text' }): Promise<string>;

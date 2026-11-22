@@ -97,16 +97,20 @@ func (b *Backend) ListFiles(_ context.Context, id, p, after string, limit int) (
 			continue
 		}
 		seen[child] = true
-		size, mode, kind := int64(len(data)), int64(0o644), daemon.FileTypeFile
+		entry := memRegularFile(child, int64(len(data)))
 		if directory {
-			size, mode, kind = 0, 0o755, daemon.FileTypeDir
+			entry.Size, entry.Mode, entry.Type, entry.IsDir = 0, 0o755, daemon.FileTypeDir, true
 		}
-		entries = daemon.SelectFilePage(entries, daemon.FileEntry{Name: child, Size: size, Mode: mode, Mtime: time.Unix(0, 0).UTC(), IsDir: directory, Type: kind}, after, limit)
+		entries = daemon.SelectFilePage(entries, entry, after, limit)
 	}
 	if !exists {
 		return nil, daemon.ErrNotFound
 	}
 	return entries, nil
+}
+
+func memRegularFile(name string, size int64) daemon.FileEntry {
+	return daemon.FileEntry{Name: name, Size: size, Mode: 0o644, Mtime: time.Unix(0, 0).UTC(), Type: daemon.FileTypeFile}
 }
 
 func memFileType(typeflag byte) daemon.FileType {

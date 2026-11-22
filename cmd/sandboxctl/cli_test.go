@@ -309,7 +309,7 @@ func TestRunAndFilesListPreserveMetadataAndTruncation(t *testing.T) {
 		t.Errorf("logs stderr missing truncation notice: %q", logsRes.stderr)
 	}
 
-	if err := h.be.WriteFile(context.Background(), h.be.IDs()[0], "/work/hello.txt", []byte("hi")); err != nil {
+	if _, err := h.be.WriteFile(context.Background(), h.be.IDs()[0], "/work/hello.txt", []byte("hi")); err != nil {
 		t.Fatal(err)
 	}
 	listed := h.invoke("files", "list", id, "/work")

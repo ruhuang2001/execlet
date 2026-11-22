@@ -23,6 +23,14 @@ Its [compatibility contract](sdk-typescript.md#compatibility-and-go-parity)
 includes exported types, codes, outcome discriminants, retry defaults and
 iterator cleanup. Wire additions must remain usable by existing consumers.
 
+## Unreleased breaking change
+
+`PUT /v1/sandboxes/{sandbox_id}/files` now returns HTTP 200 with a JSON
+`FileEntry`. Earlier releases returned HTTP 204 with an empty body. Update
+callers that check for 204. The Python and TypeScript SDK write methods and
+Go `WriteFileInfo` require the new response. Go `WriteFile` accepts both.
+Both E2B adapters now build `WriteInfo` directly from the response.
+
 ## Version numbers
 
 Release tags use `vMAJOR.MINOR.PATCH`.

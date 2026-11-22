@@ -1,11 +1,20 @@
 import { checkSignal, SandboxError } from './errors.js';
-import { sleep, Transport } from './http.js';
+import { decodeJSON, sleep, Transport } from './http.js';
 import { consume, streamEvents } from './stream.js';
 import type {
-  FileList, ListFilesOptions, ClientConfig, CompletedExecution, CreateSandboxRequest, Event, EventHandler,
+  FileEntry, FileList, ListFilesOptions, ClientConfig, CompletedExecution, CreateSandboxRequest, Event, EventHandler,
   ExecuteRequest, Execution, ExecutionOptions, ExecutionOutcome, RequestOptions, Sandbox, UpdateSandboxRequest,
   Capabilities, CommandAttachment, KillExecutionResponse, StreamExecutionOptions,
 } from './types.js';
+
+function validateFileEntry(entry: FileEntry): void {
+  if (!entry || typeof entry.name !== 'string' || !Number.isInteger(entry.size) || !Number.isInteger(entry.mode) ||
+      typeof entry.mtime !== 'string' || typeof entry.is_dir !== 'boolean' || typeof entry.type !== 'string' ||
+      !Number.isInteger(entry.uid) || !Number.isInteger(entry.gid) ||
+      [entry.owner, entry.group, entry.symlink_target].some(v => v !== undefined && typeof v !== 'string')) {
+    throw new SandboxError('decode', 'invalid file metadata');
+  }
+}
 
 function sandboxPath(id: string): string { return '/v1/sandboxes/' + encodeURIComponent(id); }
 function executionPath(sandboxID: string, executionID: string): string {
@@ -231,12 +240,7 @@ export class Client {
       throw new SandboxError('decode', 'invalid file list');
     }
     for (const entry of page.entries) {
-      if (!entry || typeof entry.name !== 'string' || !Number.isInteger(entry.size) || !Number.isInteger(entry.mode) ||
-          typeof entry.mtime !== 'string' || typeof entry.is_dir !== 'boolean' || typeof entry.type !== 'string' ||
-          !Number.isInteger(entry.uid) || !Number.isInteger(entry.gid) ||
-          [entry.owner, entry.group, entry.symlink_target].some(v => v !== undefined && typeof v !== 'string')) {
-        throw new SandboxError('decode', 'invalid file list entry');
-      }
+      validateFileEntry(entry);
     }
     return page;
   }
@@ -257,9 +261,12 @@ export class Client {
     return this.transport.request('GET', sandboxPath(sandboxID) + '/files?path=' + encodeURIComponent(path), true, options.signal);
   }
 
-  async writeFile(sandboxID: string, path: string, data: Uint8Array, options: RequestOptions = {}): Promise<void> {
-    await this.transport.request('PUT', sandboxPath(sandboxID) + '/files?path=' + encodeURIComponent(path), true,
+  async writeFile(sandboxID: string, path: string, data: Uint8Array, options: RequestOptions = {}): Promise<FileEntry> {
+    const bytes = await this.transport.request('PUT', sandboxPath(sandboxID) + '/files?path=' + encodeURIComponent(path), true,
       options.signal, new Uint8Array(data));
+    const written = decodeJSON<FileEntry>(bytes);
+    validateFileEntry(written);
+    return written;
   }
 
   private async recover(sandboxID: string, executionID: string | undefined, cause: unknown,

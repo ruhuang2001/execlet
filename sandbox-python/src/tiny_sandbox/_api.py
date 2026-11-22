@@ -14,7 +14,7 @@ from ._cancel import CancellationToken, _Cancellation
 from ._errors import Error
 from ._models import (
     Capabilities, CommandAttachment, CreateSandboxRequest, ExecuteRequest, Execution,
-    ExecutionKillResult, FileList, Sandbox, UpdateSandboxRequest,
+    ExecutionKillResult, FileEntry, FileList, Sandbox, UpdateSandboxRequest,
 )
 from ._transport import Transport
 
@@ -358,13 +358,14 @@ class SandboxAPI(Transport, ABC):
         data: bytes,
         *,
         cancel: CancellationToken | None = None,
-    ) -> None:
-        self._request(
+    ) -> FileEntry:
+        payload = self._json(
             "PUT",
             self._sandbox_path(sandbox_id) + "/files?" + urlencode({"path": path}),
             body=data,
             cancel=cancel,
         )
+        return FileEntry.from_dict(payload)
 
     @contextmanager
     def sandbox(

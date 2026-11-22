@@ -172,6 +172,19 @@ func TestCreatePullsMissingImage(t *testing.T) {
 	}
 }
 
+func TestCreatePullsMissingDigestImage(t *testing.T) {
+	f := newFakeDaemon(t)
+	digestRef := "ghcr.io/org/app@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	f.mu.Lock()
+	f.missingImages[digestRef] = true
+	f.mu.Unlock()
+
+	b := f.backend(t)
+	if _, err := b.Create(context.Background(), daemon.ContainerSpec{Image: digestRef, MemoryMB: 64}); err != nil {
+		t.Fatalf("create digest image: %v", err)
+	}
+}
+
 func TestCreateReportsPullFailure(t *testing.T) {
 	f := newFakeDaemon(t)
 	f.mu.Lock()

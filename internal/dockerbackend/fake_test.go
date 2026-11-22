@@ -162,7 +162,9 @@ func (f *fakeDaemon) pullImage(w http.ResponseWriter, r *http.Request) {
 	repository := r.URL.Query().Get("fromImage")
 	tag := r.URL.Query().Get("tag")
 	image := repository
-	if tag != "" && tag != "latest" {
+	if strings.Contains(tag, ":") {
+		image = repository + "@" + tag
+	} else if tag != "" && tag != "latest" {
 		image = repository + ":" + tag
 	}
 	if image == repository && tag == "latest" {

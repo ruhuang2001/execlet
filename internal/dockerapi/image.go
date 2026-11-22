@@ -44,9 +44,18 @@ func (c *Client) PullImage(ctx context.Context, image string) error {
 	return parsePullStream(resp.Body)
 }
 
-// splitImage separates an image reference into repository and tag, leaving the
-// repository's own "registry:port" colon alone.
+// splitImage separates an image reference into repository and tag or digest,
+// leaving the repository's own "registry:port" colon alone.
 func splitImage(image string) (repository, tag string) {
+	if strings.HasPrefix(image, "sha256:") {
+		return image, ""
+	}
+	if repo, digest, ok := strings.Cut(image, "@"); ok && digest != "" {
+		if i := strings.LastIndex(repo, ":"); i > strings.LastIndex(repo, "/") {
+			repo = repo[:i]
+		}
+		return repo, digest
+	}
 	// The tag separator is the last colon, and only counts when it appears
 	// after the last slash; otherwise it belongs to a registry host:port.
 	if i := strings.LastIndex(image, ":"); i > strings.LastIndex(image, "/") {

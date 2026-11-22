@@ -1,11 +1,12 @@
 package dockerapi
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+
+	"github.com/ruhuang2001/tiny-sandbox/internal/wirejson"
 )
 
 // StatusError is a non-2xx answer from the Engine API. Docker reports failures
@@ -30,7 +31,7 @@ func statusError(resp *http.Response) error {
 		Message string `json:"message"`
 	}
 	msg := string(body)
-	if json.Unmarshal(body, &payload) == nil && payload.Message != "" {
+	if wirejson.Unmarshal(body, &payload) == nil && payload.Message != "" {
 		msg = payload.Message
 	}
 	return &StatusError{Status: resp.StatusCode, Message: msg}

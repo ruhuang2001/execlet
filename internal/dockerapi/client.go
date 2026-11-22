@@ -10,7 +10,6 @@ package dockerapi
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -19,6 +18,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/ruhuang2001/tiny-sandbox/internal/wirejson"
 )
 
 // maxErrorBody bounds how much of an error response is read into a message.
@@ -182,7 +183,7 @@ func (c *Client) ContainerList(ctx context.Context, all bool, filters map[string
 		q.Set("all", "1")
 	}
 	if len(filters) > 0 {
-		raw, err := json.Marshal(filters)
+		raw, err := wirejson.Marshal(filters)
 		if err != nil {
 			return nil, fmt.Errorf("dockerapi: encode filters: %w", err)
 		}
@@ -226,7 +227,7 @@ func (c *Client) ExecCreate(ctx context.Context, containerID string, cfg ExecCon
 // caller's context: pass a context that stays valid while the command runs.
 func (c *Client) ExecStart(ctx context.Context, execID string) (io.ReadCloser, error) {
 	q := url.Values{"detach": {"false"}}
-	body, err := json.Marshal(execStart{Detach: false, Tty: false})
+	body, err := wirejson.Marshal(execStart{Detach: false, Tty: false})
 	if err != nil {
 		return nil, fmt.Errorf("dockerapi: encode exec start: %w", err)
 	}
@@ -353,14 +354,14 @@ func (c *Client) getJSONQuery(ctx context.Context, p string, q url.Values, out a
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+	if err := wirejson.Read(resp.Body, out); err != nil {
 		return fmt.Errorf("dockerapi: decode %s: %w", p, err)
 	}
 	return nil
 }
 
 func (c *Client) postJSON(ctx context.Context, p string, q url.Values, in, out any) error {
-	body, err := json.Marshal(in)
+	body, err := wirejson.Marshal(in)
 	if err != nil {
 		return fmt.Errorf("dockerapi: encode %s: %w", p, err)
 	}
@@ -378,7 +379,7 @@ func (c *Client) postJSON(ctx context.Context, p string, q url.Values, in, out a
 		_, _ = io.Copy(io.Discard, resp.Body)
 		return nil
 	}
-	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+	if err := wirejson.Read(resp.Body, out); err != nil {
 		return fmt.Errorf("dockerapi: decode %s: %w", p, err)
 	}
 	return nil

@@ -3,7 +3,6 @@ package sandbox
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +10,8 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	json "github.com/ruhuang2001/tiny-sandbox/internal/wirejson"
 )
 
 // Retry policy from docs/sdk.md:

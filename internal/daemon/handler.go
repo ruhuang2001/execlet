@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/subtle"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ruhuang2001/tiny-sandbox/internal/wirejson"
 )
 
 // Handler serves the HTTP contract in docs/api.md over a Sandboxes store. It
@@ -468,7 +469,7 @@ func renderEvent(ev Event) ([]byte, error) {
 	default:
 		payload = ev.Data
 	}
-	data, err := json.Marshal(payload)
+	data, err := wirejson.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("daemon: encode %s event: %w", ev.Type, err)
 	}
@@ -484,20 +485,18 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	if _, execution := v.(*ExecuteRequest); execution {
 		limit = MaxExecutionRequestBodyBytes
 	}
-	body := http.MaxBytesReader(w, r.Body, limit)
-	dec := json.NewDecoder(body)
-	if err := dec.Decode(v); err != nil {
-		if errors.Is(err, io.EOF) {
-			// An empty body is allowed for requests whose fields are all
-			// optional; the destination keeps its zero values.
-			return true
-		}
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
+	if err != nil {
+		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 			writeError(w, http.StatusRequestEntityTooLarge, string(CodePayloadTooLarge),
 				fmt.Sprintf("request body exceeds %d bytes", limit))
 			return false
 		}
+		writeError(w, http.StatusBadRequest, string(CodeInvalidRequest), "malformed JSON body")
+		return false
+	}
+	// Preserve optional empty bodies, but never accept a second JSON value.
+	if len(bytes.Trim(body, " \t\r\n")) != 0 && wirejson.Unmarshal(body, v) != nil {
 		writeError(w, http.StatusBadRequest, string(CodeInvalidRequest), "malformed JSON body")
 		return false
 	}

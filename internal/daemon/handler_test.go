@@ -498,6 +498,19 @@ func TestHandlerShutdownEndsStreams(t *testing.T) {
 	}
 }
 
+func TestHandlerRejectsTrailingJSON(t *testing.T) {
+	h := newHandlerHarness(t)
+	for _, body := range []string{
+		`{"image":"alpine:3.20"} trailing`,
+		`{"image":"alpine:3.20"}{"image":"python:3.12"}`,
+	} {
+		resp := h.do(http.MethodPost, "/v1/sandboxes", []byte(body), map[string]string{"Content-Type": "application/json"})
+		if resp.Status != http.StatusBadRequest || h.errorCode(resp) != "invalid_request" {
+			t.Fatalf("body %q -> %d %s, want 400 invalid_request", body, resp.Status, resp.Body)
+		}
+	}
+}
+
 // postJSON POSTs body and decodes the response into T.
 func postJSON[T any](t *testing.T, srv *httptest.Server, path, body string) T {
 	t.Helper()

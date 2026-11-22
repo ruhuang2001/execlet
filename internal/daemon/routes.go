@@ -2,9 +2,10 @@ package daemon
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"time"
+
+	"github.com/ruhuang2001/tiny-sandbox/internal/wirejson"
 )
 
 // Operation is one endpoint of the HTTP contract: a method and an
@@ -96,7 +97,9 @@ func (h *Handler) handleReady(w http.ResponseWriter, r *http.Request) {
 func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
+	if data, err := wirejson.Marshal(body); err == nil {
+		_, _ = w.Write(append(data, '\n'))
+	}
 }
 
 func writeError(w http.ResponseWriter, status int, code, message string) {

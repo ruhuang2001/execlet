@@ -1,9 +1,10 @@
 package sandbox
 
 import (
-	"encoding/json"
 	"fmt"
 	"time"
+
+	json "github.com/ruhuang2001/tiny-sandbox/internal/wirejson"
 )
 
 // Time is an RFC 3339 timestamp as the API sends it. The server always emits

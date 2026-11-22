@@ -3,7 +3,6 @@ package sandbox
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	json "github.com/ruhuang2001/tiny-sandbox/internal/wirejson"
 )
 
 // StreamExecution connects to the event stream and calls onEvent for stdout,

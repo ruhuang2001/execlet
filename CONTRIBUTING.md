@@ -97,6 +97,11 @@ for public behavior. Update all affected surfaces together. Keep shared limits
 and lifecycle semantics in the HTTP contract; SDK guides should explain their
 own signatures, return values and recovery differences.
 
+Use `internal/wirejson` for the existing HTTP, SSE and Docker JSON contracts:
+it runs `encoding/json/v2` with v1 compatibility options so migration does not
+change nulls, omitted values, escaping or field matching. Use the v2 defaults
+for strict internal formats such as the policy and journal, not the wire options.
+
 Document implemented behavior, including failure and compatibility limits.
 Keep unimplemented ideas in [future directions](docs/future.md). Validate examples
 and links, and report only checks that actually ran. Before merging, test against

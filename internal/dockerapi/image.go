@@ -3,13 +3,14 @@ package dockerapi
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/ruhuang2001/tiny-sandbox/internal/wirejson"
 )
 
 // PullImage pulls image from the registry and returns once it is available
@@ -69,7 +70,7 @@ func parsePullStream(r io.Reader) error {
 			Error string `json:"error"`
 		}
 		// A line that is not JSON is treated as progress text, not an error.
-		if err := json.Unmarshal([]byte(line), &payload); err != nil {
+		if err := wirejson.Unmarshal([]byte(line), &payload); err != nil {
 			continue
 		}
 		if payload.Error != "" {

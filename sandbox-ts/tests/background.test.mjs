@@ -83,15 +83,16 @@ function fixture(t, route = () => undefined) {
 const commandCalls = calls => calls.filter(c => c.path.includes('/executions') || c.path.includes('/commands/'));
 const signals = calls => calls.filter(c => c.path.endsWith('/cancel') || c.path.endsWith('/kill'));
 
-test('E2B write leaves existing data intact without list support', async t => {
-  let contents = 'original';
-  const { create } = fixture(t, c => {
+test('E2B writes return observed symlink metadata without listing', async t => {
+  const { calls, create } = fixture(t, c => {
     if (c.path === '/v1/capabilities') return json({ capabilities: [] });
-    if (c.method === 'PUT') { contents = 'overwritten'; return new Response(null, { status: 204 }); }
+    if (c.method === 'PUT') return json({ name: 'file', type: 'symlink', size: 4, mode: 0o777,
+      mtime: '2026-11-18T00:00:00Z', is_dir: false, uid: 0, gid: 0, symlink_target: 'dest' });
   });
   const sb = await create();
-  assert.equal((await rejected(sb.files.write('/work/file', 'replacement'))).code, 'incompatible_server');
-  assert.equal(contents, 'original');
+  calls.length = 0;
+  assert.deepEqual(await sb.files.write('/work/file', 'replacement'), {name: 'file', path: '/work/file', type: 'symlink'});
+  assert.deepEqual(calls.map(c => c.method), ['PUT']);
 });
 
 test('native additive fields fail before mutation on old servers; basic execution still works', async t => {

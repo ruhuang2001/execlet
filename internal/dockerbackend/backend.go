@@ -376,30 +376,31 @@ func (b *Backend) ReadFile(ctx context.Context, containerID, path string) ([]byt
 	return data, nil
 }
 
-func (b *Backend) WriteFile(ctx context.Context, containerID, path string, data []byte) error {
+func (b *Backend) WriteFile(ctx context.Context, containerID, path string, data []byte) (daemon.FileEntry, error) {
 	if !strings.HasPrefix(path, "/") {
-		return fmt.Errorf("dockerbackend: path %q must be absolute", path)
+		return daemon.FileEntry{}, fmt.Errorf("dockerbackend: path %q must be absolute", path)
 	}
 	name := strings.TrimPrefix(path, "/")
 	uid, gid, dirs := b.writeOwnership(ctx, containerID, name)
 	tarBody, err := dockerapi.BuildOwnedFileTar(name, data, uid, gid, dirs)
 	if err != nil {
-		return err
+		return daemon.FileEntry{}, err
 	}
 	if err := b.api.ArchivePut(ctx, containerID, "/", tarBody); err != nil {
-		return notFound(err, "%s", path)
+		return daemon.FileEntry{}, notFound(err, "%s", path)
 	}
-	out, err := b.captureAs(ctx, containerID, "0", []string{"/bin/sh", "-c", writeVerifyScript, "write-verify", path})
+	entry, err := b.statWrittenFile(ctx, containerID, path)
 	if err != nil {
-		return &daemon.Error{Code: daemon.CodeBackendError, Message: "cannot confirm the write to " + path, Err: err}
+		if errors.Is(err, daemon.ErrNotFound) {
+			return daemon.FileEntry{}, &daemon.Error{Code: daemon.CodeInvalidRequest, Message: "destination missing after write: " + path}
+		}
+		return daemon.FileEntry{}, err
 	}
-	if string(out) != "ok" {
-		return &daemon.Error{Code: daemon.CodeInvalidRequest, Message: "destination cannot hold a file: " + path}
+	if entry.Type != daemon.FileTypeFile && entry.Type != daemon.FileTypeSymlink {
+		return daemon.FileEntry{}, &daemon.Error{Code: daemon.CodeInvalidRequest, Message: "destination cannot hold a file: " + path}
 	}
-	return nil
+	return entry, nil
 }
-
-const writeVerifyScript = `if [ -f "$1" ]; then printf ok; elif [ -e "$1" ]; then printf notfile; else printf missing; fi`
 
 func (b *Backend) writeOwnership(ctx context.Context, containerID, name string) (uid, gid int, dirs []string) {
 	out, err := b.capture(ctx, containerID, []string{"/bin/sh", "-c", writeOwnershipScript, "write-owner", name})

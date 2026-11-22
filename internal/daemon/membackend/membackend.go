@@ -252,27 +252,27 @@ func (b *Backend) ReadFile(_ context.Context, id, p string) ([]byte, error) {
 	return append([]byte(nil), data...), nil
 }
 
-func (b *Backend) WriteFile(_ context.Context, id, p string, data []byte) error {
+func (b *Backend) WriteFile(_ context.Context, id, p string, data []byte) (daemon.FileEntry, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	c, err := b.get(id)
 	if err != nil {
-		return err
+		return daemon.FileEntry{}, err
 	}
 	p = path.Clean(p)
 	if h, ok := c.archiveHeaders[p]; ok && h.Typeflag == tar.TypeDir {
-		return &daemon.Error{Code: daemon.CodeInvalidRequest, Message: "destination cannot hold a file: " + p}
+		return daemon.FileEntry{}, &daemon.Error{Code: daemon.CodeInvalidRequest, Message: "destination cannot hold a file: " + p}
 	}
 	prefix := strings.TrimSuffix(p, "/") + "/"
 	for name := range c.files {
 		if strings.HasPrefix(name, prefix) {
-			return &daemon.Error{Code: daemon.CodeInvalidRequest, Message: "destination cannot hold a file: " + p}
+			return daemon.FileEntry{}, &daemon.Error{Code: daemon.CodeInvalidRequest, Message: "destination cannot hold a file: " + p}
 		}
 	}
 	c.detachHardlinks(p)
 	c.files[p] = append([]byte(nil), data...)
 	delete(c.archiveHeaders, p)
-	return nil
+	return memRegularFile(path.Base(p), int64(len(data))), nil
 }
 
 func (b *Backend) get(id string) (*container, error) {

@@ -86,12 +86,28 @@ func (c *Client) ReadFile(ctx context.Context, sandboxID, path string) ([]byte, 
 }
 
 func (c *Client) WriteFile(ctx context.Context, sandboxID, path string, data []byte) error {
-	_, err := c.do(ctx, request{
+	_, err := c.putFile(ctx, sandboxID, path, data)
+	return err
+}
+
+func (c *Client) WriteFileInfo(ctx context.Context, sandboxID, path string, data []byte) (*FileEntry, error) {
+	resp, err := c.putFile(ctx, sandboxID, path, data)
+	if err != nil {
+		return nil, err
+	}
+	var entry FileEntry
+	if err := decode(resp, &entry); err != nil {
+		return nil, err
+	}
+	return &entry, nil
+}
+
+func (c *Client) putFile(ctx context.Context, sandboxID, path string, data []byte) (*response, error) {
+	return c.do(ctx, request{
 		method:     http.MethodPut,
 		path:       "/v1/sandboxes/" + url.PathEscape(sandboxID) + "/files",
 		query:      "?path=" + url.QueryEscape(path),
 		raw:        data,
 		repeatable: true,
 	})
-	return err
 }

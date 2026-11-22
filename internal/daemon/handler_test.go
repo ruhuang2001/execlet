@@ -384,7 +384,7 @@ func TestHandlerFiles(t *testing.T) {
 	base := "/v1/sandboxes/" + sb.ID + "/files?path=/work/out.txt"
 
 	put := h.do(http.MethodPut, base, []byte("file contents"), nil)
-	if put.Status != http.StatusNoContent {
+	if put.Status != http.StatusOK {
 		t.Fatalf("put = %d", put.Status)
 	}
 

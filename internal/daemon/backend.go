@@ -90,5 +90,5 @@ type Backend interface {
 	WriteArchive(ctx context.Context, containerID, path string, archive *filearchive.Archive) error
 	ListFiles(ctx context.Context, containerID, path, after string, limit int) ([]FileEntry, error)
 	ReadFile(ctx context.Context, containerID, path string) ([]byte, error)
-	WriteFile(ctx context.Context, containerID, path string, data []byte) error
+	WriteFile(ctx context.Context, containerID, path string, data []byte) (FileEntry, error)
 }

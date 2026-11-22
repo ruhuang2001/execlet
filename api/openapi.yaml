@@ -633,8 +633,12 @@ paths:
               type: string
               format: binary
       responses:
-        '204':
-          description: The file was written.
+        '200':
+          description: Metadata for the destination observed after the write.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileEntry'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':

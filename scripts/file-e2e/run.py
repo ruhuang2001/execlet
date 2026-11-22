@@ -75,6 +75,15 @@ try:
         if name=='cli': assert len(payload['entries'])==2 and payload['next_cursor']
     assert client.exec(sb.id,['sh','-c','mkdir /wide; i=0; while [ "$i" -lt 10001 ]; do touch /wide/$i; i=$((i+1)); done']).exit_code==0
     raw(sb.id,'path=/wide&limit=1',413)
+    wide_info = E2BSandbox(sb, client, 30.0).files.write('/wide/python.txt', 'ok')
+    assert (wide_info.path, wide_info.name, wide_info.type.value) == ('/wide/python.txt', 'python.txt', 'file')
+    ts = subprocess.run(['node','scripts/file-e2e/typescript.mjs',sb.id,'wide'],capture_output=True,text=True,timeout=40,check=True)
+    assert client.exec(sb.id,['sh','-c','printf original >/wide/target; ln -s target /wide/link']).exit_code == 0
+    replacement = client.write_file(sb.id, '/wide/link', b'updated')
+    assert (replacement.name,replacement.type,replacement.size) == ('link','file',7)
+    assert client.read_file(sb.id, '/wide/target') == b'original'
+    assert client.read_file(sb.id, '/wide/link') == b'updated'
+    (out/'write-metadata.json').write_text(json.dumps({'initial_siblings':10001,'python_e2b':wide_info.path,'typescript_e2b':json.loads(ts.stdout.splitlines()[-1]),'replaced_symlink':replacement.type,'target_content':'original'}, indent=2))
     assert client.exec(sb.id,['sh','-c','mkdir -p /large/nested; dd if=/dev/zero of=/large/big bs=1048576 count=65 2>/dev/null; dd if=/dev/zero of=/large/nested/deep bs=1048576 count=65 2>/dev/null']).exit_code==0
     large_listing = raw(sb.id,'path=/large&limit=10',200)
     assert {e['name']: e['size'] for e in large_listing['entries']} == {'big': 65 << 20, 'nested': 0}, large_listing

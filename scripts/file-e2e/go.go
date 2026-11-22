@@ -40,7 +40,12 @@ func main() {
 	if !slices.Equal(names, []string{".hidden", "a space", "empty", "link", "nested", "z", "é"}) {
 		panic(fmt.Sprint(names))
 	}
-	data, err := json.Marshal(map[string]any{"sdk": "go", "names": names})
+	entry, err := c.WriteFileInfo(context.Background(), os.Args[1], "/go/sdk.bin", []byte{0, 255})
+	must(err)
+	if entry.Name != "sdk.bin" || entry.Size != 2 || entry.Type != sandbox.FileTypeFile {
+		panic(fmt.Sprintf("write metadata: %+v", entry))
+	}
+	data, err := json.Marshal(map[string]any{"sdk": "go", "names": names, "written": entry})
 	must(err)
 	fmt.Println(string(data))
 }

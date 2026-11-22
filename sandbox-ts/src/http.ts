@@ -104,7 +104,11 @@ export class Transport {
       catch (cause) { throw new SandboxError('invalid_request', 'sandbox: cannot encode request', { cause }); }
     }
     const bytes = await this.request(method, path, repeatable, signal, encoded);
-    try { return JSON.parse(new TextDecoder().decode(bytes)) as T; }
-    catch (cause) { throw new SandboxError('decode', 'sandbox: invalid JSON response', { cause }); }
+    return decodeJSON<T>(bytes);
   }
+}
+
+export function decodeJSON<T>(bytes: Uint8Array): T {
+  try { return JSON.parse(new TextDecoder().decode(bytes)) as T; }
+  catch (cause) { throw new SandboxError('decode', 'sandbox: invalid JSON response', { cause }); }
 }

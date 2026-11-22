@@ -120,6 +120,22 @@ func TestSpecFieldsMatchRequestAndSandboxTypes(t *testing.T) {
 	}
 }
 
+func TestWriteFileResponseSchema(t *testing.T) {
+	type media struct{ Schema specSchemaRefOrPart }
+	type response struct{ Content map[string]media }
+	type operation struct{ Responses map[string]response }
+	var doc struct {
+		Paths map[string]struct{ Put operation }
+	}
+	if err := yaml.Unmarshal(api.Spec(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	responses := doc.Paths["/v1/sandboxes/{sandbox_id}/files"].Put.Responses
+	if _, old := responses["204"]; old || responses["200"].Content["application/json"].Schema.Ref != "#/components/schemas/FileEntry" {
+		t.Fatalf("unexpected writeFile response contract: %+v", responses)
+	}
+}
+
 func TestSpecMatchesAPIMD(t *testing.T) {
 	want := operationsInAPIMD(t)
 	got, err := api.Operations()

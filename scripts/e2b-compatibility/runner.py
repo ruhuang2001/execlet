@@ -249,9 +249,9 @@ def run_case(provider, out, env, language, case, stopped):
                '--case',case,'--out',str(directory), '--profile', PROFILE]
     row = {'status':'failed'}
     with (directory / 'runner.log').open('w') as log:
+        deadline = time.monotonic() + CASES[case]['budget'] + 25
         child = subprocess.Popen(command, env=childenv, stdout=log, stderr=log, start_new_session=True)
         try:
-            deadline = time.monotonic() + CASES[case]['budget'] + 25
             while child.poll() is None:
                 if stopped.wait(.2):
                     raise InterruptedError('case interrupted')

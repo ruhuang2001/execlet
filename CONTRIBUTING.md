@@ -81,7 +81,7 @@ acceptance adds the policy/recovery paths through an instrumented daemon. Set
 percentage shown by `go tool cover -func`. Do not compare those metrics as if
 they were interchangeable.
 
-The coverage job consumes artifacts from the unit, operations and primary E2E jobs. These producers can run independently.
+The `coverage` job consumes profiles from `test`, `e2e` and the operations suite in `e2b-compatibility`. These three jobs run independently.
 
 The [CI workflow](.github/workflows/ci.yml) defines `lint`, `test`, `build`,
 `e2e`, `files-e2e`, `stdin-e2e`, `typescript`, `coverage`, `e2b-compatibility`, and the two-version `python-sdk`

@@ -123,6 +123,7 @@ transactional once extraction begins. See [deployment and recovery](docs/operati
 - [E2B compatibility subset and acceptance](docs/e2b-compatibility.md)
 - [Background-command contract](docs/e2b-background-commands.md)
 - [Deployment policy, recovery and metrics](docs/operations.md)
+- [End-to-end acceptance and measured startup times](docs/testing/four-directions.md)
 - [HTTP API reference](docs/api.md)
 - [Versioning and releases](docs/versioning.md)
 - [Contributing](CONTRIBUTING.md)

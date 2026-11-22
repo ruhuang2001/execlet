@@ -58,6 +58,8 @@ Creation is never automatically retried; see the respective SDK contracts.
 | `nano_cpus` | int | CPU limit in units of 1e-9 CPUs, default `0` (unlimited) |
 | `network` | string | `bridge`, `none`, or administrator-configured `filtered` |
 | `runtime` | string | Selected administrator-allowed runtime when configured |
+| `agent_mode` | string | `guest` after a successful handshake, `legacy` when disabled, or `unavailable` on fallback |
+| `protected` | boolean | A working root guest agent protects its control directory from the non-root workload |
 | `timeout_seconds` | int | lifetime timeout, default 300, `0` disables |
 | `timeout_action` | string | `kill` (default) or `pause` |
 | `idle_timeout_seconds` | int | default `0` (disabled) |

@@ -28,9 +28,22 @@ main() {
   trap 'exit 130' INT
   trap 'exit 143' TERM
 
+  archive="tiny-sandbox_${tag#v}_${platform}_${arch}.tar.gz"
   echo "Downloading tiny-sandbox $tag ($platform/$arch)..."
-  curl -fL --retry 3 "$repo/releases/download/$tag/tiny-sandbox_${tag#v}_${platform}_${arch}.tar.gz" -o "$work/release.tar.gz"
-  tar -xzf "$work/release.tar.gz" -C "$work" sandboxd sandboxctl
+  curl -fL --retry 3 "$repo/releases/download/$tag/$archive" -o "$work/$archive"
+  curl -fsSL --retry 3 "$repo/releases/download/$tag/checksums.txt" -o "$work/checksums.txt"
+  expected=$(awk -v name="$archive" '$2 == name { print $1 }' "$work/checksums.txt")
+  [ -n "$expected" ] || { echo "Checksum not found for $archive." >&2; exit 1; }
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual=$(sha256sum "$work/$archive" | awk '{ print $1 }')
+  elif command -v shasum >/dev/null 2>&1; then
+    actual=$(shasum -a 256 "$work/$archive" | awk '{ print $1 }')
+  else
+    echo "Required checksum tool not found: sha256sum or shasum" >&2
+    exit 1
+  fi
+  [ "$actual" = "$expected" ] || { echo "Checksum mismatch for $archive." >&2; exit 1; }
+  tar -xzf "$work/$archive" -C "$work" sandboxd sandboxctl
   mkdir -p "$destination"
   install -m 755 "$work/sandboxd" "$destination/sandboxd"
   install -m 755 "$work/sandboxctl" "$destination/sandboxctl"

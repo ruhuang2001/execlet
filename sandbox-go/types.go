@@ -37,7 +37,9 @@ const (
 )
 
 type Sandbox struct {
+	AgentMode               string      `json:"agent_mode"`
 	Protected               bool        `json:"protected"`
+	Runtime                 string      `json:"runtime,omitempty"`
 	MaxConcurrentExecutions int         `json:"max_concurrent_executions"`
 	ID                      string      `json:"id"`
 	State                   State       `json:"state"`
@@ -72,11 +74,13 @@ type Execution struct {
 }
 
 const (
-	NetworkBridge = "bridge"
-	NetworkNone   = "none"
+	NetworkFiltered = "filtered"
+	NetworkBridge   = "bridge"
+	NetworkNone     = "none"
 )
 
 type CreateSandboxRequest struct {
+	Runtime                 string            `json:"runtime,omitempty"`
 	MaxConcurrentExecutions *int              `json:"max_concurrent_executions,omitempty"`
 	Image                   *string           `json:"image,omitempty"`
 	MemoryMB                *int              `json:"memory_mb,omitempty"`

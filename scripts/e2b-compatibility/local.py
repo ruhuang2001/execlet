@@ -109,8 +109,11 @@ class DockerFault:
                         name, _, value = line.partition(b':')
                         if name.strip().lower() == b'content-length':
                             length = int(value.strip())
-                    head = b'\r\n'.join(x for x in head.split(b'\r\n') if not x.lower().startswith(b'connection:'))
-                    upstream.sendall(head + b'\r\nConnection: close\r\n\r\n' + body)
+                    upgrade = any(h.lower().startswith(b'upgrade:') for h in head.split(b'\r\n'))
+                    if not upgrade:
+                        head = b'\r\n'.join(x for x in head.split(b'\r\n') if not x.lower().startswith(b'connection:'))
+                        head += b'\r\nConnection: close'
+                    upstream.sendall(head + b'\r\n\r\n' + body)
                     if capture_start or drop_create:
                         response = http.client.HTTPResponse(upstream)
                         response.begin()
@@ -144,7 +147,7 @@ class DockerFault:
                             outer.release_start.wait(12)
                         return
                     while True:
-                        reads = [upstream] if length is None or len(body) >= length else [upstream, self.request]
+                        reads = [upstream, self.request] if upgrade or (length is not None and len(body) < length) else [upstream]
                         ready, _, _ = select.select(reads, [], [], 1)
                         if not ready:
                             continue
@@ -154,7 +157,12 @@ class DockerFault:
                                 if not chunk:
                                     return
                                 if peer is self.request:
-                                    body += chunk
+                                    if upgrade and outer.fail_exec and chunk.startswith(b'K'):
+                                        with outer.lock:
+                                            outer.failed_execs.append('guest signal denied on ' + path)
+                                        return
+                                    if not upgrade:
+                                        body += chunk
                                 (upstream if peer is self.request else self.request).sendall(chunk)
                             except (BrokenPipeError, ConnectionResetError):
                                 return

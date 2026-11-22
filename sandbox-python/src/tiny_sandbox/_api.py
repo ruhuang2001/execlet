@@ -143,6 +143,8 @@ class SandboxAPI(Transport, ABC):
         """Create a sandbox once; creation is never automatically retried."""
         payload = (request if request is not None else CreateSandboxRequest()).to_dict()
         required = []
+        if payload.get("runtime"):
+            required.append("sandbox.runtime.v1")
         if payload.get("env"):
             required.append("execution.env-cwd.v1")
         if payload.get("max_concurrent_executions") is not None:

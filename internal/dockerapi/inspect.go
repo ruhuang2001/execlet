@@ -4,6 +4,7 @@ type ContainerInspect struct {
 	Config struct {
 		Labels map[string]string `json:"Labels"`
 	} `json:"Config"`
+	Image      string         `json:"Image"`
 	ID         string         `json:"Id"`
 	Name       string         `json:"Name"`
 	State      ContainerState `json:"State"`

@@ -62,8 +62,9 @@ type Action string
 type NetworkMode string
 
 const (
-	NetworkBridge NetworkMode = "bridge"
-	NetworkNone   NetworkMode = "none"
+	NetworkBridge   NetworkMode = "bridge"
+	NetworkNone     NetworkMode = "none"
+	NetworkFiltered NetworkMode = "filtered"
 )
 
 const (
@@ -90,6 +91,9 @@ const (
 )
 
 type Sandbox struct {
+	AgentMode               string      `json:"agent_mode"`
+	Protected               bool        `json:"protected"`
+	Runtime                 string      `json:"runtime,omitempty"`
 	MaxConcurrentExecutions int         `json:"max_concurrent_executions"`
 	ID                      string      `json:"id"`
 	State                   State       `json:"state"`
@@ -154,6 +158,7 @@ func (e Execution) Summary() ExecutionSummary {
 }
 
 type CreateRequest struct {
+	Runtime                 string            `json:"runtime,omitempty"`
 	MaxConcurrentExecutions *int              `json:"max_concurrent_executions,omitempty"`
 	Image                   *string           `json:"image,omitempty"`
 	MemoryMB                *int              `json:"memory_mb,omitempty"`
@@ -209,6 +214,7 @@ func mergedEnv(base, override map[string]string) []string {
 }
 
 type sandboxOptions struct {
+	runtime                 string
 	maxConcurrentExecutions int
 	image                   string
 	memoryMB                int
@@ -224,6 +230,7 @@ type sandboxOptions struct {
 
 func (r CreateRequest) resolve() (sandboxOptions, error) {
 	opts := sandboxOptions{
+		runtime:                 r.Runtime,
 		maxConcurrentExecutions: 1,
 		image:                   DefaultImage,
 		memoryMB:                DefaultMemoryMB,
@@ -261,10 +268,10 @@ func (r CreateRequest) resolve() (sandboxOptions, error) {
 	}
 	if r.Network != nil {
 		switch *r.Network {
-		case NetworkBridge, NetworkNone:
+		case NetworkBridge, NetworkNone, NetworkFiltered:
 			opts.network = *r.Network
 		default:
-			return sandboxOptions{}, errorf(CodeInvalidRequest, "network must be %q or %q", NetworkBridge, NetworkNone)
+			return sandboxOptions{}, errorf(CodeInvalidRequest, "network must be bridge, none or filtered")
 		}
 	}
 	if r.MemoryMB != nil {

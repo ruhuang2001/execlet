@@ -31,7 +31,7 @@ func (s *Sandboxes) backgroundCommands() bool {
 }
 
 func (h *Handler) capabilities(w http.ResponseWriter, _ *http.Request) {
-	flags := []string{"execution.env-cwd.v1", "files.archive.v1", "files.list.v1", "execution.stdin.v1", "execution.concurrent.v1"}
+	flags := []string{"execution.env-cwd.v1", "files.archive.v1", "files.list.v1", "execution.stdin.v1", "execution.concurrent.v1", "sandbox.runtime.v1"}
 	if h.store.backgroundCommands() {
 		flags = append(flags, "e2b.background.v1")
 	}

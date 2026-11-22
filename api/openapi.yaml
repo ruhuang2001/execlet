@@ -22,6 +22,69 @@ tags:
   - name: executions
   - name: files
 paths:
+  /v1/sandboxes/{sandbox_id}/terminals:
+    parameters:
+      - $ref: '#/components/parameters/SandboxID'
+    post:
+      operationId: createTerminal
+      requestBody:
+        content:
+          application/json:
+            schema: {type: object, properties: {rows: {type: integer, minimum: 1, maximum: 65535}, cols: {type: integer, minimum: 1, maximum: 65535}, cwd: {type: string}, command: {type: array, items: {type: string}}}}
+      responses:
+        '201':
+          description: Created shell backed by a persistent PTY
+          content:
+            application/json:
+              schema: {type: object, required: [terminal_id], properties: {terminal_id: {type: string}}}
+  /v1/sandboxes/{sandbox_id}/terminals/{terminal_id}/input:
+    parameters:
+      - $ref: '#/components/parameters/SandboxID'
+      - {in: path, name: terminal_id, required: true, schema: {type: string}}
+    post:
+      operationId: inputTerminal
+      requestBody:
+        content:
+          application/octet-stream:
+            schema: {type: string, format: binary, maxLength: 32768}
+      responses:
+        '204':
+          description: Input accepted
+  /v1/sandboxes/{sandbox_id}/terminals/{terminal_id}/resize:
+    parameters:
+      - $ref: '#/components/parameters/SandboxID'
+      - {in: path, name: terminal_id, required: true, schema: {type: string}}
+    post:
+      operationId: resizeTerminal
+      requestBody:
+        content:
+          application/json:
+            schema: {type: object, required: [rows, cols], properties: {rows: {type: integer, minimum: 1, maximum: 65535}, cols: {type: integer, minimum: 1, maximum: 65535}}}
+      responses:
+        '204':
+          description: Window resized
+  /v1/sandboxes/{sandbox_id}/terminals/{terminal_id}/events:
+    parameters:
+      - $ref: '#/components/parameters/SandboxID'
+      - {in: path, name: terminal_id, required: true, schema: {type: string}}
+      - {in: header, name: Last-Event-ID, schema: {type: integer, minimum: 0}}
+    get:
+      operationId: streamTerminal
+      responses:
+        '200':
+          description: Base64-encoded bytes with a byte offset as the event ID
+          content:
+            text/event-stream:
+              schema: {type: string}
+  /v1/sandboxes/{sandbox_id}/terminals/{terminal_id}:
+    parameters:
+      - $ref: '#/components/parameters/SandboxID'
+      - {in: path, name: terminal_id, required: true, schema: {type: string}}
+    delete:
+      operationId: closeTerminal
+      responses:
+        '204':
+          description: Session closed
   /metrics:
     get:
       operationId: getMetrics
@@ -657,6 +720,36 @@ paths:
           $ref: '#/components/responses/BackendError'
         '503':
           $ref: '#/components/responses/Unavailable'
+  /v1/sandboxes/{sandbox_id}/files/stat:
+    parameters:
+      - $ref: '#/components/parameters/SandboxID'
+      - $ref: '#/components/parameters/FilePath'
+    get:
+      tags: [files]
+      operationId: statFile
+      summary: Read file metadata without following the final symlink
+      responses:
+        '200':
+          description: File metadata.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileEntry'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '502':
+          $ref: '#/components/responses/BackendError'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+
   /v1/sandboxes/{sandbox_id}/files/list:
     parameters:
       - $ref: '#/components/parameters/SandboxID'
@@ -964,9 +1057,11 @@ components:
         Every field is optional. Unknown fields are ignored so a newer client
         can talk to an older server.
       properties:
+        runtime: {type: string, enum: [runc, runsc], description: Administrator-allowed Docker runtime.}
         image:
           type: string
           default: alpine:3.20
+          description: Docker image reference or template:<name> registered in deployment policy.
         memory_mb:
           type: integer
           minimum: 16
@@ -994,7 +1089,7 @@ components:
             and defaults to the smaller of one CPU and its total CPU budget.
         network:
           type: string
-          enum: [bridge, none]
+          enum: [bridge, none, filtered]
           default: bridge
           description: >-
             bridge gives the sandbox outbound network access; none removes
@@ -1048,6 +1143,8 @@ components:
     Sandbox:
       type: object
       required:
+        - agent_mode
+        - protected
         - id
         - state
         - image
@@ -1064,6 +1161,9 @@ components:
         - expires_at
         - kill_reason
       properties:
+        runtime: {type: string, enum: [runc, runsc], description: Administrator-allowed Docker runtime.}
+        agent_mode: {type: string, enum: [guest, legacy, unavailable]}
+        protected: {type: boolean, description: Non-root workload isolated from the guest supervisor.}
         id:
           type: string
           description: Opaque identifier. Clients must not parse it.
@@ -1089,7 +1189,7 @@ components:
           minimum: 0
         network:
           type: string
-          enum: [bridge, none]
+          enum: [bridge, none, filtered]
         timeout_seconds:
           type: integer
           minimum: 0

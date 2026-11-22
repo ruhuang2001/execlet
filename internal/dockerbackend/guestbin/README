@@ -1,0 +1,1 @@
+make agent builds the two static Linux guest executables here before packaging sandboxd.

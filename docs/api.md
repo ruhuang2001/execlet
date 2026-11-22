@@ -51,12 +51,13 @@ Creation is never automatically retried; see the respective SDK contracts.
 |---|---|---|
 | `id` | string | |
 | `state` | string | `pending`, `running`, `paused`, `killed` |
-| `image` | string | default `alpine:3.20` |
+| `image` | string | Docker image or administrator-defined `template:<name>`. The sandbox reports the resolved digest for a template. Default `alpine:3.20`. |
 | `memory_mb` | int | memory limit, default 512, minimum 16 |
 | `max_concurrent_executions` | int | immutable execution slot limit, 1–8, default 1 |
 | `pids_limit` | int | task limit, default 1024, minimum 64 |
 | `nano_cpus` | int | CPU limit in units of 1e-9 CPUs, default `0` (unlimited) |
-| `network` | string | `bridge` (default, outbound access) or `none` |
+| `network` | string | `bridge`, `none`, or administrator-configured `filtered` |
+| `runtime` | string | Selected administrator-allowed runtime when configured |
 | `timeout_seconds` | int | lifetime timeout, default 300, `0` disables |
 | `timeout_action` | string | `kill` (default) or `pause` |
 | `idle_timeout_seconds` | int | default `0` (disabled) |
@@ -270,7 +271,7 @@ Request (all fields optional):
   see the [concurrency policy](#concurrent-execution-policy).
 - `nano_cpus` is a CPU limit in units of 1e-9 CPUs; `0`, the default, means no
   limit. `1000000000` is one CPU.
-- `network` is `bridge` (default) or `none`. `bridge` gives the sandbox its own
+- `network` accepts `bridge` (default), `none` or policy-configured `filtered`. `bridge` gives the sandbox its own
   network namespace with outbound access, so package installs and HTTP calls
   work. `none` removes networking entirely. Host networking is not offered: it
   would expose every host socket to code the caller does not control.
@@ -587,3 +588,29 @@ cleanup with the same owner label is the fallback.
 - [Execution engine](../internal/daemon/engine.go): idempotency, cancellation, and file access.
 - [Reaper](../internal/daemon/reaper.go): timeout and eviction checks.
 - [Server entry point](../cmd/sandboxd/main.go): startup cleanup and HTTP shutdown.
+
+### `GET /v1/sandboxes/{sandbox_id}/files/stat?path=...`
+
+Return a single FileEntry for an absolute path, including the link target for a symbolic link.
+
+## Interactive terminals
+
+### `POST /v1/sandboxes/{sandbox_id}/terminals`
+
+Create a guest PTY. The optional JSON body accepts `command` (default `/bin/sh`), `cwd`, `rows` and `cols`. A 201 response contains `terminal_id`. Each running sandbox supports eight concurrent terminal sessions.
+
+### `POST /v1/sandboxes/{sandbox_id}/terminals/{terminal_id}/input`
+
+Send up to 32 KiB of raw input bytes. Success returns 204. Repeating a request can send the input twice.
+
+### `POST /v1/sandboxes/{sandbox_id}/terminals/{terminal_id}/resize`
+
+Send JSON with positive `rows` and `cols` up to 65535. Success returns 204.
+
+### `GET /v1/sandboxes/{sandbox_id}/terminals/{terminal_id}/events`
+
+Read SSE output from a persistent terminal. Supply a byte offset in `Last-Event-ID` to resume. Each `stdout` event contains base64 `data` and a `truncated` flag for lost history. A `closed` event signals the final output. Disconnecting leaves the shell running.
+
+### `DELETE /v1/sandboxes/{sandbox_id}/terminals/{terminal_id}`
+
+Close the terminal, release the session and its processes. Success returns 204. On daemon restart, a sandbox with an outstanding terminal is retired.

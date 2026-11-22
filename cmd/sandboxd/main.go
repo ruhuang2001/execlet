@@ -29,6 +29,7 @@ func main() {
 	showVersion := flag.Bool("version", false, "print version and exit")
 	policyPath := flag.String("policy", "", "administrator deployment policy JSON file")
 	stateDir := flag.String("state-dir", "", "private local directory for conservative restart recovery")
+	guestMode := flag.String("guest-agent", "auto", "guest agent mode (auto or off)")
 	flag.Parse()
 
 	if *showVersion {
@@ -72,6 +73,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	if policy != nil {
+		backend.ConfigureEgress(policy.Egress)
+	}
+	if err := backend.SetGuestAgent(*guestMode); err != nil {
+		slog.Error("invalid guest mode", "error", err)
+		os.Exit(1)
+	}
 	if journal == nil {
 		if removed, err := backend.RemoveOwned(ctx, daemon.OwnerLabelKey, *owner); err != nil {
 			slog.Error("startup cleanup incomplete; refusing admission", "removed", removed, "error_category", runtimeErrorCategory(err))

@@ -8,6 +8,9 @@ import (
 
 func (c *Client) CreateSandbox(ctx context.Context, req CreateSandboxRequest) (*Sandbox, error) {
 	var required []string
+	if req.Runtime != "" {
+		required = append(required, "sandbox.runtime.v1")
+	}
 	if len(req.Env) > 0 {
 		required = append(required, "execution.env-cwd.v1")
 	}

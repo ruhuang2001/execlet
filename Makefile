@@ -7,7 +7,7 @@ LDFLAGS := -X main.version=$(VERSION)
 
 .PHONY: build test vet lint comment-lint-env comment-lint comment-lint-e2e race fmt check-commit install-hooks python-build python-e2e typescript typescript-e2e clean
 
-build:
+build: agent
 	go build -ldflags '$(LDFLAGS)' -o $(BIN)/sandboxd ./cmd/sandboxd
 	go build -ldflags '$(LDFLAGS)' -o $(BIN)/sandboxctl ./cmd/sandboxctl
 
@@ -59,3 +59,9 @@ typescript:
 
 typescript-e2e:
 	bash scripts/e2e-typescript.sh artifacts/typescript-e2e
+
+.PHONY: agent
+agent: internal/dockerbackend/guestbin/guest-linux-amd64 internal/dockerbackend/guestbin/guest-linux-arm64
+
+internal/dockerbackend/guestbin/guest-linux-%: $(wildcard sandbox-agent/cmd/guest/*.go internal/guestprotocol/*.go sandbox-agent/go.*)
+	cd sandbox-agent && CGO_ENABLED=0 GOOS=linux GOARCH=$* go build -trimpath -ldflags='-s -w' -o ../$@ ./cmd/guest

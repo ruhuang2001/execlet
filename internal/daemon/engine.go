@@ -295,11 +295,12 @@ func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req Ex
 	}
 	startCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), BackendCallTimeout)
 	proc, err := s.backend.Exec(startCtx, sb.container, ExecSpec{
-		Command:   req.Command,
-		Env:       mergedEnv(sb.opts.env, req.Env),
-		Dir:       req.Cwd,
-		Stdin:     req.Stdin,
-		TimeoutMS: req.TimeoutMS,
+		ExecutionID: ex.id,
+		Command:     req.Command,
+		Env:         mergedEnv(sb.opts.env, req.Env),
+		Dir:         req.Cwd,
+		Stdin:       req.Stdin,
+		TimeoutMS:   req.TimeoutMS,
 	})
 	cancel()
 	startErr := err
@@ -422,6 +423,15 @@ func (s *Sandboxes) run(ctx context.Context, sb *sandbox, ex *execution) {
 		}
 	}
 
+	if errors.Is(waitErr, ErrGuestLost) && intent == nil && !outcome.SandboxLost {
+		exitCode = -1
+		outcome = ExecOutcome{Reason: ReasonUnknown, SandboxLost: true}
+		ex.log.mu.Lock()
+		if !ex.log.truncated {
+			ex.log.truncateLocked()
+		}
+		ex.log.mu.Unlock()
+	}
 	now := s.now()
 	sb.mu.Lock()
 	if ex.finish(now, exitCode, outcome) {

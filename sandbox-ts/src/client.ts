@@ -79,6 +79,7 @@ export class Client {
   async createSandbox(request: CreateSandboxRequest = {}, options: RequestOptions = {}): Promise<Sandbox> {
     const snapshot = { ...request, ...(request.env ? { env: { ...request.env } } : {}) };
     const required = [];
+    if (snapshot.runtime !== undefined) required.push('sandbox.runtime.v1');
     if (snapshot.env && Object.keys(snapshot.env).length) required.push('execution.env-cwd.v1');
     if (snapshot.max_concurrent_executions !== undefined) required.push('execution.concurrent.v1');
     await this.requireCapabilities(required, options);

@@ -319,6 +319,13 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: build and vet both Linux guest architectures
+        if: hashFiles('sandbox-agent/go.mod') != ''
+        run: |
+          make agent
+          for arch in amd64 arm64; do
+            (cd sandbox-agent && GOOS=linux GOARCH="$arch" CGO_ENABLED=0 go vet ./...)
+          done
       - name: build every command and the example
         run: |
           go build ./...

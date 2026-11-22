@@ -1,9 +1,11 @@
 package daemon
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -137,7 +139,9 @@ func sleepContext(ctx context.Context, d time.Duration) bool {
 func (s *Sandboxes) now() time.Time { return s.clock.Now().UTC() }
 
 type sandbox struct {
-	mu sync.Mutex
+	agentMode string
+	protected bool
+	mu        sync.Mutex
 
 	id        string
 	container string
@@ -155,7 +159,8 @@ type sandbox struct {
 	running     map[string]*execution
 	idempotency map[string]*execution
 
-	streams int
+	terminals map[string]bool
+	streams   int
 }
 
 func (sb *sandbox) pruneExecutionsLocked() {
@@ -188,6 +193,25 @@ func (s *Sandboxes) Create(ctx context.Context, req CreateRequest) (result Sandb
 		if req.NanoCPUs == nil {
 			req.NanoCPUs = new(defaults.DefaultNanoCPUs())
 		}
+	}
+	if defaults, ok := s.backend.(interface{ DefaultRuntime() string }); ok && req.Runtime == "" {
+		req.Runtime = defaults.DefaultRuntime()
+	}
+	if req.Runtime != "" {
+		if _, ok := s.backend.(interface{ DefaultRuntime() string }); !ok {
+			return Sandbox{}, errorf(CodeInvalidRequest, "runtime selection requires a deployment policy")
+		}
+	}
+	if req.Image != nil && strings.HasPrefix(*req.Image, "template:") {
+		resolver, ok := s.backend.(interface{ ResolveImage(string) (string, error) })
+		if !ok {
+			return Sandbox{}, errorf(CodeInvalidRequest, "named templates require a deployment policy")
+		}
+		image, err := resolver.ResolveImage(*req.Image)
+		if err != nil {
+			return Sandbox{}, err
+		}
+		req.Image = &image
 	}
 	opts, err := req.resolve()
 	if err != nil {
@@ -223,6 +247,7 @@ func (s *Sandboxes) Create(ctx context.Context, req CreateRequest) (result Sandb
 		return Sandbox{}, err
 	}
 	spec := ContainerSpec{
+		Runtime:   opts.runtime,
 		Image:     opts.image,
 		MemoryMB:  opts.memoryMB,
 		PidsLimit: opts.pidsLimit,
@@ -250,6 +275,7 @@ func (s *Sandboxes) Create(ctx context.Context, req CreateRequest) (result Sandb
 		}
 		return out, cleanupErr
 	}
+	sb.agentMode, sb.protected = agentInfo(s.backend, containerID)
 	sb.state = StateRunning
 	sb.armLifetimeLocked(s.now())
 	err = s.saveSandboxLocked(sb)
@@ -673,6 +699,8 @@ func (sb *sandbox) invalidState() error {
 
 func (sb *sandbox) snapshot() Sandbox {
 	return Sandbox{
+		AgentMode: cmp.Or(sb.agentMode, "legacy"), Protected: sb.protected,
+		Runtime:                 sb.opts.runtime,
 		MaxConcurrentExecutions: sb.opts.maxConcurrentExecutions,
 		ID:                      sb.id,
 		State:                   sb.state,

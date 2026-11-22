@@ -273,6 +273,11 @@ func (s *Sandboxes) sweepIndividually(ctx context.Context, order []*sandbox) {
 }
 
 func (s *Sandboxes) Run(ctx context.Context) {
+	if b, ok := s.backend.(*PolicyBackend); ok && len(b.targets) > 0 {
+		done := make(chan struct{})
+		go func() { defer close(done); b.maintainPrewarm(ctx, s.owner, s.scheduleRemoval) }()
+		defer func() { <-done }()
+	}
 	tick := time.NewTicker(s.cleanupInterval)
 	defer tick.Stop()
 	for {

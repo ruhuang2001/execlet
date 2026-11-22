@@ -76,6 +76,13 @@ func (h *Handler) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	fmt.Fprintf(&out, "# HELP tiny_sandbox_live Live sandbox records, excluding pending removals.\n# TYPE tiny_sandbox_live gauge\ntiny_sandbox_live %d\n# HELP tiny_sandbox_cleanup_pending Containers awaiting confirmed removal.\n# TYPE tiny_sandbox_cleanup_pending gauge\ntiny_sandbox_cleanup_pending %d\n", live, pending)
 	if policy, ok := h.store.backend.(*PolicyBackend); ok {
 		usage := policy.Usage()
+		policy.mu.Lock()
+		ready := 0
+		for _, ids := range policy.ready {
+			ready += len(ids)
+		}
+		policy.mu.Unlock()
+		fmt.Fprintf(&out, "# HELP tiny_sandbox_prewarm_ready Unassigned prewarmed containers.\n# TYPE tiny_sandbox_prewarm_ready gauge\ntiny_sandbox_prewarm_ready %d\n", ready)
 		for _, name := range []string{"tiny_sandbox_reserved_memory_bytes", "tiny_sandbox_reserved_nano_cpus", "tiny_sandbox_reserved_pids"} {
 			fmt.Fprintf(&out, "# HELP %s Reserved deployment budget, including unconfirmed cleanup.\n# TYPE %s gauge\n", name, name)
 		}

@@ -15,8 +15,6 @@ import time
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / 'e2b-compatibility'))
-from local import DockerFault
-from latency_baseline import measure
 
 
 def main():
@@ -28,6 +26,8 @@ def main():
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument('--cleanup-only', action='store_true', help='run only default admission during failed removals')
     modes.add_argument('--benchmark-only', action='store_true', help='run only the direct short-command workload')
+    parser.add_argument('--guest-agent', choices=['auto','off'], default='auto')
+    modes.add_argument('--creation-only', action='store_true', help='measure fresh_container_local_image only')
     args = parser.parse_args()
     if not __debug__:
         parser.error('assertions must be enabled')
@@ -49,7 +49,10 @@ def main():
     policy.write_text(json.dumps(rules))
     report, processes, logs = [], [], []
     server = None
-    proxy = None if args.benchmark_only else DockerFault(out / 'docker.sock')
+    proxy = None
+    if not (args.benchmark_only or args.creation_only):
+        from local import DockerFault
+        proxy = DockerFault(out / 'docker.sock')
 
     def check(name, passed, evidence=None):
         report.append(dict(name=name, passed=bool(passed), evidence=evidence))
@@ -80,12 +83,13 @@ def main():
         finally:
             conn.close()
 
-    def start(extra=(), success=True, direct=False):
+    def start(extra=(), success=True, legacy_faults=False):
         nonlocal server
         log = (out / ('server-%d.log' % len(processes))).open('w')
         logs.append(log)
         server = subprocess.Popen([binary, '-addr', '127.0.0.1:' + str(port),
-            '-owner', owner, '-docker', docker.removeprefix('unix://') if direct else proxy.path, *extra],
+            '-owner', owner, '-docker', proxy.path if legacy_faults else docker.removeprefix('unix://'),
+            '-guest-agent', 'off' if legacy_faults else args.guest_agent, *extra],
             env=env, stdout=log, stderr=log)
         processes.append(server)
         if not success:
@@ -157,7 +161,8 @@ def main():
         stop()
 
     def short_benchmark():
-        start(['-policy', str(policy)], direct=True)
+        from latency_baseline import measure
+        start(['-policy', str(policy)])
         data = measure('http://127.0.0.1:' + str(port), token, spec, args.samples)
         check('short-command workload released every container before shutdown', not owned())
         (out / 'short-latency.json').write_text(json.dumps(data, indent=2) + '\n')
@@ -220,7 +225,7 @@ def main():
     def start_reliability(durable, managed, fault):
         label = 'start %s durable=%s managed=%s' % (fault, durable, managed)
         extra = ['-state-dir', str(out / ('start-state-' + str(managed) + '-' + fault))] if durable else []
-        start(extra)
+        start(extra, legacy_faults=True)
         status, sb = create(max_concurrent_executions=2, timeout_seconds=3)
         assert status == 201, sb
         sid = sb['id']
@@ -281,11 +286,26 @@ def main():
 
     try:
         check('pinned local image', cli('image', 'inspect', args.image, '--format', '{{.Id}}') == args.image)
-        (out / 'environment.json').write_text(json.dumps(dict(image=args.image,
+        (out / 'environment.json').write_text(json.dumps(dict(image=args.image, control_path=args.guest_agent, supervisor_faults='legacy',
             docker=json.loads(cli('version', '--format', '{{json .}}')),
             python=sys.version, git_head=subprocess.check_output(['git', 'rev-parse', 'HEAD'],
                 cwd=Path(__file__).resolve().parent, text=True).strip(),
             server_sha256=hashlib.sha256(Path(binary).read_bytes()).hexdigest()), indent=2))
+        if args.creation_only:
+            start(['-policy', str(policy)])
+            fresh = []
+            for _ in range(args.samples):
+                began = time.monotonic()
+                status, sb = create()
+                fresh.append(time.monotonic() - began)
+                assert status == 201 and sb['agent_mode'] == ('guest' if args.guest_agent == 'auto' else 'legacy'), sb
+                kill(sb['id'])
+            result = dict(samples=len(fresh), median_seconds=statistics.median(fresh),
+                          p95_seconds=sorted(fresh)[int(len(fresh)*.95)], raw_seconds=fresh)
+            (out/'baseline.json').write_text(json.dumps(dict(fresh_container_local_image=result,
+                   image_pull_measured=False, agent_mode=sb['agent_mode']), indent=2)+'\n')
+            check('fresh container baseline and cleanup', not owned(), result)
+            return
         if args.benchmark_only:
             short_benchmark()
             return
@@ -296,11 +316,14 @@ def main():
             for managed in [False, True]:
                 for fault in ['drop', 'stall']:
                     start_reliability(durable, managed, fault)
-        start(['-policy', str(policy)])
+        start(['-policy', str(policy)], legacy_faults=True)
         lost_create()
         listing_fallbacks()
+        stop()
+        start(['-policy', str(policy)])
         status, sb = create()
         assert status == 201, sb
+        check('requested control path is active', sb['agent_mode'] == ('guest' if args.guest_agent == 'auto' else 'legacy'), sb)
         long_command = ['python3', '-u', '-c', "import time; print('before',flush=True); time.sleep(6); print('after')"]
         initial = begin(sb['id'], long_command, 'long-stream')
         final = wait(sb['id'], initial['id'])
@@ -342,6 +365,8 @@ def main():
         check('rejection metric without identifier labels', 'outcome="rate_limited"' in metrics
               and 'tiny_sandbox_reserved_memory_bytes 0' in metrics and token not in metrics
               and all(s not in metrics for s in accepted))
+        stop()
+        start(['-policy', str(policy)], legacy_faults=True)
         status, sb = create(max_concurrent_executions=2)
         assert status == 201, sb
         sid = sb['id']

@@ -54,6 +54,7 @@ func (l Liveness) String() string {
 }
 
 type ContainerSpec struct {
+	Runtime   string
 	Image     string
 	MemoryMB  int
 	PidsLimit int
@@ -64,11 +65,12 @@ type ContainerSpec struct {
 }
 
 type ExecSpec struct {
-	Command   []string
-	Env       []string
-	Dir       string
-	Stdin     string
-	TimeoutMS *int64
+	ExecutionID string
+	Command     []string
+	Env         []string
+	Dir         string
+	Stdin       string
+	TimeoutMS   *int64
 }
 
 type Process interface {

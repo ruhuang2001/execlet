@@ -299,10 +299,11 @@ against v0.0.2, including its installed declarations. The current Docker
 backend and both adapters implement it; passing a selfcheck alone is not
 behavioral evidence. See the [runner instructions](../scripts/e2b-compatibility/README.md#background-command-profile).
 
-The managed backend requires Linux Python 3 and uses an invocation-specific
-supervisor/socket/token, retaining the leader until its process group is
-stopped and killed. Same-UID guest code can tamper with that supervisor or
-its files; this is not a security boundary against hostile guest code. PID
+Managed commands use the native guest supervisor when `agent_mode` is `guest`.
+It runs workloads as the image user and keeps its control socket private for
+non-root images. Root images and the legacy Python supervisor allow same-UID
+access. Legacy mode requires Linux Python 3 and uses a per-invocation control
+socket and token. PID
 handshake failure after accepted start retains the execution ID and original
 deadline without killing siblings or starting again. An earlier ambiguous
 Docker start failure without a process handle can still require whole-container

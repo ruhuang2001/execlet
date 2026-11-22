@@ -61,7 +61,7 @@ func (in *invocation) runCommand(args []string) int {
 	fs.IntVar(&rf.maxConcurrentExecutions, "max-concurrent-executions", 1, "maximum simultaneous executions (1-8)")
 	fs.IntVar(&rf.pidsLimit, "pids-limit", 0, "task limit in the sandbox")
 	fs.Int64Var(&rf.nanoCPUs, "nano-cpus", 0, "CPU limit in units of 1e-9 CPUs (0 is unlimited)")
-	fs.StringVar(&rf.network, "network", "", "bridge or none")
+	fs.StringVar(&rf.network, "network", "", "bridge, filtered or none")
 	fs.IntVar(&rf.timeout, "timeout", 0, "lifetime timeout in seconds (0 disables)")
 	fs.StringVar(&rf.timeoutAction, "timeout-action", "", "kill or pause")
 	fs.IntVar(&rf.idleTimeout, "idle-timeout", 0, "idle timeout in seconds (0 disables)")
@@ -107,8 +107,8 @@ func (in *invocation) runCommand(args []string) int {
 		_, _ = fmt.Fprintln(in.stderr, "sandboxctl: --nano-cpus must not be negative; use 0 for no limit")
 		return 2
 	}
-	if rf.network != "" && rf.network != sandbox.NetworkBridge && rf.network != sandbox.NetworkNone {
-		_, _ = fmt.Fprintf(in.stderr, "sandboxctl: --network must be %q or %q\n",
+	if rf.network != "" && rf.network != sandbox.NetworkBridge && rf.network != sandbox.NetworkNone && rf.network != sandbox.NetworkFiltered {
+		_, _ = fmt.Fprintf(in.stderr, "sandboxctl: --network must be %q, %q or filtered\n",
 			sandbox.NetworkBridge, sandbox.NetworkNone)
 		return 2
 	}

@@ -18,3 +18,4 @@ __pycache__/
 /sandbox-ts/node_modules/
 /sandbox-ts/dist/
 /sandbox-ts/*.tgz
+/internal/dockerbackend/guestbin/guest-linux-*

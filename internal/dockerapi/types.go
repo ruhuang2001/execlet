@@ -9,6 +9,7 @@ type ContainerConfig struct {
 }
 
 type HostConfig struct {
+	Runtime     string            `json:"Runtime,omitempty"`
 	Memory      int64             `json:"Memory,omitempty"`
 	MemorySwap  int64             `json:"MemorySwap,omitempty"`
 	NanoCpus    int64             `json:"NanoCpus,omitempty"`

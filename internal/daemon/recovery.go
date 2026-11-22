@@ -30,6 +30,7 @@ type Journal struct {
 }
 
 type storedSandbox struct {
+	HasTerminals bool              `json:"has_terminals,omitzero"`
 	Version      int               `json:"version"`
 	Sandbox      Sandbox           `json:"sandbox"`
 	Container    string            `json:"container"`
@@ -215,7 +216,7 @@ func (s *Sandboxes) saveSandboxExceptLocked(sb *sandbox, omit string) error {
 			ids = append(ids, ex.id)
 		}
 	}
-	err := s.journal.write(sb.id+".json", storedSandbox{1, sb.snapshot(), sb.container, sb.opts.env, sb.lastActivity, ids})
+	err := s.journal.write(sb.id+".json", storedSandbox{Version: 1, Sandbox: sb.snapshot(), Container: sb.container, Env: sb.opts.env, LastActivity: sb.lastActivity, Executions: ids, HasTerminals: len(sb.terminals) > 0})
 	if err != nil {
 		return errorf(CodeUnavailable, "cannot persist sandbox state")
 	}
@@ -331,8 +332,8 @@ func (s *Sandboxes) Recover(ctx context.Context, j *Journal, backend RecoveryBac
 		if err != nil {
 			return errors.New("invalid recovered sandbox options")
 		}
-		sb := &sandbox{id: v.ID, container: value.Container, opts: opts, createdAt: v.CreatedAt, state: v.State, killReason: v.KillReason, expiresAt: v.ExpiresAt, lastActivity: value.LastActivity, running: map[string]*execution{}, idempotency: map[string]*execution{}}
-		unsafe := sb.state == StatePending || sb.state == StateKilled
+		sb := &sandbox{id: v.ID, agentMode: v.AgentMode, protected: v.Protected, container: value.Container, opts: opts, createdAt: v.CreatedAt, state: v.State, killReason: v.KillReason, expiresAt: v.ExpiresAt, lastActivity: value.LastActivity, running: map[string]*execution{}, idempotency: map[string]*execution{}}
+		unsafe := value.HasTerminals || v.Network == NetworkFiltered || sb.state == StatePending || sb.state == StateKilled
 		items := executions[sb.id]
 		slices.SortFunc(items, func(a, b storedExecution) int { return a.Execution.StartedAt.Compare(b.Execution.StartedAt) })
 		for _, item := range items {
@@ -395,11 +396,16 @@ func (s *Sandboxes) Recover(ctx context.Context, j *Journal, backend RecoveryBac
 				_, unsafe = sb.dueTimeout(s.now())
 			}
 		}
+		if !unsafe && sb.agentMode == "guest" {
+			if restorer, ok := backend.(interface{ RestoreGuest(string, bool, string) }); ok {
+				restorer.RestoreGuest(sb.container, sb.protected, sb.opts.runtime)
+			}
+		}
 		if !unsafe {
 			if adopter, ok := s.backend.(interface {
 				Adopt(context.Context, string, ContainerSpec) error
 			}); ok {
-				unsafe = sb.state == StatePaused || adopter.Adopt(ctx, sb.container, ContainerSpec{Image: opts.image, MemoryMB: opts.memoryMB, PidsLimit: opts.pidsLimit, NanoCPUs: opts.nanoCPUs, Network: opts.network}) != nil
+				unsafe = sb.state == StatePaused || adopter.Adopt(ctx, sb.container, ContainerSpec{Runtime: opts.runtime, Image: opts.image, MemoryMB: opts.memoryMB, PidsLimit: opts.pidsLimit, NanoCPUs: opts.nanoCPUs, Network: opts.network}) != nil
 			}
 		}
 		if unsafe {
@@ -493,7 +499,7 @@ func validStateID(id, prefix string) bool {
 
 func recoveredOptions(value storedSandbox) (sandboxOptions, error) {
 	v := value.Sandbox
-	return (CreateRequest{Image: &v.Image, MemoryMB: &v.MemoryMB, PidsLimit: &v.PidsLimit, NanoCPUs: &v.NanoCPUs, Network: &v.Network, TimeoutSeconds: &v.TimeoutSeconds, TimeoutAction: &v.TimeoutAction, IdleTimeoutSeconds: &v.IdleTimeoutSeconds, IdleTimeoutAction: &v.IdleTimeoutAction, MaxConcurrentExecutions: &v.MaxConcurrentExecutions, Env: value.Env}).resolve()
+	return (CreateRequest{Runtime: v.Runtime, Image: &v.Image, MemoryMB: &v.MemoryMB, PidsLimit: &v.PidsLimit, NanoCPUs: &v.NanoCPUs, Network: &v.Network, TimeoutSeconds: &v.TimeoutSeconds, TimeoutAction: &v.TimeoutAction, IdleTimeoutSeconds: &v.IdleTimeoutSeconds, IdleTimeoutAction: &v.IdleTimeoutAction, MaxConcurrentExecutions: &v.MaxConcurrentExecutions, Env: value.Env}).resolve()
 }
 
 func validateStoredExecution(value storedExecution) error {

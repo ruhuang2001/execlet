@@ -31,6 +31,7 @@ commands:
   run [flags] -- CMD [ARG...]            run a command in a sandbox
   run [flags] -- code 'PYTHON'           shorthand for python3 -c
   attach SANDBOX EXECUTION               stream an execution from the start
+  shell SANDBOX [TERMINAL]               open or reconnect to a terminal
   logs SANDBOX EXECUTION                 print retained output
   inspect SANDBOX                        print one sandbox
   list                                   list sandboxes
@@ -50,7 +51,7 @@ run flags:
   --max-concurrent-executions N  execution slots (default 1, maximum 8)
   --pids-limit N        task limit (default 1024, minimum 64)
   --nano-cpus N         CPU limit in units of 1e-9 CPUs (0 is unlimited)
-  --network MODE        bridge (default) or none
+  --network MODE        bridge (default), filtered or none
   --timeout S           lifetime timeout in seconds
   --timeout-action A    kill or pause
   --idle-timeout S      idle timeout in seconds
@@ -106,6 +107,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return in.doctor(rest)
 	case "run":
 		return in.runCommand(rest)
+	case "shell":
+		return in.shell(rest)
 	case "attach":
 		return in.attach(rest)
 	case "logs":

@@ -285,12 +285,58 @@ func TestListAndLifecycle(t *testing.T) {
 
 func TestInspect(t *testing.T) {
 	h := newCLIHarness(t)
-	runResult := h.invoke("run", "--", "echo", "x")
+	runResult := h.invoke("run", "--pids-limit", "256", "--nano-cpus", "500000000", "--network", "none", "--", "echo", "x")
 	id := firstSandboxID(t, runResult.stderr)
 	got := h.invoke("inspect", id)
 	if got.code != 0 || !strings.Contains(got.stdout, "id: "+id) ||
-		!strings.Contains(got.stdout, "state: running") {
+		!strings.Contains(got.stdout, "state: running") ||
+		!strings.Contains(got.stdout, "pids_limit: 256\n") ||
+		!strings.Contains(got.stdout, "nano_cpus: 500000000\n") ||
+		!strings.Contains(got.stdout, "network: none\n") {
 		t.Fatalf("inspect = %+v", got)
+	}
+}
+
+func TestRunAndFilesListPreserveMetadataAndTruncation(t *testing.T) {
+	h := newCLIHarness(t)
+	h.be.Programs["loud"] = func(_ context.Context, _ []string) (string, string, int) {
+		return strings.Repeat("a", daemon.MaxOutputBytes+128), "", 0
+	}
+	got := h.invoke("run", "--", "loud")
+	if got.code != 0 {
+		t.Fatalf("run = %+v", got)
+	}
+	if !strings.Contains(got.stderr, "sandboxctl: output truncated") {
+		t.Errorf("run stderr missing truncation notice: %q", got.stderr)
+	}
+
+	id := firstSandboxID(t, got.stderr)
+	execID := ""
+	for _, line := range strings.Split(got.stderr, "\n") {
+		if v, ok := strings.CutPrefix(line, "execution: "); ok {
+			execID = v
+		}
+	}
+	logsRes := h.invoke("logs", id, execID)
+	if !strings.Contains(logsRes.stderr, "sandboxctl: output truncated") {
+		t.Errorf("logs stderr missing truncation notice: %q", logsRes.stderr)
+	}
+
+	if err := h.be.WriteFile(context.Background(), h.be.IDs()[0], "/work/hello.txt", []byte("hi")); err != nil {
+		t.Fatal(err)
+	}
+	listed := h.invoke("files", "list", id, "/work")
+	if listed.code != 0 {
+		t.Fatalf("files list = %+v", listed)
+	}
+	var page struct {
+		Entries []map[string]any `json:"entries"`
+	}
+	if err := json.Unmarshal([]byte(listed.stdout), &page); err != nil || len(page.Entries) != 1 {
+		t.Fatalf("parse files list %q: %v", listed.stdout, err)
+	}
+	if page.Entries[0]["type"] != "file" {
+		t.Fatalf("files list dropped entry type metadata: %+v", page.Entries[0])
 	}
 }
 

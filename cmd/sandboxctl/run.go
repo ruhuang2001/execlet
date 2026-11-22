@@ -207,15 +207,7 @@ func (in *invocation) runCommand(args []string) int {
 	_, _ = fmt.Fprintf(in.stderr, "execution: %s\n", started.ID)
 
 	final, streamErr := client.StreamExecution(ctx, sandboxID, started.ID, func(ev sandbox.Event) error {
-		switch ev.Type {
-		case sandbox.EventStdout:
-			_, err := io.WriteString(in.stdout, ev.Data)
-			return err
-		case sandbox.EventStderr:
-			_, err := io.WriteString(in.stderr, ev.Data)
-			return err
-		}
-		return nil
+		return in.writeEvent(ev)
 	})
 	if final == nil {
 		final = started

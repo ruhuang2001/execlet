@@ -13,7 +13,8 @@ package main
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"flag"
 	"fmt"
 	"net/http/httptest"
@@ -96,7 +97,7 @@ func memDemoPython(_ context.Context, args []string) (string, string, int) {
 }
 
 func printJSON(v any) {
-	data, err := json.MarshalIndent(v, "", "  ")
+	data, err := json.Marshal(v, jsontext.WithIndent("  "), json.Deterministic(true))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "agent-tool: encode: %v\n", err)
 		os.Exit(1)

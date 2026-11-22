@@ -209,6 +209,53 @@ func TestResultIsMachineReadable(t *testing.T) {
 	}
 }
 
+func TestRunInHonorsTimeoutAndUnknownOutcomeDoesNotAdviseBlindRetry(t *testing.T) {
+	clock := &fakeClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	h := newHarness(t, daemon.WithClock(clock), daemon.WithCancelGrace(10*time.Millisecond), daemon.WithCancelDeadline(50*time.Millisecond))
+	h.be.Streamers["python3"] = func(ctx context.Context, _ func([]byte, []byte) error) int {
+		<-ctx.Done()
+		return 137
+	}
+
+	slots := 2
+	sb, err := h.client.CreateSandbox(context.Background(), sandbox.CreateSandboxRequest{
+		TimeoutSeconds:          new(0),
+		MaxConcurrentExecutions: &slots,
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	tool := agenttool.New(h.client)
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
+	done := make(chan agenttool.Result, 1)
+	go func() {
+		done <- tool.RunIn(runCtx, sb.ID, agenttool.Input{Code: "while True: pass", TimeoutSeconds: 5})
+	}()
+	time.Sleep(50 * time.Millisecond)
+	clock.Advance(6 * time.Second)
+	h.store.Reap(context.Background())
+	select {
+	case res := <-done:
+		if res.Outcome != "timeout" {
+			t.Fatalf("RunIn timeout outcome = %+v, want timeout", res)
+		}
+	case <-time.After(1 * time.Second):
+		cancelRun()
+		<-done
+		t.Fatal("RunIn did not honor TimeoutSeconds")
+	}
+
+	// Ambiguous exit 137 in multi-slot sandbox produces ReasonUnknown; it must not claim "unavailable" + "retry once".
+	delete(h.be.Streamers, "python3")
+	h.be.Programs["python3"] = func(context.Context, []string) (string, string, int) { return "", "", 137 }
+	unknownRes := tool.RunIn(context.Background(), sb.ID, agenttool.Input{Code: "import os, signal; os.kill(os.getpid(), 9)"})
+	if unknownRes.Outcome != "unknown" {
+		t.Fatalf("unknown outcome = %+v, want unknown", unknownRes)
+	}
+}
+
 // onlyContainer returns the single container the harness created, so a
 // program can move that container's OOM counter.
 func (h *harness) onlyContainer(t *testing.T) string {

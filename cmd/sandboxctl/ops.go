@@ -59,6 +59,9 @@ func (in *invocation) logs(args []string) int {
 	if _, err := io.WriteString(in.stderr, ex.Stderr); err != nil {
 		return in.fail(err)
 	}
+	if ex.OutputTruncated {
+		_, _ = fmt.Fprintln(in.stderr, "sandboxctl: output truncated")
+	}
 	in.printExecutionStatus(ex)
 	if err := outcomeExit(ex); err != nil {
 		return in.fail(err)
@@ -85,6 +88,9 @@ func (in *invocation) inspect(args []string) int {
 	_, _ = fmt.Fprintf(in.stdout, "state: %s\n", sb.State)
 	_, _ = fmt.Fprintf(in.stdout, "image: %s\n", sb.Image)
 	_, _ = fmt.Fprintf(in.stdout, "memory_mb: %d\n", sb.MemoryMB)
+	_, _ = fmt.Fprintf(in.stdout, "pids_limit: %d\n", sb.PidsLimit)
+	_, _ = fmt.Fprintf(in.stdout, "nano_cpus: %d\n", sb.NanoCPUs)
+	_, _ = fmt.Fprintf(in.stdout, "network: %s\n", sb.Network)
 	_, _ = fmt.Fprintf(in.stdout, "timeout_seconds: %d\n", sb.TimeoutSeconds)
 	_, _ = fmt.Fprintf(in.stdout, "timeout_action: %s\n", sb.TimeoutAction)
 	_, _ = fmt.Fprintf(in.stdout, "idle_timeout_seconds: %d\n", sb.IdleTimeoutSeconds)

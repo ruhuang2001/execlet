@@ -14,11 +14,11 @@ package agenttool
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
+	"github.com/ruhuang2001/tiny-sandbox/internal/wirejson"
 	sandbox "github.com/ruhuang2001/tiny-sandbox/sandbox-go"
 )
 
@@ -128,7 +128,7 @@ func (t *Tool) Run(ctx context.Context, input Input) Result {
 		_, _ = t.client.KillSandbox(killCtx, sb.ID)
 	}()
 
-	return t.run(ctx, sb.ID, input.Code)
+	return t.run(ctx, sb.ID, input.Code, nil)
 }
 
 // RunIn executes the input in an existing sandbox, for an agent that wants to
@@ -137,24 +137,67 @@ func (t *Tool) RunIn(ctx context.Context, sandboxID string, input Input) Result 
 	if input.Code == "" {
 		return Result{IsError: true, Outcome: "invalid_input", Message: "code is required"}
 	}
-	return t.run(ctx, sandboxID, input.Code)
+	var execTimeout *int
+	if input.TimeoutSeconds > 0 {
+		timeout := input.TimeoutSeconds
+		execTimeout = &timeout
+	}
+	return t.run(ctx, sandboxID, input.Code, execTimeout)
 }
 
 // run starts python3 -c and streams nothing to the caller: an agent reads the
 // final result, and streaming would need a channel the model cannot consume.
-func (t *Tool) run(ctx context.Context, sandboxID, code string) Result {
-	ex, err := t.client.Exec(ctx, sandboxID, []string{"python3", "-c", code})
+func (t *Tool) run(ctx context.Context, sandboxID, code string, timeoutSeconds *int) Result {
+	started, err := t.client.StartExecution(ctx, sandboxID, sandbox.ExecuteRequest{
+		Command:        []string{"python3", "-c", code},
+		TimeoutSeconds: timeoutSeconds,
+	})
 	if err != nil {
 		result := failure(err)
-		// An execution outcome still carries the output the model needs.
+		var sdkErr *sandbox.Error
+		if errors.As(err, &sdkErr) && sdkErr.Execution != nil {
+			fillOutput(&result, sdkErr.Execution)
+		}
+		return result
+	}
+	ex, err := t.client.StreamExecution(ctx, sandboxID, started.ID, nil)
+	if err != nil {
+		result := failure(err)
 		if ex != nil {
 			fillOutput(&result, ex)
 		}
 		return result
 	}
+	if ex != nil && (ex.TerminationReason == nil || *ex.TerminationReason != sandbox.ReasonExited || ex.ExitCode == nil || *ex.ExitCode != 0) {
+		result := outcomeFailure(ex)
+		fillOutput(&result, ex)
+		return result
+	}
 	result := Result{Outcome: "exited"}
-	fillOutput(&result, ex)
+	if ex != nil {
+		fillOutput(&result, ex)
+	}
 	return result
+}
+
+func outcomeFailure(ex *sandbox.Execution) Result {
+	if ex.TerminationReason != nil {
+		switch *ex.TerminationReason {
+		case sandbox.ReasonOOM:
+			return failure(sandbox.ErrOOM)
+		case sandbox.ReasonTimeout:
+			return failure(sandbox.ErrTimeout)
+		case sandbox.ReasonCanceled:
+			return failure(sandbox.ErrCanceled)
+		case sandbox.ReasonEvicted:
+			return failure(sandbox.ErrEvicted)
+		case sandbox.ReasonUnknown:
+			return failure(sandbox.ErrUnknown)
+		case sandbox.ReasonExited:
+			return Result{IsError: true, Outcome: "nonzero_exit", Message: "the program exited with a nonzero status"}
+		}
+	}
+	return failure(sandbox.ErrUnknown)
 }
 
 // fillOutput copies the execution's view into the tool result.
@@ -206,6 +249,12 @@ func failure(err error) Result {
 			fillOutput(&result, ex)
 		}
 		return result
+	case errors.Is(err, sandbox.ErrUnknown), errors.Is(err, sandbox.ErrCancelUnconfirmed):
+		return Result{
+			IsError: true, Outcome: "unknown",
+			Message: "the execution outcome could not be confirmed",
+			Hint:    "inspect sandbox state before retrying side-effecting code",
+		}
 	case errors.Is(err, sandbox.ErrBusy):
 		return Result{
 			IsError: true, Outcome: "unavailable",
@@ -223,7 +272,7 @@ func failure(err error) Result {
 
 // ResultJSON renders a result for a tool-result message.
 func ResultJSON(result Result) (string, error) {
-	data, err := json.Marshal(result)
+	data, err := wirejson.Marshal(result)
 	if err != nil {
 		return "", fmt.Errorf("agenttool: encode result: %w", err)
 	}

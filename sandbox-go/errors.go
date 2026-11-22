@@ -6,13 +6,6 @@ import (
 	"net/http"
 )
 
-// Sentinel errors. errors.Is matches these on every error the SDK returns for
-// the corresponding outcome, including errors that also carry an Execution.
-//
-// The sentinels are mutually exclusive: an execution that ended for a reason
-// matches that reason's sentinel and nothing else. ErrNonZeroExit therefore
-// covers only an ordinary exit with a non-zero code, not an OOM kill that also
-// happened to exit non-zero.
 var (
 	ErrNonZeroExit       = errors.New("sandbox: command exited with a nonzero code")
 	ErrTimeout           = errors.New("sandbox: execution timed out")
@@ -27,19 +20,15 @@ var (
 	ErrInvalidState      = errors.New("sandbox: operation invalid in the current state")
 )
 
-// Error is every error the SDK returns. It carries the HTTP status and API
-// code for server errors, the full Execution for execution outcomes, and the
-// idempotency key when a recovery could not be confirmed.
 type Error struct {
-	StatusCode     int    // 0 for client-side errors
-	Code           string // API code, or canceled / cancel_unconfirmed / nonzero_exit / a reason name
+	StatusCode     int
+	Code           string
 	Message        string
-	Execution      *Execution // set for execution outcomes; carries full output and exit code
-	IdempotencyKey string     // set for cancel_unconfirmed during start
+	Execution      *Execution
+	IdempotencyKey string
 	Cause          error
 }
 
-// Error renders the message with its cause.
 func (e *Error) Error() string {
 	msg := e.Message
 	if msg == "" {
@@ -51,12 +40,8 @@ func (e *Error) Error() string {
 	return msg
 }
 
-// Unwrap exposes the cause.
 func (e *Error) Unwrap() error { return e.Cause }
 
-// Is matches sentinel values by the outcome and status this error represents.
-// An execution outcome matches its termination reason or, for an ordinary
-// non-zero exit, ErrNonZeroExit; it never matches both.
 func (e *Error) Is(target error) bool {
 	switch target {
 	case ErrNotFound:
@@ -83,10 +68,6 @@ func (e *Error) Is(target error) bool {
 		if e.Code == "nonzero_exit" {
 			return true
 		}
-		// An execution that ended for its own reason is that outcome, whatever
-		// exit code the runtime reported. An OOM kill exits 137, and reporting
-		// it as an ordinary non-zero exit sends a caller looking for a bug in
-		// its own program.
 		return e.Execution != nil &&
 			e.Execution.TerminationReason != nil &&
 			*e.Execution.TerminationReason == ReasonExited &&
@@ -97,9 +78,6 @@ func (e *Error) Is(target error) bool {
 	}
 }
 
-// Retryable reports whether the error is safe to retry from the caller's point
-// of view. The transport retries inside the SDK already used this rule, so a
-// caller sees true only when the whole retry budget was exhausted.
 func (e *Error) Retryable() bool {
 	switch e.StatusCode {
 	case http.StatusTooManyRequests, http.StatusInternalServerError,
@@ -109,8 +87,6 @@ func (e *Error) Retryable() bool {
 	return e.StatusCode == 0 && e.Code == "transport"
 }
 
-// outcomeError turns a completed execution into an error, or nil when it
-// exited 0. The Execution is always attached so no output is lost.
 func outcomeError(ex *Execution) error {
 	if ex == nil {
 		return nil
@@ -122,10 +98,6 @@ func outcomeError(ex *Execution) error {
 	case ReasonCanceled:
 		return &Error{Code: string(ReasonCanceled), Message: "sandbox: execution canceled", Execution: ex}
 	case ReasonTimeout:
-		// One reason covers two deadlines: the sandbox lifetime and the
-		// execution's own timeout_seconds. Only the lifetime kills the sandbox,
-		// so the message must not claim the sandbox expired when a command
-		// simply ran too long.
 		return &Error{Code: string(ReasonTimeout), Message: "sandbox: execution timed out", Execution: ex}
 	case ReasonUnknown:
 		return &Error{Code: string(ReasonUnknown), Message: "sandbox: execution termination cause is unknown", Execution: ex}

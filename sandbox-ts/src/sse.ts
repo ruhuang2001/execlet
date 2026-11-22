@@ -1,7 +1,6 @@
 import { SandboxError } from './errors.js';
 import type { CompletedExecution, Event } from './types.js';
 
-// Worst-case complete events contain ~12 MiB of escaped command and output.
 const maxFrameLength = 16 * 1024 * 1024;
 
 function invalid(message: string, cause?: unknown): SandboxError {
@@ -40,7 +39,6 @@ function parseEvent(id: string, type: string, data: string): Event {
   return { id: number, type: 'complete', execution: payload as CompletedExecution };
 }
 
-/** Incremental SSE framing: UTF-8, CR/LF/CRLF, comments, and multiline data. */
 export async function* parseSSE(body: ReadableStream<Uint8Array>): AsyncGenerator<Event> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -97,9 +95,6 @@ export async function* parseSSE(body: ReadableStream<Uint8Array>): AsyncGenerato
       lineLength += rest.length;
       if (lineLength > maxFrameLength) throw invalid('SSE line exceeds 16 Mi characters');
       if (chunk.done) {
-        // Clean EOF can still cut a frame halfway through JSON. Keep the
-        // cursor at the last delivered event so a reconnect can replay it.
-        // Explicitly delimited malformed frames remain protocol errors.
         let event: Event | undefined;
         try {
           if (fragments.length) line(fragments.join(''));
@@ -107,13 +102,12 @@ export async function* parseSSE(body: ReadableStream<Uint8Array>): AsyncGenerato
         } catch (cause) {
           throw new SandboxError('transport', 'sandbox: stream ended in an incomplete event', { cause });
         }
-        // Valid unterminated events are accepted once, matching Go.
         if (event) yield event;
         return;
       }
     }
   } finally {
-    try { await reader.cancel(); } catch { /* Already disconnected/aborted. */ }
+    try { await reader.cancel(); } catch {}
     reader.releaseLock();
   }
 }

@@ -18,7 +18,6 @@ import (
 	"github.com/ruhuang2001/tiny-sandbox/internal/daemon/membackend"
 )
 
-// handlerHarness is a real HTTP server over the in-memory backend.
 type handlerHarness struct {
 	t   *testing.T
 	srv *httptest.Server
@@ -34,14 +33,12 @@ func newHandlerHarness(t *testing.T, opts ...daemon.Option) *handlerHarness {
 	return &handlerHarness{t: t, srv: srv, be: be}
 }
 
-// reply is one response, already read and closed so no test leaks a body.
 type reply struct {
 	Status int
 	Body   []byte
 	Header http.Header
 }
 
-// raw sends a request and returns the response fully read. body may be nil.
 func (h *handlerHarness) raw(method, path string, body []byte, header map[string]string) *reply {
 	h.t.Helper()
 	var r io.Reader
@@ -70,12 +67,10 @@ func (h *handlerHarness) raw(method, path string, body []byte, header map[string
 	return &reply{Status: resp.StatusCode, Body: data, Header: resp.Header}
 }
 
-// do is raw for callers that only need the status and the decoded body.
 func (h *handlerHarness) do(method, path string, body []byte, header map[string]string) *reply {
 	return h.raw(method, path, body, header)
 }
 
-// jsonBody decodes a response body into v.
 func (h *handlerHarness) jsonBody(resp *reply, v any) {
 	h.t.Helper()
 	if err := json.Unmarshal(resp.Body, v); err != nil {
@@ -83,7 +78,6 @@ func (h *handlerHarness) jsonBody(resp *reply, v any) {
 	}
 }
 
-// errorCode returns the contract code of an error response.
 func (h *handlerHarness) errorCode(resp *reply) string {
 	h.t.Helper()
 	var body struct {
@@ -129,11 +123,11 @@ func TestHandlerLifecycle(t *testing.T) {
 	}{
 		{http.MethodGet, path, 200, daemon.StateRunning},
 		{http.MethodPost, path + "/pause", 200, daemon.StatePaused},
-		{http.MethodPost, path + "/pause", 200, daemon.StatePaused}, // idempotent
+		{http.MethodPost, path + "/pause", 200, daemon.StatePaused},
 		{http.MethodPost, path + "/resume", 200, daemon.StateRunning},
 		{http.MethodPost, path + "/resume", 200, daemon.StateRunning},
 		{http.MethodDelete, path, 200, daemon.StateKilled},
-		{http.MethodDelete, path, 200, daemon.StateKilled}, // idempotent
+		{http.MethodDelete, path, 200, daemon.StateKilled},
 	} {
 		resp := h.do(step.method, step.path, nil, nil)
 		if resp.Status != step.status {
@@ -146,7 +140,6 @@ func TestHandlerLifecycle(t *testing.T) {
 		}
 	}
 
-	// Pause and resume are invalid on a killed sandbox.
 	resp := h.do(http.MethodPost, path+"/pause", nil, nil)
 	if resp.Status != http.StatusConflict || h.errorCode(resp) != "invalid_state" {
 		t.Errorf("pause killed = %d %s, want 409 invalid_state", resp.Status, h.errorCode(resp))
@@ -219,7 +212,6 @@ func TestHandlerExecutionFlow(t *testing.T) {
 		t.Fatalf("state = %s", ex.State)
 	}
 
-	// The execution completes on its own.
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		get := h.do(http.MethodGet, base+"/"+ex.ID, nil, nil)
@@ -240,7 +232,6 @@ func TestHandlerExecutionFlow(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	// List responses carry no output field at all.
 	listResp := h.do(http.MethodGet, base, nil, nil)
 	if strings.Contains(string(listResp.Body), `"stdout"`) {
 		t.Errorf("list response carries stdout: %s", listResp.Body)
@@ -251,7 +242,7 @@ func TestHandlerBusyAndIdempotency(t *testing.T) {
 	h := newHandlerHarness(t)
 	release := make(chan struct{})
 	h.be.Streamers["slow"] = func(_ context.Context, write func([]byte, []byte) error) int {
-		<-release // runs until the test lets it finish
+		<-release
 		_ = write([]byte("done\n"), nil)
 		return 0
 	}
@@ -265,13 +256,11 @@ func TestHandlerBusyAndIdempotency(t *testing.T) {
 	var ex daemon.Execution
 	h.jsonBody(first, &ex)
 
-	// A second start with a different command is busy.
 	busy := h.do(http.MethodPost, base, []byte(`{"command":["other"]}`), nil)
 	if busy.Status != http.StatusConflict || h.errorCode(busy) != "busy" {
 		t.Fatalf("second start = %d %s, want 409 busy", busy.Status, h.errorCode(busy))
 	}
 
-	// The same key and command replays the record with 200.
 	replay := h.do(http.MethodPost, base, []byte(`{"command":["slow"],"idempotency_key":"k1"}`), nil)
 	if replay.Status != http.StatusOK {
 		t.Fatalf("replay = %d, want 200", replay.Status)
@@ -282,7 +271,6 @@ func TestHandlerBusyAndIdempotency(t *testing.T) {
 		t.Errorf("replay id = %s, want %s", again.ID, ex.ID)
 	}
 
-	// The same key with a different command conflicts.
 	conflict := h.do(http.MethodPost, base, []byte(`{"command":["other"],"idempotency_key":"k1"}`), nil)
 	if conflict.Status != http.StatusConflict || h.errorCode(conflict) != "idempotency_conflict" {
 		t.Fatalf("conflict = %d %s", conflict.Status, h.errorCode(conflict))
@@ -291,12 +279,10 @@ func TestHandlerBusyAndIdempotency(t *testing.T) {
 	close(release)
 }
 
-// sseEvent is one parsed server-sent event.
 type sseEvent struct {
 	id, kind, data string
 }
 
-// readSSE parses events until the stream closes or the deadline passes.
 func readSSE(t *testing.T, body io.Reader) []sseEvent {
 	t.Helper()
 	var events []sseEvent
@@ -337,7 +323,6 @@ func TestHandlerEventStream(t *testing.T) {
 	var ex daemon.Execution
 	h.jsonBody(resp, &ex)
 
-	// Let the execution finish so the whole log is replayable.
 	time.Sleep(50 * time.Millisecond)
 
 	req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, h.srv.URL+base+"/"+ex.ID+"/events", nil)
@@ -366,15 +351,12 @@ func TestHandlerEventStream(t *testing.T) {
 	if complete.ID != ex.ID || complete.Stdout != "one\ntwo\n" {
 		t.Errorf("complete = %+v", complete)
 	}
-	// IDs start at 1 and increase by 1.
 	for i, ev := range events {
 		if ev.id != strconv.Itoa(i+1) {
 			t.Fatalf("event %d has id %q", i, ev.id)
 		}
 	}
 
-	// Replay after the first event: the complete event is still last, and
-	// no event is repeated.
 	req2, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, h.srv.URL+base+"/"+ex.ID+"/events", nil)
 	req2.Header.Set("Last-Event-ID", "1")
 	replayResp, err := h.srv.Client().Do(req2)
@@ -390,7 +372,6 @@ func TestHandlerEventStream(t *testing.T) {
 		t.Errorf("replay starts at id %q, want 2", replayed[0].id)
 	}
 
-	// A bad Last-Event-ID is rejected before streaming starts.
 	bad := h.do(http.MethodGet, base+"/"+ex.ID+"/events", nil, map[string]string{"Last-Event-ID": "abc"})
 	if bad.Status != http.StatusBadRequest || h.errorCode(bad) != "invalid_request" {
 		t.Errorf("bad Last-Event-ID = %d %s", bad.Status, h.errorCode(bad))
@@ -438,21 +419,18 @@ func TestHandlerRequestLimits(t *testing.T) {
 	h := newHandlerHarness(t)
 	sb := h.create()
 
-	// A file above 10 MiB is rejected rather than truncated.
 	big := bytes.Repeat([]byte("x"), daemon.MaxFileBytes+1)
 	resp := h.do(http.MethodPut, "/v1/sandboxes/"+sb.ID+"/files?path=/big", big, nil)
 	if resp.Status != http.StatusRequestEntityTooLarge || h.errorCode(resp) != "payload_too_large" {
 		t.Errorf("big file = %d %s", resp.Status, h.errorCode(resp))
 	}
 
-	// A JSON body above 1 MiB is rejected.
 	huge := []byte(`{"image":"` + strings.Repeat("a", daemon.MaxRequestBodyBytes) + `"}`)
 	resp = h.do(http.MethodPost, "/v1/sandboxes", huge, nil)
 	if resp.Status != http.StatusRequestEntityTooLarge || h.errorCode(resp) != "payload_too_large" {
 		t.Errorf("big body = %d %s", resp.Status, h.errorCode(resp))
 	}
 
-	// Malformed JSON is a 400.
 	resp = h.do(http.MethodPost, "/v1/sandboxes", []byte(`{`), nil)
 	if resp.Status != http.StatusBadRequest || h.errorCode(resp) != "invalid_request" {
 		t.Errorf("malformed = %d %s", resp.Status, h.errorCode(resp))
@@ -467,16 +445,12 @@ func TestHandlerNotFound(t *testing.T) {
 	}
 }
 
-// TestHandlerShutdownEndsStreams pins graceful shutdown: http.Server.Shutdown
-// waits for handlers but does not cancel their contexts, so a live event stream
-// would hold the shutdown open until its deadline. The shutdown signal ends it.
 func TestHandlerShutdownEndsStreams(t *testing.T) {
 	be := membackend.New()
 	be.Programs["block"] = func(ctx context.Context, _ []string) (string, string, int) {
 		<-ctx.Done()
 		return "", "", 137
 	}
-	// A command that never finishes on its own, so the stream stays open.
 	shuttingDown := make(chan struct{})
 	srv := httptest.NewServer(daemon.NewHandler(daemon.New(be), "test-version").WithShutdown(shuttingDown))
 	t.Cleanup(srv.Close)
@@ -523,7 +497,6 @@ func TestHandlerRejectsTrailingJSON(t *testing.T) {
 	}
 }
 
-// postJSON POSTs body and decodes the response into T.
 func postJSON[T any](t *testing.T, srv *httptest.Server, path, body string) T {
 	t.Helper()
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+path, strings.NewReader(body))

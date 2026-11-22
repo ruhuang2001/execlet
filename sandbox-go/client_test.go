@@ -22,7 +22,6 @@ func TestBackoffIsCappedAndJittered(t *testing.T) {
 			t.Fatalf("attempt %d: negative backoff %v", attempt, d)
 		}
 	}
-	// Attempt 0 is 200ms and attempt 3 already hits the 2s cap.
 	if d := backoff(0, 0); d > baseBackoff {
 		t.Errorf("attempt 0 backoff = %v, want at most %v", d, baseBackoff)
 	}
@@ -99,7 +98,6 @@ func TestGetStopsAtRetryLimit(t *testing.T) {
 	if !errors.As(err, &sdkErr) || !sdkErr.Retryable() {
 		t.Fatalf("err = %v, want a retryable *Error", err)
 	}
-	// One original attempt plus two retries.
 	if n := f.count(http.MethodGet, "/v1/sandboxes/sbx_1"); n != 3 {
 		t.Errorf("%d attempts, want 3", n)
 	}
@@ -121,8 +119,6 @@ func TestNonRetryableErrorIsAttemptedOnce(t *testing.T) {
 	}
 }
 
-// A create must never be retried: a second attempt could start a second
-// container.
 func TestCreateIsAttemptedExactlyOnce(t *testing.T) {
 	f := newFakeServer(t)
 	f.setHandler(func(w http.ResponseWriter, _ *http.Request) {
@@ -139,8 +135,6 @@ func TestCreateIsAttemptedExactlyOnce(t *testing.T) {
 	}
 }
 
-// A start without a key could run a command twice, so the SDK supplies a key
-// and retries only because of it.
 func TestStartCarriesIdempotencyKey(t *testing.T) {
 	f := newFakeServer(t)
 	var calls atomic.Int32
@@ -229,9 +223,6 @@ func TestErrorMatchesSentinels(t *testing.T) {
 }
 
 func TestOutcomeSentinelsAreExclusive(t *testing.T) {
-	// An OOM kill typically exits 137. It must match ErrOOM and must not also
-	// match ErrNonZeroExit, or a caller branching on "my program has a bug"
-	// sees the wrong outcome and never checks the memory limit.
 	oomExit := 137
 	oom := ReasonOOM
 	err := outcomeError(&Execution{ExitCode: &oomExit, TerminationReason: &oom})
@@ -242,8 +233,6 @@ func TestOutcomeSentinelsAreExclusive(t *testing.T) {
 		t.Error("an OOM kill also matched ErrNonZeroExit")
 	}
 
-	// Same for the other reasoned outcomes, all of which can carry a
-	// non-zero exit code.
 	for _, tc := range []struct {
 		reason Reason
 		want   error
@@ -263,7 +252,6 @@ func TestOutcomeSentinelsAreExclusive(t *testing.T) {
 		}
 	}
 
-	// An ordinary non-zero exit matches only ErrNonZeroExit.
 	code := 3
 	exited := ReasonExited
 	plain := outcomeError(&Execution{ExitCode: &code, TerminationReason: &exited})
@@ -276,8 +264,6 @@ func TestOutcomeSentinelsAreExclusive(t *testing.T) {
 		}
 	}
 
-	// The timeout message must not claim the sandbox expired: an execution
-	// timeout normally leaves the sandbox running.
 	timeout := ReasonTimeout
 	var sdkErr *Error
 	if errors.As(outcomeError(&Execution{ExitCode: &code, TerminationReason: &timeout}), &sdkErr) {
@@ -386,15 +372,10 @@ func TestTimeRoundTrips(t *testing.T) {
 	}
 }
 
-// jsonUnmarshal decodes test fixture bytes.
 func jsonUnmarshal(data []byte, v any) error {
 	return json.Unmarshal(data, v)
 }
 
-// implementsIs reports whether err matches target through the SDK's own Is
-// method, rather than the errors.Is equality fallback. Every outcome here is an
-// *Error, so the distinction matters: an *Error that declines a target must not
-// match it by message text.
 func implementsIs(err, target error) bool {
 	var sdkErr *Error
 	return errors.As(err, &sdkErr) && sdkErr.Is(target)
@@ -576,7 +557,7 @@ func TestFileCapabilityDiscovery(t *testing.T) {
 	if err != nil || len(refresh) != 1 || refresh[0] != "unrelated" {
 		t.Fatalf("explicit refresh: %v, %v", refresh, err)
 	}
-	refresh[0] = "files.archive.v1" // a caller must not be able to grant itself a capability
+	refresh[0] = "files.archive.v1"
 	before := f.count(http.MethodGet, path)
 	_, listErr := c.ListFiles(t.Context(), "s", "/", ListFilesOptions{})
 	_, readErr := c.ReadArchive(t.Context(), "s", "/")

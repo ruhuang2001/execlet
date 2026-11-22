@@ -8,8 +8,6 @@ import (
 	"github.com/ruhuang2001/tiny-sandbox/internal/daemon"
 )
 
-// Pausing makes an exec probe impossible. On a Linux host where the exact
-// container cgroup is visible, both samples still work and see the real kill.
 func TestRealLocalOOMCounter(t *testing.T) {
 	h := newRealHarness(t)
 	b, err := Dial(t.Context(), dockerSocket(t))

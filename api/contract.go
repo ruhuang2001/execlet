@@ -1,10 +1,3 @@
-// Package api embeds the HTTP contract and exposes the operation set the
-// server's routes are checked against.
-//
-// The embedded document is the same file docs/api.md freezes: api.md is the
-// prose contract, openapi.yaml its machine-readable form. A test in this
-// package compares the operation set parsed from the spec with the routes the
-// server registers, so the two cannot drift silently.
 package api
 
 import (
@@ -19,8 +12,6 @@ import (
 //go:embed openapi.yaml
 var spec []byte
 
-// httpMethods is the set of keys under a path item that denote operations.
-// Everything else (parameters, summary, description, servers) is ignored.
 var httpMethods = map[string]bool{
 	"get":     true,
 	"put":     true,
@@ -32,24 +23,19 @@ var httpMethods = map[string]bool{
 	"trace":   true,
 }
 
-// Spec returns the embedded OpenAPI document.
 func Spec() []byte {
 	return spec
 }
 
-// Operation is one method and path template in the contract.
 type Operation struct {
-	Method string // uppercase HTTP method, for example "GET"
-	Path   string // OpenAPI path template, for example "/v1/sandboxes/{sandbox_id}"
+	Method string
+	Path   string
 }
 
-// String renders the operation as "GET /v1/sandboxes/{sandbox_id}".
 func (o Operation) String() string {
 	return o.Method + " " + o.Path
 }
 
-// Operations parses the embedded spec and returns its operations, sorted by
-// path and then method.
 func Operations() ([]Operation, error) {
 	var doc struct {
 		Paths map[string]map[string]yaml.Node `yaml:"paths"`
@@ -78,8 +64,6 @@ func Operations() ([]Operation, error) {
 	return ops, nil
 }
 
-// Diff compares want with got and reports the operations present in only one
-// of them. Both results are sorted.
 func Diff(want, got []Operation) (missing, extra []Operation) {
 	index := make(map[Operation]bool, len(got))
 	for _, op := range got {

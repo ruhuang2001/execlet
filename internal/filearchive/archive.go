@@ -1,4 +1,3 @@
-// Package filearchive validates bounded tar streams without host extraction.
 package filearchive
 
 import (
@@ -12,7 +11,6 @@ import (
 	"unicode/utf8"
 )
 
-// Limits bound encoded bytes, total payload bytes and entry metadata independently.
 const (
 	MaxBytes          = 32 << 20
 	MaxExtractedBytes = 16 << 20
@@ -21,7 +19,6 @@ const (
 	MaxPathBytes      = 1 << 20
 )
 
-// Error distinguishes invalid input from resource limits.
 type Error struct {
 	Message  string
 	TooLarge bool
@@ -31,19 +28,16 @@ func (e *Error) Error() string                 { return e.Message }
 func invalid(format string, args ...any) error { return &Error{Message: fmt.Sprintf(format, args...)} }
 func large(message string) error               { return &Error{Message: message, TooLarge: true} }
 
-// Entry holds validated metadata and bytes for a supported member.
 type Entry struct {
 	Header tar.Header
 	Data   []byte
 }
 
-// Archive is fully validated and canonically encoded for container extraction.
 type Archive struct {
 	entries []Entry
 	data    []byte
 }
 
-// Parse validates every header and payload before constructing a safe archive.
 func Parse(data []byte) (*Archive, error) {
 	if len(data) > MaxBytes {
 		return nil, large("archive exceeds 32 MiB encoded limit")
@@ -205,7 +199,6 @@ func allZero(data []byte) bool {
 	return true
 }
 
-// Entries returns detached validated members; callers cannot mutate the archive.
 func (a *Archive) Entries() []Entry {
 	result := make([]Entry, len(a.entries))
 	for i, entry := range a.entries {
@@ -214,8 +207,6 @@ func (a *Archive) Entries() []Entry {
 	return result
 }
 
-// Bytes returns a copy of the canonical validated tar.
 func (a *Archive) Bytes() []byte { return bytes.Clone(a.data) }
 
-// Len reports the encoded size; only Parse can create a nonempty validated archive.
 func (a *Archive) Len() int { return len(a.data) }

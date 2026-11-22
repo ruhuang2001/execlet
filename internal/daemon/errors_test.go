@@ -10,9 +10,6 @@ import (
 	"github.com/ruhuang2001/tiny-sandbox/internal/daemon/membackend"
 )
 
-// TestBackendFailures covers what the daemon reports when the container
-// runtime fails, and the contract's rule that a vanished container is an
-// eviction rather than a 502 that will never clear.
 func TestBackendFailures(t *testing.T) {
 	ctx := context.Background()
 
@@ -25,7 +22,6 @@ func TestBackendFailures(t *testing.T) {
 
 		_, err = s.Pause(ctx, sb.ID)
 		wantCode(t, err, daemon.CodeBackendError)
-		// The sandbox must stay running: a failed transition changes nothing.
 		got, err := s.Get(sb.ID)
 		wantNoError(t, err)
 		if got.State != daemon.StateRunning {
@@ -81,7 +77,6 @@ func TestBackendFailures(t *testing.T) {
 	})
 }
 
-// TestErrorType covers the contract error type as clients see it.
 func TestErrorType(t *testing.T) {
 	cause := errors.New("cause")
 	err := &daemon.Error{Code: daemon.CodeBusy, Message: "busy", Err: cause}
@@ -104,7 +99,6 @@ func TestErrorType(t *testing.T) {
 	}
 }
 
-// TestLastEventID checks the helper an SDK uses to resume without replay.
 func TestLastEventID(t *testing.T) {
 	ctx := context.Background()
 	h := newHarness(t)
@@ -128,7 +122,6 @@ func TestLastEventID(t *testing.T) {
 	wantCode(t, err, daemon.CodeNotFound)
 }
 
-// TestEventsErrors covers stream lookup failures.
 func TestEventsErrors(t *testing.T) {
 	h := newHarness(t)
 	sb := h.create(daemon.CreateRequest{})
@@ -138,8 +131,6 @@ func TestEventsErrors(t *testing.T) {
 	wantCode(t, err, daemon.CodeNotFound)
 }
 
-// TestConcurrentOperations runs every entry point at once under -race, which
-// is the point of the stage gate: the store's locking must hold under load.
 func TestConcurrentOperations(t *testing.T) {
 	ctx := context.Background()
 	h := newHarness(t)
@@ -185,11 +176,6 @@ func TestConcurrentOperations(t *testing.T) {
 	}
 }
 
-// TestTimeoutPauseRecordsALateSuccess covers the pause path when the runtime
-// pauses the container but the request still fails (a timeout after Docker
-// acted). The record must follow the runtime: otherwise it stays running while
-// the container is frozen, every later reaper beat repeats a pause that Docker
-// answers with "already paused", and the sandbox is stuck.
 func TestTimeoutPauseRecordsALateSuccess(t *testing.T) {
 	ctx := context.Background()
 	clock := newFakeClock()
@@ -214,9 +200,6 @@ func TestTimeoutPauseRecordsALateSuccess(t *testing.T) {
 	}
 }
 
-// TestFailedRemovalIsRetried covers a removal that fails under the bounded
-// backend timeout. The record is already killed and nothing else revisits that
-// container, so without a retry it outlives the deadline it was killed for.
 func TestFailedRemovalIsRetried(t *testing.T) {
 	ctx := context.Background()
 	clock := newFakeClock()
@@ -227,8 +210,6 @@ func TestFailedRemovalIsRetried(t *testing.T) {
 	container := sb.ID
 	_ = container
 
-	// The delete reports the container that is still there. Answering success
-	// would tell the caller nothing of this sandbox is running while it is.
 	if _, err := s.Delete(ctx, sb.ID); err == nil {
 		t.Fatal("delete succeeded after the removal failed; an unconfirmed removal is not cleanup")
 	} else if code := daemon.CodeOf(err); code != daemon.CodeBackendError {
@@ -248,7 +229,6 @@ func TestFailedRemovalIsRetried(t *testing.T) {
 	if got := be.State(s.ContainerIDForTest(sb.ID)); got != daemon.LivenessMissing {
 		t.Fatalf("container = %v after the retry, want missing", got)
 	}
-	// Once the retry has removed it, the same delete confirms and succeeds.
 	if _, err := s.Delete(ctx, sb.ID); err != nil {
 		t.Fatalf("delete after a successful retry: %v", err)
 	}

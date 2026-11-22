@@ -39,8 +39,6 @@ func (f *acceptedStartFault) RoundTrip(req *http.Request) (*http.Response, error
 	return response, nil
 }
 
-// The transport discards an accepted response, then changes the caller's data.
-// Every response comes from the real daemon/Docker; only delivery is faulted.
 func TestLiveEnvRecoverySnapshotsInvocation(t *testing.T) {
 	direct := liveClient(t)
 	sb := liveSandbox(t, direct, "alpine:3.20", 64)

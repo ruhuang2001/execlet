@@ -169,7 +169,6 @@ execution = client.start_execution(
 execution = client.stream_execution(sandbox.id, execution.id)
 assert execution.termination_reason == "timeout"
 
-# A local deadline requests cancellation; it does not invent a server timeout.
 token = CancellationToken(timeout=2)
 client.exec(sandbox.id, ["sh", "-c", "sleep 30"], cancel=token)
 ```

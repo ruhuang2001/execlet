@@ -5,7 +5,6 @@ import type { Event, EventHandler, Execution, StreamExecutionOptions } from './t
 
 type Cancel = () => Promise<SandboxError>;
 
-/** An iterator-local controller lets return() interrupt an outstanding next(). */
 export function streamEvents(transport: Transport, path: string,
   options: StreamExecutionOptions, cancel: Cancel): AsyncIterableIterator<Event> {
   if (options.lastEventId !== undefined && (!Number.isSafeInteger(options.lastEventId) || options.lastEventId < 0)) {
@@ -34,7 +33,6 @@ async function* readEvents(transport: Transport, path: string,
   let cursor = options.lastEventId ?? 0;
   let completed = false;
   let recovery: Promise<SandboxError> | undefined;
-  // Also clean up while a consumer is between next() calls or in a callback.
   const abort = () => {
     if (!completed && !recovery) recovery = cancel();
     local.abort();
@@ -71,7 +69,6 @@ async function* readEvents(transport: Transport, path: string,
         if (local.signal.aborted) return;
         const error = transportError(cause);
         if (!error.retryable || attempt >= transport.maxRetries) throw error;
-        // One cumulative retry budget. Progress never resets attempt.
         try { await sleep(backoff(attempt), local.signal); }
         catch (cause) {
           if (recovery) throw await recovery;
@@ -82,7 +79,6 @@ async function* readEvents(transport: Transport, path: string,
     }
   } finally {
     signal?.removeEventListener('abort', abort);
-    // Ordinary iterator return only closes the body. An abort reports cleanup.
     if (recovery) throw await recovery;
   }
 }
@@ -92,7 +88,6 @@ export async function consume(events: AsyncIterable<Event>, handler?: EventHandl
     if (handler) {
       try { await handler(event); }
       catch (cause) {
-        // Even SDK errors thrown by application code are callback failures.
         throw new SandboxError('callback', 'sandbox: event handler failed', { cause });
       }
     }

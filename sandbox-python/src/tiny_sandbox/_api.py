@@ -211,9 +211,6 @@ class SandboxAPI(Transport, ABC):
         cancel_remote: bool = True,
     ) -> Execution:
         """Start once across retries; cancel_remote=False only abandons the wait."""
-        # The keyed request owns copies of the caller's list and dict, so a
-        # caller that changes them while the start is in flight cannot change
-        # what a recovery replays under the same key.
         keyed_request = replace(
             request,
             command=list(request.command),
@@ -233,8 +230,6 @@ class SandboxAPI(Transport, ABC):
             required.append("execution.stdin.v1")
         if keyed_request.timeout_ms is not None:
             required.append("e2b.background.v1")
-        # Capability cancellation precedes dispatch: never replay a command to
-        # recover a canceled read that could not possibly start it.
         self.require_capabilities(*required, cancel=cancel)
         try:
             payload = self._json(
@@ -249,8 +244,6 @@ class SandboxAPI(Transport, ABC):
                     raise Error("decode", "start response identifies a different sandbox")
                 return execution
             except Error as exc:
-                # A malformed handshake can still expose an accepted execution
-                # ID. Keep it with the request key; never fabricate a guest PID.
                 execution_id = payload.get("id")
                 if isinstance(execution_id, str) and execution_id:
                     exc.execution = Execution(id=execution_id, sandbox_id=sandbox_id)

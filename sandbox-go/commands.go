@@ -9,7 +9,6 @@ import (
 	"strconv"
 )
 
-// Capabilities refreshes this client's authenticated feature advertisement.
 func (c *Client) Capabilities(ctx context.Context) ([]string, error) {
 	flags, err := c.discover(ctx, true)
 	return slices.Clone(flags), err
@@ -49,12 +48,10 @@ func (c *Client) discover(ctx context.Context, refresh bool) ([]string, error) {
 	return flags, nil
 }
 
-// RequireCapability fails before mutation on old or unsupported servers.
 func (c *Client) RequireCapability(ctx context.Context, capability string) error {
 	return c.RequireCapabilities(ctx, capability)
 }
 
-// RequireCapabilities checks all required flags in a single discovery request.
 func (c *Client) RequireCapabilities(ctx context.Context, capabilities ...string) error {
 	if len(capabilities) == 0 {
 		return nil
@@ -77,19 +74,16 @@ func (c *Client) RequireCapabilities(ctx context.Context, capabilities ...string
 	return nil
 }
 
-// CommandAttachment contains an execution and its atomic attachment cursor.
 type CommandAttachment struct {
 	Execution   Execution `json:"execution"`
 	LastEventID uint64    `json:"last_event_id"`
 }
 
-// CommandKill contains the terminal outcome and confirmed signal result.
 type CommandKill struct {
 	Execution Execution `json:"execution"`
 	Signaled  bool      `json:"signaled"`
 }
 
-// AttachCommand selects the newest retained managed incarnation of a guest PID.
 func (c *Client) AttachCommand(ctx context.Context, sandboxID string, pid int) (*CommandAttachment, error) {
 	if pid <= 0 {
 		return nil, &Error{Code: "invalid_request", Message: "pid must be positive"}
@@ -108,15 +102,11 @@ func (c *Client) AttachCommand(ctx context.Context, sandboxID string, pid int) (
 	return &result, nil
 }
 
-// KillExecution sends one immediate lifetime-bound kill, never retrying its ACK.
 func (c *Client) KillExecution(ctx context.Context, sandboxID, executionID string) (*CommandKill, error) {
 	if err := c.RequireCapability(ctx, "e2b.background.v1"); err != nil {
 		return nil, err
 	}
 	identity := &Execution{ID: executionID, SandboxID: sandboxID}
-	// No automatic replay of a lost signal acknowledgement. The caller can
-	// inspect this immutable execution, rather than mistake a later false for
-	// confirmation of the original signal.
 	resp, err := c.do(ctx, request{method: http.MethodPost, path: "/v1/sandboxes/" + url.PathEscape(sandboxID) + "/executions/" + url.PathEscape(executionID) + "/kill"})
 	if err != nil {
 		if sdkErr, ok := errors.AsType[*Error](err); ok {

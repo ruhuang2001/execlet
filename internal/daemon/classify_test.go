@@ -10,8 +10,6 @@ import (
 	"github.com/ruhuang2001/tiny-sandbox/internal/daemon/membackend"
 )
 
-// scripted wraps membackend and answers Liveness from a fixed sequence, so the
-// ambiguous-137 race can be reproduced deterministically.
 type scripted struct {
 	*membackend.Backend
 
@@ -42,15 +40,12 @@ func (s *scripted) OOMKillCount(ctx context.Context, id string) (int64, error) {
 	return s.Backend.OOMKillCount(ctx, id)
 }
 
-// livenessCalls returns how many times Liveness was asked.
 func (s *scripted) livenessCalls() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.livenessN
 }
 
-// newScripted builds a harness whose backend answers liveness from answers,
-// repeating the last answer forever.
 func newScripted(t *testing.T, answers ...daemon.Liveness) (*harness, *scripted) {
 	t.Helper()
 	clock := newFakeClock()
@@ -64,9 +59,6 @@ func newScripted(t *testing.T, answers ...daemon.Liveness) (*harness, *scripted)
 	return &harness{t: t, clock: clock, be: be.Backend, s: s}, be
 }
 
-// TestClassificationPrecedence covers the reason table in api.md. The order is
-// fixed: recorded intent, then a positive OOM delta, then container liveness,
-// then the exit code.
 func TestClassificationPrecedence(t *testing.T) {
 	ctx := context.Background()
 
@@ -102,12 +94,9 @@ func TestClassificationPrecedence(t *testing.T) {
 		h.be.Programs["exit"] = memExit
 		sb := h.create(daemon.CreateRequest{})
 		container := h.containerOf(sb.ID)
-		h.be.SetOOMKills(container, 7) // the kernel killed something earlier
+		h.be.SetOOMKills(container, 7)
 		ex, _, err := h.s.StartExecution(ctx, sb.ID, daemon.ExecuteRequest{Command: []string{"exit", "137"}})
 		wantNoError(t, err)
-		// The delta must happen during the execution, so the counter moves
-		// after the baseline sample. membackend's Exec runs the program
-		// asynchronously, which gives us that window.
 		h.be.SetOOMKills(container, 8)
 		done := h.waitCompleted(sb.ID, ex.ID)
 		if *done.TerminationReason != daemon.ReasonOOM {
@@ -134,9 +123,6 @@ func TestClassificationPrecedence(t *testing.T) {
 	})
 
 	t.Run("evicted when the container is stopped", func(t *testing.T) {
-		// The sandbox must already read as killed when the client sees the
-		// execution complete; otherwise the client may start the next command
-		// against a container that is gone. Repeated, because that is a race.
 		h := newHarness(t)
 		h.be.Programs["block"] = memBlock
 		for range 1000 {
@@ -172,12 +158,6 @@ func TestClassificationPrecedence(t *testing.T) {
 	})
 }
 
-// TestAmbiguous137Race is the race the design notes call out, in both
-// directions. `docker inspect` intermittently misses a container record right
-// after an exit, and right after an external kill the daemon can still report
-// "running" for a few milliseconds. Neither a single miss nor a single
-// "running" answer decides; the state is sampled across the whole window and
-// the last observation is the settled one.
 func TestAmbiguous137Race(t *testing.T) {
 	ctx := context.Background()
 
@@ -202,14 +182,11 @@ func TestAmbiguous137Race(t *testing.T) {
 		}
 	})
 
-	// The mirror image, and the reason CI failed: the daemon keeps answering
-	// "running" for a moment after an external kill. Breaking on the first
-	// alive answer classified a `docker kill` as a clean exit.
 	t.Run("a stale running answer settles into evicted", func(t *testing.T) {
 		h, be := newScripted(t,
-			daemon.LivenessRunning, // still stale right after the kill
 			daemon.LivenessRunning,
-			daemon.LivenessStopped, // the daemon records the stop
+			daemon.LivenessRunning,
+			daemon.LivenessStopped,
 		)
 		be.Programs["exit"] = memExit
 		sb := h.create(daemon.CreateRequest{})
@@ -221,10 +198,6 @@ func TestAmbiguous137Race(t *testing.T) {
 		}
 	})
 
-	// The exact shape CI produced: the daemon kept answering "running" for
-	// longer than the old fixed five-sample window, so the last sample still
-	// said alive and a `docker kill` was recorded as a clean exit. The window
-	// is now a time budget, so an answer sequence this long still settles.
 	t.Run("a long stale running answer still settles into evicted", func(t *testing.T) {
 		answers := make([]daemon.Liveness, 0, 9)
 		for i := 0; i < 8; i++ {
@@ -242,8 +215,6 @@ func TestAmbiguous137Race(t *testing.T) {
 		}
 	})
 
-	// A stop that has already settled must not pay the whole window: two
-	// consecutive "stopped" answers are the confirmation, after the minimum.
 	t.Run("a confirmed stop ends the window early", func(t *testing.T) {
 		h, be := newScripted(t, daemon.LivenessStopped, daemon.LivenessStopped)
 		be.Programs["exit"] = memExit

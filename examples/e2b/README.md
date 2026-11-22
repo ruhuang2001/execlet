@@ -9,13 +9,13 @@ not an E2B HTTP endpoint or a replacement package named `e2b`.
 
 Build and run `sandboxd` from the same checkout as the SDKs, following the
 [server instructions](../../docs/quickstart.md). Do not assume an older release
-supports these fields. From the repository root:
+supports these fields. If the server requires authentication, configure
+`SANDBOX_API_KEY` through your environment’s secret store. From the repository root:
 
 ```sh
 docker build -t tiny-sandbox-e2b:local examples/e2b
 export SANDBOX_E2B_IMAGE=$(docker image inspect tiny-sandbox-e2b:local --format '{{.Id}}')
 export SANDBOX_DOMAIN=http://localhost:8080
-# If sandboxd requires authentication, set SANDBOX_API_KEY securely.
 python3 -m pip install ./sandbox-python
 npm --prefix sandbox-ts ci
 npm --prefix sandbox-ts pack

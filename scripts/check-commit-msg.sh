@@ -1,14 +1,4 @@
 #!/usr/bin/env sh
-# Validates one commit message file, or every commit in a revision range.
-#
-#   check-commit-msg.sh <file>              validate a single message file
-#   check-commit-msg.sh <range>             validate commits in a git range
-#
-# Rule: type(scope): summary
-#   - type is one of feat, fix, style, docs, refactor, test, chore, build, ci
-#   - scope is required, lowercase kebab-case
-#   - summary starts lowercase and the subject stays under 72 characters
-#   - merge commits and reverts are skipped
 set -eu
 
 types='feat|fix|style|docs|refactor|test|chore|build|ci'

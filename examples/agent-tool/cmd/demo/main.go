@@ -1,14 +1,3 @@
-// Command agent-tool runs the run_python tool against a real sandboxd, or
-// against an in-process demo server when none is configured.
-//
-// Against a real server:
-//
-//	SANDBOX_DOMAIN=http://127.0.0.1:8080 go run ./examples/agent-tool -- -code 'print(2**10)'
-//
-// With no server, the demo starts the real HTTP handler over the in-memory
-// backend, so `go run ./examples/agent-tool` works with no Docker and no setup.
-// The point is that the tool code path is identical in both cases: it only
-// knows the SDK.
 package main
 
 import (
@@ -52,30 +41,23 @@ func main() {
 	tool := agenttool.New(client)
 	result := tool.Run(ctx, agenttool.Input{Code: *code, TimeoutSeconds: *timeout})
 
-	// A real runtime would send this as a tool-result message. Printing it
-	// shows exactly what the model would read.
 	printJSON(result)
 	if result.IsError {
 		os.Exit(1)
 	}
 }
 
-// clientFor returns a client for the configured server, or for an in-process
-// demo server when SANDBOX_DOMAIN is unset.
 func clientFor(ctx context.Context) (*sandbox.Client, func(), error) {
 	if domain := os.Getenv("SANDBOX_DOMAIN"); domain != "" {
 		client, err := sandbox.NewClient(sandbox.Config{Domain: domain})
 		return client, func() {}, err
 	}
 
-	// No server configured: serve the contract in-process over the in-memory
-	// backend. This is the same handler the binary uses, so the demo exercises
-	// the real JSON and streaming paths.
 	backend := membackend.New()
 	backend.Programs["python3"] = memDemoPython
 	store := daemon.New(backend)
 	srv := httptest.NewServer(daemon.NewHandler(store, "demo"))
-	_ = ctx // the demo server lives for the process
+	_ = ctx
 
 	client, err := sandbox.NewClient(sandbox.Config{Domain: srv.URL})
 	if err != nil {
@@ -86,9 +68,6 @@ func clientFor(ctx context.Context) (*sandbox.Client, func(), error) {
 	return client, srv.Close, nil
 }
 
-// memDemoPython is a stand-in for a real interpreter, so the demo needs no
-// Docker. It recognises the one expression the demo prints; anything else
-// reports a nonzero exit, which the tool maps to nonzero_exit.
 func memDemoPython(_ context.Context, args []string) (string, string, int) {
 	if len(args) == 2 && args[0] == "-c" && args[1] == "print(2 ** 10)" {
 		return "1024\n", "", 0

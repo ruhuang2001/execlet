@@ -21,8 +21,6 @@ def send(path, token, action):
         try:
             conn.connect(path + '.sock')
         except (FileNotFoundError, ConnectionRefusedError):
-            # No request was sent. A retained terminal record distinguishes a
-            # natural exit from an unreachable/lost supervisor.
             with open(path + '.result') as result:
                 json.load(result)
             print('{"signaled":false}')
@@ -50,10 +48,6 @@ def live_members(pid):
 
 
 def kill_group(pid):
-    # The leader remains unreaped throughout: no replacement may acquire its
-    # group number. Stop delivery closes the natural-exit/check/kill race. It
-    # is not a TERM grace period; a stopped live member cannot exit normally
-    # between confirmation and KILL. Never claim a signal on a zombie alone.
     os.killpg(pid, signal.SIGSTOP)
     until = time.monotonic() + 1
     while True:
@@ -70,9 +64,6 @@ def kill_group(pid):
 
 
 def supervise(path, token, config):
-    # The command is never our process-group peer. Only this parent may reap
-    # it, and no control request can signal after we close the listener. Even
-    # an exited leader keeps its PID reserved while its group has children.
     listener = socket.socket(socket.AF_UNIX)
     listener.bind(path + '.sock')
     os.chmod(path + '.sock', 0o600)
@@ -111,8 +102,6 @@ def supervise(path, token, config):
     reason = 'exited'
     try:
         while True:
-            # WNOWAIT is essential: Popen.poll()/waitpid(WNOHANG) would reap
-            # the leader and let a stale numeric signal select a new process.
             exited = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
             live = exited is None or bool(live_members(pid))
             if not live:
@@ -147,8 +136,6 @@ def supervise(path, token, config):
                         conn.sendall(b'{"error":"signal_unconfirmed"}\n')
                     except OSError:
                         pass
-        # Publish before closing the socket, so a connect that loses the
-        # natural-exit race can prove it sent nothing and return false.
         exited = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT)
         code = exited.si_status if exited.si_code == os.CLD_EXITED else 128 + exited.si_status
         record(path + '.result', {'reason': reason, 'exit_code': code})

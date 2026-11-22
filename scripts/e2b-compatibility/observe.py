@@ -17,9 +17,6 @@ if provider == 'tiny':
     ids = docker('ps', '-aq', '--filter', 'label=tiny-sandbox.owner=' + owner).split()
     matches = []
     for cid in ids:
-        # A container can disappear between the listing and the inspect, and a
-        # vanished container is simply not a match: treating that race as a
-        # failure would turn a correct expiry into an observer error.
         try:
             obj = json.loads(docker('inspect', cid))[0]
         except subprocess.CalledProcessError as exc:

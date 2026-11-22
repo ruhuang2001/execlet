@@ -9,8 +9,6 @@ import (
 	"github.com/ruhuang2001/tiny-sandbox/internal/wirejson"
 )
 
-// StatusError is a non-2xx answer from the Engine API. Docker reports failures
-// as {"message": "..."}; the status is what callers switch on.
 type StatusError struct {
 	Status  int
 	Message string
@@ -23,8 +21,6 @@ func (e *StatusError) Error() string {
 	return fmt.Sprintf("dockerapi: status %d: %s", e.Status, e.Message)
 }
 
-// statusError reads an error response into a *StatusError. A body that is not
-// Docker's JSON error shape is kept as the message, truncated.
 func statusError(resp *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
 	var payload struct {
@@ -37,15 +33,11 @@ func statusError(resp *http.Response) error {
 	return &StatusError{Status: resp.StatusCode, Message: msg}
 }
 
-// IsNotFound reports whether err is a 404 from the daemon: the addressed
-// container, exec or file does not exist.
 func IsNotFound(err error) bool {
 	var se *StatusError
 	return errors.As(err, &se) && se.Status == http.StatusNotFound
 }
 
-// IsConflict reports whether err is a 409: a name is taken, or the container
-// is paused and must be resumed first.
 func IsConflict(err error) bool {
 	var se *StatusError
 	return errors.As(err, &se) && se.Status == http.StatusConflict

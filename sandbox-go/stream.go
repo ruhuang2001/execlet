@@ -14,16 +14,6 @@ import (
 	json "github.com/ruhuang2001/tiny-sandbox/internal/wirejson"
 )
 
-// StreamExecution connects to the event stream and calls onEvent for stdout,
-// stderr, truncated, and complete, in order, each exactly once.
-//
-// On a disconnect it reconnects with Last-Event-ID set to the last delivered
-// ID and drops any event not newer than it, which makes the replay lossless
-// and duplicate-free. Reconnects use the retry backoff, allowing MaxRetries
-// reconnects over the whole call; receiving events does not reset the budget.
-//
-// If onEvent returns an error the stream closes and the error is returned. The
-// execution keeps running: a rendering bug must not kill remote work.
 func (c *Client) StreamExecution(ctx context.Context, sandboxID, executionID string, onEvent func(Event) error) (*Execution, error) {
 	if onEvent == nil {
 		onEvent = func(Event) error { return nil }
@@ -91,8 +81,6 @@ func (c *Client) streamOnce(ctx context.Context, sandboxID, executionID string, 
 		event, err := reader.next()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				// The server closes only after complete, so an EOF before it
-				// means the connection dropped.
 				return nil, false, &Error{Code: "transport", Message: "sandbox: stream ended before the execution completed", Cause: err}
 			}
 			return nil, false, err
@@ -100,8 +88,6 @@ func (c *Client) streamOnce(ctx context.Context, sandboxID, executionID string, 
 		if event == nil {
 			continue
 		}
-		// A reconnect replays from the last ID; anything at or below the
-		// cursor was already delivered.
 		if event.ID <= *cursor {
 			continue
 		}
@@ -122,9 +108,6 @@ func (c *Client) streamOnce(ctx context.Context, sandboxID, executionID string, 
 	}
 }
 
-// cancelAfterContext cancels the execution with a fresh context, because the
-// caller's can no longer carry a request. Success is ErrCanceled with the
-// Execution; failure is ErrCancelUnconfirmed, so nothing runs unnoticed.
 func (c *Client) cancelAfterContext(_ context.Context, sandboxID, executionID string, cause error) (*Execution, error) {
 	fresh, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -146,8 +129,6 @@ func (c *Client) cancelAfterContext(_ context.Context, sandboxID, executionID st
 	}
 }
 
-// callbackError always marks provenance, even for a retryable SDK error.
-// The caller's error remains available through errors.Is and errors.As.
 func callbackError(err error) error {
 	return &Error{Code: "callback", Message: "sandbox: event handler failed", Cause: err}
 }
@@ -168,28 +149,12 @@ func statusOf(err error) int {
 	return 0
 }
 
-// ---------------------------------------------------------------- SSE parsing
-
-// sseReader parses the event-stream format into Events. Multi-line data fields
-// are joined with newlines, and comment lines (": ping") are skipped.
 type sseReader struct {
 	scanner *bufio.Scanner
-	// pending holds an event read from the final, unterminated block; atEOF
-	// makes the call after it report EOF.
 	pending *Event
 	atEOF   bool
 }
 
-// maxEventBytes bounds one SSE line.
-//
-// A complete event carries the whole Execution, which has two parts that can
-// carry arbitrary bytes: `command` (accepted from a request body of up to
-// 1 MiB) and the retained stdout and stderr (1 MiB together). JSON escaping
-// turns one control byte into six characters ("\u0001"), and encoding/json
-// also escapes <, > and & the same way, so each part can expand sixfold:
-// 6 MiB of command plus 6 MiB of output, plus the other fields. 16 MiB covers
-// that with room to spare. The buffer grows lazily, so a small event costs a
-// small allocation.
 const maxEventBytes = 16 << 20
 
 func newSSEReader(r io.Reader) *sseReader {
@@ -198,7 +163,6 @@ func newSSEReader(r io.Reader) *sseReader {
 	return &sseReader{scanner: scanner}
 }
 
-// next returns the next event, or nil for a comment or an empty block.
 func (r *sseReader) next() (*Event, error) {
 	if r.pending != nil {
 		event := r.pending
@@ -223,7 +187,7 @@ func (r *sseReader) next() (*Event, error) {
 			}
 			continue
 		case strings.HasPrefix(line, ":"):
-			continue // comment, including the ping
+			continue
 		case strings.HasPrefix(line, "id:"):
 			value := strings.TrimSpace(strings.TrimPrefix(line, "id:"))
 			id, err := strconv.ParseUint(value, 10, 64)
@@ -244,13 +208,11 @@ func (r *sseReader) next() (*Event, error) {
 	if err := r.scanner.Err(); err != nil {
 		return nil, err
 	}
-	// EOF without a trailing blank line still ends an event that was read.
 	if hasData || event.Type != "" {
 		event, parseErr := parseEvent(&event, data.String())
 		if parseErr != nil {
 			return nil, parseErr
 		}
-		// The next call reports EOF.
 		r.pending = event
 		return event, nil
 	}
@@ -258,11 +220,6 @@ func (r *sseReader) next() (*Event, error) {
 	return nil, io.EOF
 }
 
-// parseEvent fills the typed payload of one event.
-//
-// A block that carried data but no event name is an error: the caller decides
-// what to do from the type, and an event with an empty type would reach an
-// onEvent callback as neither output nor a terminal event.
 func parseEvent(event *Event, data string) (*Event, error) {
 	if event.Type == "" {
 		return nil, &Error{Code: "stream", Message: "sandbox: an event carried data but no event type"}
@@ -294,7 +251,6 @@ func parseEvent(event *Event, data string) (*Event, error) {
 	return event, nil
 }
 
-// parseExecution decodes an Execution payload.
 func parseExecution(data []byte) (*Execution, error) {
 	var ex Execution
 	if err := json.Unmarshal(data, &ex); err != nil {
@@ -303,17 +259,10 @@ func parseExecution(data []byte) (*Execution, error) {
 	return &ex, nil
 }
 
-// ---------------------------------------------------------------- conveniences
-
-// Exec runs a command to completion and returns it. The returned error is nil
-// only when the termination reason is exited and the exit code is 0; any other
-// outcome is an *Error carrying the Execution with its output.
 func (c *Client) Exec(ctx context.Context, sandboxID string, command []string) (*Execution, error) {
 	return c.ExecStream(ctx, sandboxID, command, nil)
 }
 
-// ExecStream is StartExecution followed by StreamExecution, with onEvent
-// receiving output as it arrives.
 func (c *Client) ExecStream(ctx context.Context, sandboxID string, command []string, onEvent func(Event) error) (*Execution, error) {
 	started, err := c.StartExecution(ctx, sandboxID, ExecuteRequest{Command: command})
 	if err != nil {
@@ -332,7 +281,6 @@ func (c *Client) ExecStream(ctx context.Context, sandboxID string, command []str
 	return ex, nil
 }
 
-// executionOf returns the Execution attached to an error, when there is one.
 func executionOf(err error) *Execution {
 	var sdkErr *Error
 	if errors.As(err, &sdkErr) {

@@ -14,7 +14,6 @@ import (
 	"unicode/utf8"
 )
 
-// File scan limits bound recursive archive work and retained metadata.
 const (
 	MaxFileScanBytes     = 64 << 20
 	MaxFileScanEntries   = 10000
@@ -22,12 +21,6 @@ const (
 	FileOperationTimeout = 30 * time.Second
 )
 
-// FileEntry describes an immediate directory child; mode contains POSIX
-// permission bits. Type mirrors what the filesystem reports, so a symlink is
-// not flattened into the file it points at, and uid/gid are the raw ownership
-// the archive carries. Owner and Group are resolved names when the container's
-// account database has them, and empty otherwise: a numeric id is still true,
-// a guessed name is not.
 type FileEntry struct {
 	Name          string    `json:"name"`
 	Size          int64     `json:"size"`
@@ -42,26 +35,20 @@ type FileEntry struct {
 	SymlinkTarget string    `json:"symlink_target,omitempty"`
 }
 
-// FileType is the filesystem object kind a listing reports.
 type FileType string
 
-// File types.
 const (
 	FileTypeFile    FileType = "file"
 	FileTypeDir     FileType = "dir"
 	FileTypeSymlink FileType = "symlink"
-	// FileTypeOther covers device nodes, sockets and FIFOs. A caller that only
-	// knows the three E2B kinds must not silently treat these as files.
-	FileTypeOther FileType = "other"
+	FileTypeOther   FileType = "other"
 )
 
-// FileList is one name-ordered page. NextCursor is absent on the last page.
 type FileList struct {
 	Entries    []FileEntry `json:"entries"`
 	NextCursor string      `json:"next_cursor,omitempty"`
 }
 
-// ValidateFilePath validates directory/archive paths without changing legacy file paths.
 func ValidateFilePath(p string) error {
 	if !path.IsAbs(p) || len(p) > MaxFilePathBytes || strings.ContainsRune(p, 0) || !utf8.ValidString(p) {
 		return errorf(CodeInvalidRequest, "path must be an absolute UTF-8 path of at most %d bytes without NUL", MaxFilePathBytes)
@@ -74,7 +61,6 @@ func ValidateFilePath(p string) error {
 	return nil
 }
 
-// SelectFilePage bounds retained metadata independently of directory size.
 func SelectFilePage(entries []FileEntry, entry FileEntry, after string, limit int) []FileEntry {
 	if entry.Name <= after {
 		return entries
@@ -107,7 +93,6 @@ func fileCursor(p, cursor string) (string, error) {
 	return name, nil
 }
 
-// ListFiles lists immediate children, resuming a paused sandbox first.
 func (s *Sandboxes) ListFiles(ctx context.Context, id, p string, limit int, cursor string) (FileList, error) {
 	if err := ValidateFilePath(p); err != nil {
 		return FileList{}, err

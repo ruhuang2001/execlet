@@ -39,8 +39,6 @@ func TestCreateSendsLimitsAndLabels(t *testing.T) {
 	if want := int64(256 << 20); cfg.HostConfig.Memory != want {
 		t.Errorf("memory = %d, want %d", cfg.HostConfig.Memory, want)
 	}
-	// Swap must equal the memory limit, or the sandbox exceeds the limit the
-	// user declared by swapping.
 	if cfg.HostConfig.MemorySwap != cfg.HostConfig.Memory {
 		t.Errorf("memory_swap = %d, want %d", cfg.HostConfig.MemorySwap, cfg.HostConfig.Memory)
 	}
@@ -56,22 +54,15 @@ func TestCreateSendsLimitsAndLabels(t *testing.T) {
 	if !slices.Contains(cfg.HostConfig.CapDrop, "NET_RAW") {
 		t.Errorf("cap_drop = %v, want NET_RAW among them", cfg.HostConfig.CapDrop)
 	}
-	// Device-node creation is the other capability a sandbox must not have:
-	// MKNOD would let a command reach host devices.
 	if !slices.Contains(cfg.HostConfig.CapDrop, "MKNOD") {
 		t.Errorf("cap_drop = %v, want MKNOD among them", cfg.HostConfig.CapDrop)
 	}
 	if !slices.Contains(cfg.HostConfig.SecurityOpt, "no-new-privileges") {
 		t.Errorf("security_opt = %v, want no-new-privileges", cfg.HostConfig.SecurityOpt)
 	}
-	// PID 1 has to reap orphans. Without an init process, a child whose
-	// parent exits stays a zombie and keeps its pids slot forever, so a
-	// sandbox that forked once eventually cannot fork again.
 	if cfg.HostConfig.Init == nil || !*cfg.HostConfig.Init {
 		t.Errorf("init = %v, want an init process as PID 1 so orphans are reaped", cfg.HostConfig.Init)
 	}
-	// An unset network means bridge: the default must not silently isolate a
-	// sandbox whose request never mentioned networking.
 	if cfg.HostConfig.NetworkMode != string(daemon.NetworkBridge) {
 		t.Errorf("network_mode = %q, want %q", cfg.HostConfig.NetworkMode, daemon.NetworkBridge)
 	}
@@ -83,9 +74,6 @@ func TestCreateSendsLimitsAndLabels(t *testing.T) {
 	}
 }
 
-// TestCreateAppliesSpecLimits pins the request-driven values, which the
-// defaults test cannot see: a limit the caller asked for must reach Docker,
-// and an explicit network mode must override the bridge default.
 func TestCreateAppliesSpecLimits(t *testing.T) {
 	f := newFakeDaemon(t)
 	b := f.backend(t)
@@ -114,9 +102,6 @@ func TestCreateAppliesSpecLimits(t *testing.T) {
 	}
 }
 
-// A spec without a pids limit still gets the default. The request layer
-// resolves it, but a backend used directly must not be able to create an
-// unbounded container by omission.
 func TestCreateDefaultsPidsLimitWhenUnset(t *testing.T) {
 	f := newFakeDaemon(t)
 	b := f.backend(t)
@@ -147,9 +132,6 @@ func TestCreateRemovesContainerWhenStartFails(t *testing.T) {
 	}
 }
 
-// A clean host has no image, and the Engine API's create does not pull one.
-// Without this the server works on a developer machine and fails everywhere
-// else; CI caught exactly that.
 func TestCreatePullsMissingImage(t *testing.T) {
 	f := newFakeDaemon(t)
 	f.mu.Lock()
@@ -214,7 +196,6 @@ func TestCreateDoesNotPullAnImageThatExists(t *testing.T) {
 
 func TestCreateRetriesAfterNameConflict(t *testing.T) {
 	f := newFakeDaemon(t)
-	// A leftover container already owns the name.
 	f.mu.Lock()
 	f.nameTaken = "tiny-sandbox-sbx_1"
 	f.mu.Unlock()
@@ -229,8 +210,6 @@ func TestCreateRetriesAfterNameConflict(t *testing.T) {
 	if id == "" || id == "ctr_leftover" {
 		t.Fatalf("id = %q, want a fresh container", id)
 	}
-	// The backend removes the leftover by name; the daemon resolves that to
-	// the container's ID, which is what the record shows.
 	removed := f.removedContainers()
 	if len(removed) != 1 || removed[0] != "ctr_leftover" {
 		t.Errorf("removed %v, want the leftover that held the name", removed)
@@ -252,8 +231,6 @@ func TestLivenessMatchesExactID(t *testing.T) {
 	f.containers[stopped].state = "exited"
 	f.mu.Unlock()
 
-	// A decoy whose ID extends another container's ID must not be confused
-	// with it: Docker's id filter matches on prefix.
 	f.mu.Lock()
 	f.containers[running+"0"] = &fakeContainer{id: running + "0", state: "running"}
 	f.mu.Unlock()
@@ -297,7 +274,7 @@ func TestExecRunsWrappedCommandAndDemuxes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("exec: %v", err)
 	}
-	cmd := f.lastExecCommand() // Wait now issues a separate PID cleanup exec.
+	cmd := f.lastExecCommand()
 	stdout, _ := io.ReadAll(proc.Stdout())
 	stderr, _ := io.ReadAll(proc.Stderr())
 	code, err := proc.Wait()
@@ -331,7 +308,7 @@ func TestExecOutputSurvivesRequestContextCancel(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 	f.setProgram(func(string, []string) (string, string, int) {
-		time.Sleep(100 * time.Millisecond) // let the caller cancel first
+		time.Sleep(100 * time.Millisecond)
 		return "slow output", "", 0
 	})
 
@@ -340,7 +317,7 @@ func TestExecOutputSurvivesRequestContextCancel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("exec: %v", err)
 	}
-	cancel() // models net/http cancelling the handler's context on return
+	cancel()
 
 	out, _ := io.ReadAll(proc.Stdout())
 	if string(out) != "slow output" {
@@ -388,8 +365,6 @@ func TestSignalWaitsForPidFile(t *testing.T) {
 		t.Fatalf("exec: %v", err)
 	}
 
-	// The wrapper has not written its file yet. Signal must keep asking
-	// instead of reporting a missing process.
 	go func() {
 		time.Sleep(30 * time.Millisecond)
 		f.mu.Lock()
@@ -643,7 +618,6 @@ func TestDeferredPidCleanupPreservesRunningAndReapsExited(t *testing.T) {
 	if _, err := proc.Wait(); err == nil {
 		t.Fatal("Wait succeeded while ExecInspect failed")
 	}
-	// While inspect fails or reports running, control files must NOT be deleted.
 	f.mu.Lock()
 	if len(rmTargets) != 0 {
 		f.mu.Unlock()
@@ -669,7 +643,6 @@ func TestDeferredPidCleanupPreservesRunningAndReapsExited(t *testing.T) {
 		ex.running = false
 	}
 	f.mu.Unlock()
-	// No second Wait or command drives this retry.
 	waitFor(t, "autonomous cleanup", func() bool {
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -677,7 +650,6 @@ func TestDeferredPidCleanupPreservesRunningAndReapsExited(t *testing.T) {
 	})
 }
 
-// waitFor is a small helper for tests that wait on a condition.
 func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)

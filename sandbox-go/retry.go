@@ -14,23 +14,11 @@ import (
 	json "github.com/ruhuang2001/tiny-sandbox/internal/wirejson"
 )
 
-// Retry policy from docs/sdk.md:
-//
-//   - candidates: transport errors before a complete response, truncated
-//     bodies, and statuses 429, 500, 502, 503, 504;
-//   - only requests that are safe to repeat are retried, which the caller
-//     states with an explicit flag;
-//   - backoff min(2s, 200ms * 2^attempt) with full jitter, overridden by
-//     Retry-After;
-//   - nothing is retried once the context is done.
 const (
 	baseBackoff = 200 * time.Millisecond
 	maxBackoff  = 2 * time.Second
 )
 
-// backoff returns the delay before attempt n (0-based). Full jitter spreads a
-// thundering herd over the whole cap instead of aligning every client on the
-// same instant.
 func backoff(attempt int, retryAfter time.Duration) time.Duration {
 	if retryAfter > 0 {
 		return retryAfter
@@ -39,14 +27,10 @@ func backoff(attempt int, retryAfter time.Duration) time.Duration {
 	if limit > maxBackoff || limit <= 0 {
 		limit = maxBackoff
 	}
-	// A random duration in [limit/2, limit]: enough variety to avoid
-	// synchronisation, while still backing off.
 	half := limit / 2
 	return half + time.Duration(rand.Int64N(int64(half)+1))
 }
 
-// retryAfter parses a Retry-After header, which the contract defines as
-// seconds.
 func retryAfter(header http.Header) time.Duration {
 	value := header.Get("Retry-After")
 	if value == "" {
@@ -59,7 +43,6 @@ func retryAfter(header http.Header) time.Duration {
 	return time.Duration(seconds) * time.Second
 }
 
-// retryableStatus reports whether a status is worth another attempt.
 func retryableStatus(status int) bool {
 	switch status {
 	case http.StatusTooManyRequests, http.StatusInternalServerError,
@@ -69,34 +52,22 @@ func retryableStatus(status int) bool {
 	return false
 }
 
-// request describes one API call. repeatable says whether sending it twice is
-// safe; a request that could start a command must set it only when it carries
-// an idempotency key.
 type request struct {
-	method string
-	path   string
-	query  string
-	body   any
-	// repeatable allows a retry after a completed attempt. GET, DELETE, PUT,
-	// pause, resume, cancel, and keyed starts set it.
+	method     string
+	path       string
+	query      string
+	body       any
 	repeatable bool
-	// accept asks for an event stream.
-	accept string
-	// raw sends body as bytes rather than JSON (file uploads).
-	raw []byte
+	accept     string
+	raw        []byte
 }
 
-// response is a completed API response. The body is returned whole so a
-// truncated body is detectable before parsing.
 type response struct {
 	status int
 	header http.Header
 	body   []byte
 }
 
-// do sends req with the retry policy and returns the final response. It
-// returns a *Error for transport failures and for retryable statuses once the
-// budget is spent.
 func (c *Client) do(ctx context.Context, req request) (*response, error) {
 	var lastErr error
 	for attempt := 0; ; attempt++ {
@@ -113,8 +84,6 @@ func (c *Client) do(ctx context.Context, req request) (*response, error) {
 			lastErr = statusError(resp)
 		}
 
-		// Only retryable statuses and transport failures are worth another
-		// attempt; a 4xx is final even for a repeatable request.
 		retryable := err != nil || retryableStatus(resp.status)
 		if !retryable || !req.repeatable || attempt >= c.maxRetries {
 			return nil, lastErr
@@ -129,8 +98,6 @@ func (c *Client) do(ctx context.Context, req request) (*response, error) {
 	}
 }
 
-// once performs one attempt and reads the body completely, so a body cut short
-// is an error here rather than a parse failure later.
 func (c *Client) once(ctx context.Context, req request) (*response, error) {
 	url := c.domain + req.path + req.query
 	var body io.Reader
@@ -175,8 +142,6 @@ func (c *Client) once(ctx context.Context, req request) (*response, error) {
 	return &response{status: httpResp.StatusCode, header: httpResp.Header, body: data}, nil
 }
 
-// statusError turns a non-2xx response into a *Error carrying the contract
-// code and message.
 func statusError(resp *response) *Error {
 	var payload struct {
 		Code    string `json:"code"`
@@ -190,7 +155,6 @@ func statusError(resp *response) *Error {
 	return &Error{StatusCode: resp.status, Code: payload.Code, Message: message}
 }
 
-// decode parses a 2xx body into out.
 func decode(resp *response, out any) error {
 	if err := json.Unmarshal(resp.body, out); err != nil {
 		return &Error{
@@ -203,7 +167,6 @@ func decode(resp *response, out any) error {
 	return nil
 }
 
-// sleep waits for d or until ctx is done, reporting whether it waited fully.
 func sleep(ctx context.Context, d time.Duration) bool {
 	if d <= 0 {
 		return ctx.Err() == nil
@@ -218,7 +181,6 @@ func sleep(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-// isCanceled reports whether err is the caller's context ending.
 func isCanceled(err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }

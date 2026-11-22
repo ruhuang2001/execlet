@@ -15,8 +15,6 @@ import unittest
 
 class RunnerTests(unittest.TestCase):
     def test_proxy_bypass_and_failure_cleanup(self):
-        # Three sandboxes exist when admission fails. The first DELETE also
-        # fails; neither failure may hide the other IDs or stop later cleanup.
         created, deleted, requests, proxy_hits = [], [], [], []
         limits = {}
 

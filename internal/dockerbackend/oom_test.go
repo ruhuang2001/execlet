@@ -35,14 +35,14 @@ func TestOOMHelperCalls(t *testing.T) {
 	write("docker/"+id[:12], "oom_kill 99\n")
 	write("docker", "oom_kill 100\n")
 	write("docker/"+id, "oom_group_kill 4\n")
-	check(5, 1) // malformed exact counter; never borrow a sibling/parent
+	check(5, 1)
 	if f.execCommands[0][2] != dockerapi.OOMScript {
 		t.Fatal("missing portable cgroup helper")
 	}
 	write("docker/"+id, "oom_kill 0\n")
 	check(0, 1)
 	write("docker/"+id, "oom_kill 2\n")
-	check(2, 1) // sample again; never cache the count
+	check(2, 1)
 	if err := os.RemoveAll(filepath.Join(b.cgroupRoot, "docker", id)); err != nil {
 		t.Fatal(err)
 	}

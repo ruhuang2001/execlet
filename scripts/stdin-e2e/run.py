@@ -106,7 +106,6 @@ try:
 finally:
     request('DELETE', '/v1/sandboxes/' + sandbox_id)
 
-# CLI validation must happen before creating a sandbox and before reading stdin.
 cli = str(out / 'sandboxctl')
 fixture = 'CLI 世界\n'.encode() + b'\0literal $HOME\n\n'
 (out / 'cli-input.bin').write_bytes(fixture)

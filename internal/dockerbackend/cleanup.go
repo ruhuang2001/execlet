@@ -11,28 +11,22 @@ import (
 	"github.com/ruhuang2001/tiny-sandbox/internal/dockerapi"
 )
 
-// The retry queue needs only these identities and the lock shared with Signal.
-// Never retain a process (in particular, its output buffers) for a retry.
 type execFiles struct {
 	containerID, execID string
 	pidPath, stdinDir   string
 	managed             bool
 	signalMu            sync.Mutex
-	exited              bool // latched: subsequent rm failures need no new exit proof
+	exited              bool
 	cleaned             bool
 	missingRetryAt      time.Time
 }
 
-// Never apply recursive rm to a PID path: a guest can replace it with a
-// directory. Only the exact random stdin directory gets recursive removal,
-// with no trailing slash to follow a replacement symlink. The shell receives
-// paths as operands and runs as the image user, not root.
 const cleanupStagedScript = `status=0; /bin/rm -rf -- "$1" || status=1; shift; /bin/rm -f -- "$@" || status=1; exit "$status"`
 
 func (f *execFiles) remove(ctx context.Context, b *Backend) error {
 	cmd := []string{"/bin/rm", "-f", "--"}
 	if f.stdinDir != "" && validStdinDir(f.stdinDir) {
-		if f.pidPath == "" { // staging failed before the command was started
+		if f.pidPath == "" {
 			cmd = []string{"/bin/rm", "-rf", "--", f.stdinDir}
 		} else {
 			cmd = []string{"/bin/sh", "-c", cleanupStagedScript, "cleanup", f.stdinDir}
@@ -41,7 +35,7 @@ func (f *execFiles) remove(ctx context.Context, b *Backend) error {
 	if f.pidPath != "" {
 		name, ok := strings.CutPrefix(f.pidPath, PidDir+"/")
 		if !ok || name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\\x00") {
-			return nil // never turn a malformed path into an rm operand
+			return nil
 		}
 		cmd = append(cmd, f.pidPath)
 		if f.managed {
@@ -67,10 +61,6 @@ func (b *Backend) cleanupAfterExit(f *execFiles) {
 	}
 }
 
-// One lazy worker per backend, one bounded call at a time, FIFO rotation.
-// Never drop work at a queue cap: bound the rate and batch size instead.
-// Entries stay in the list even in flight, so Remove can retire them without
-// a retry resurrecting an entry that was removed during an API call.
 type cleanupQueue struct {
 	mu      sync.Mutex
 	items   list.List
@@ -117,7 +107,7 @@ func (b *Backend) retryCleanup() {
 			if done {
 				q.items.Remove(e)
 			} else {
-				q.items.MoveToBack(e) // no-op if concurrently forgotten
+				q.items.MoveToBack(e)
 			}
 		}
 		if q.items.Len() == 0 {
@@ -142,9 +132,6 @@ func (b *Backend) retryFiles(f *execFiles) bool {
 		var inspect dockerapi.ExecInspect
 		inspect, err = b.api.ExecInspect(ctx, f.execID)
 		if dockerapi.IsNotFound(err) {
-			// Recheck a transient 404 once. If Docker has forgotten the exec,
-			// only container removal can safely reclaim its files; no rm or
-			// further per-exec polling is needed for that to happen.
 			if !f.missingRetryAt.IsZero() {
 				return true
 			}
@@ -161,8 +148,6 @@ func (b *Backend) retryFiles(f *execFiles) bool {
 		f.cleaned = err == nil
 	}
 	if dockerapi.IsNotFound(err) {
-		// Even after the original exited, Docker may forget the rm helper.
-		// Only retire a failed removal if the container itself is gone.
 		live, err := b.Liveness(ctx, f.containerID)
 		return err == nil && live == daemon.LivenessMissing
 	}

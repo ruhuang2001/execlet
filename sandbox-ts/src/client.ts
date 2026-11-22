@@ -21,7 +21,6 @@ function newKey(): string {
   }
 }
 
-/** Convert completed execution data; nonzero exits and server deadlines resolve. */
 export function executionOutcome(execution: Execution): ExecutionOutcome {
   if (execution.state !== 'completed') {
     throw new SandboxError('invalid_state', 'sandbox: execution has not completed', { execution });
@@ -38,14 +37,12 @@ export function executionOutcome(execution: Execution): ExecutionOutcome {
   }
 }
 
-/** One HTTP endpoint, no global deadline and no runtime dependencies. */
 export class Client {
   private readonly transport: Transport;
   private capabilities: readonly string[] | undefined;
 
   constructor(config: ClientConfig = {}) { this.transport = new Transport(config); }
 
-  /** Authenticated feature discovery; basic legacy calls need no capabilities. */
   getCapabilities(options: RequestOptions = {}): Promise<Capabilities> {
     return this.transport.json('GET', '/v1/capabilities', true, options.signal);
   }
@@ -83,7 +80,6 @@ export class Client {
     return this.transport.json('GET', sandboxPath(sandboxID), true, options.signal);
   }
 
-  /** Relative lifetime updates are sent once, never replayed after uncertainty. */
   updateSandbox(sandboxID: string, request: UpdateSandboxRequest, options: RequestOptions = {}): Promise<Sandbox> {
     return this.transport.json('PATCH', sandboxPath(sandboxID), false, options.signal, request);
   }
@@ -106,7 +102,6 @@ export class Client {
   }
 
   async startExecution(sandboxID: string, request: ExecuteRequest, options: ExecutionOptions = {}): Promise<Execution> {
-    // An already aborted start sends nothing, including recovery requests.
     checkSignal(options.signal);
     if (!Array.isArray(request.command) || request.command.length === 0 || request.command.some(arg => typeof arg !== 'string')) {
       throw new SandboxError('invalid_request', 'sandbox: command must be a nonempty string array');
@@ -161,12 +156,10 @@ export class Client {
     return list.executions;
   }
 
-  /** Returns the server snapshot; state may still be running during removal. */
   cancelExecution(sandboxID: string, executionID: string, options: RequestOptions = {}): Promise<Execution> {
     return this.transport.json('POST', executionPath(sandboxID, executionID) + '/cancel', true, options.signal);
   }
 
-  /** Resolve the newest retained managed PID incarnation without renewing sandbox lifetime. */
   async resolveCommand(sandboxID: string, pid: number, options: RequestOptions = {}): Promise<CommandAttachment> {
     if (!Number.isSafeInteger(pid) || pid <= 0) {
       return Promise.reject(new SandboxError('invalid_request', 'sandbox: pid must be a positive safe integer'));
@@ -175,7 +168,6 @@ export class Client {
     return this.transport.json('GET', sandboxPath(sandboxID) + '/commands/' + pid, true, options.signal);
   }
 
-  /** Immediate managed group kill. Never retry an uncertain acknowledgement as a false result. */
   async killExecution(sandboxID: string, executionID: string, options: RequestOptions = {}): Promise<KillExecutionResponse> {
     checkSignal(options.signal);
     await this.requireCapabilities(['e2b.background.v1'], options);
@@ -194,8 +186,6 @@ export class Client {
       return result;
     } catch (cause) {
       if (cause instanceof SandboxError) {
-        // A lost response may follow a successful signal. Replaying it could
-        // turn uncertainty into an apparently definitive already-done false.
         const uncertain = cause.statusCode >= 500 || ['transport', 'decode', 'canceled'].includes(cause.code);
         throw new SandboxError(uncertain ? 'backend_error' : cause.code,
           uncertain ? 'sandbox: kill outcome is unconfirmed; ' + cause.message : cause.message, {
@@ -256,7 +246,6 @@ export class Client {
     return this.transport.request('GET', sandboxPath(sandboxID) + '/files/archive?path=' + encodeURIComponent(path), true, options.signal);
   }
 
-  /** One attempt: extraction is not atomic and cannot safely replay ambiguous uploads. */
   async writeArchive(sandboxID: string, path: string, data: Uint8Array, options: RequestOptions = {}): Promise<void> {
     const bytes = new Uint8Array(data);
     await this.requireCapabilities(['files.archive.v1'], options);
@@ -273,7 +262,6 @@ export class Client {
       options.signal, new Uint8Array(data));
   }
 
-  /** One fresh bounded recovery attempt, sharing the deadline across replay and cancel. */
   private async recover(sandboxID: string, executionID: string | undefined, cause: unknown,
     request?: ExecuteRequest): Promise<SandboxError> {
     const controller = new AbortController();

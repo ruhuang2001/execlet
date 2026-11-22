@@ -161,8 +161,6 @@ def _duration(value: Any, *, lifetime: bool = False) -> float:
 
 
 def _command_duration_ms(value: Any) -> int:
-    # Pinned E2B timeout_to_ms: positive sub-millisecond durations round up
-    # to one; other ties use Python's round, not integer-seconds truncation.
     if type(value) not in (int, float) or not 0 <= value <= 9_223_372_037:
         raise InvalidArgumentException("timeout must be finite nonnegative seconds within the server duration range")
     milliseconds = 0 if value == 0 else max(1, round(value * 1000))
@@ -326,8 +324,6 @@ class Sandbox:
         token = CancellationToken(timeout=self._request_timeout)
         try:
             current = self._client.get_sandbox(self.sandbox_id, cancel=token)
-            # A killed record is not evidence of removal. DELETE must confirm
-            # even on repeat calls, or a pending removal would become false.
             self._client.kill_sandbox(self.sandbox_id, cancel=token)
             return current.state != "killed"
         except Error as exc:
@@ -348,8 +344,6 @@ class Sandbox:
 
 
 def _require_commands(client: Client, token: CancellationToken) -> None:
-    # No process-global or endpoint-only cache: credentials and transport are
-    # exactly those that will dispatch the command. Mixed builds remain unsupported.
     try:
         capabilities = client.get_capabilities(cancel=token).capabilities
     except Error as exc:
@@ -364,8 +358,6 @@ def _require_commands(client: Client, token: CancellationToken) -> None:
 def _command_error(client: Client, sandbox_id: str, exc: Error,
                    token: CancellationToken) -> SandboxException:
     if exc.status_code == 404 or exc.code == "not_found":
-        # The native wire has one not_found code. Distinguish an expired
-        # command from a missing sandbox with a read, never a resume or renewal.
         try:
             current = client.get_sandbox(sandbox_id, cancel=token)
         except Error as lookup:
@@ -430,8 +422,6 @@ class CommandHandle:
         self._result: CommandResult | None = None
         self._error: BaseException | None = None
         self._disconnected = self._waiting = False
-        # An atomic completed attach already contains terminal evidence. Do not
-        # open SSE after its final event, nor expose the retained output prefix.
         if execution.output_truncated or (attached and execution.state == "completed"):
             if not attached:
                 self._stdout.append(execution.stdout)

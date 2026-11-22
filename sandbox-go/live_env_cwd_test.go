@@ -1,11 +1,5 @@
 //go:build live
 
-// Live tests for the execution environment and working directory. They need the
-// real Docker backend, because the behaviour under test is the wrapper shell
-// and Docker's exec API, neither of which a fake reproduces:
-//
-//	make build && ./bin/sandboxd -addr 127.0.0.1:18080 &
-//	SANDBOX_DOMAIN=http://127.0.0.1:18080 go test -tags live ./sandbox-go/ -run TestLiveExec -v
 package sandbox_test
 
 import (
@@ -18,8 +12,6 @@ import (
 	sandbox "github.com/ruhuang2001/tiny-sandbox/sandbox-go"
 )
 
-// liveExec runs command to completion under a request, through the two-step
-// API the contract documents for env and cwd.
 func liveExec(t *testing.T, c *sandbox.Client, sandboxID string, req sandbox.ExecuteRequest) (*sandbox.Execution, error) {
 	t.Helper()
 	ctx := context.Background()
@@ -30,8 +22,6 @@ func liveExec(t *testing.T, c *sandbox.Client, sandboxID string, req sandbox.Exe
 	return c.StreamExecution(ctx, sandboxID, started.ID, nil)
 }
 
-// TestLiveExecEnvReachesTheProcess proves the environment is applied rather
-// than only accepted by the API.
 func TestLiveExecEnvReachesTheProcess(t *testing.T) {
 	c := liveClient(t)
 	sb := liveSandbox(t, c, "alpine:3.20", 64)
@@ -47,8 +37,6 @@ func TestLiveExecEnvReachesTheProcess(t *testing.T) {
 		t.Fatalf("stdout = %q, want the requested GREETING", got)
 	}
 
-	// A later execution must not inherit it: the environment belongs to one
-	// execution, not to the container.
 	again, err := liveExec(t, c, sb.ID, sandbox.ExecuteRequest{
 		Command: []string{"sh", "-c", `printf '%s' "${GREETING-unset}"`},
 	})
@@ -60,7 +48,6 @@ func TestLiveExecEnvReachesTheProcess(t *testing.T) {
 	}
 }
 
-// TestLiveExecCwdIsApplied proves the directory is used, and echoed back.
 func TestLiveExecCwdIsApplied(t *testing.T) {
 	c := liveClient(t)
 	sb := liveSandbox(t, c, "alpine:3.20", 64)
@@ -84,15 +71,6 @@ func TestLiveExecCwdIsApplied(t *testing.T) {
 	}
 }
 
-// TestLiveExecBadCwdCostsOneExecution pins the failure model a bad directory
-// must have: exit 126 with our own marker on stderr, nothing on stdout, and a
-// sandbox that still works afterwards.
-//
-// 126 is the wrapper's code, which is the point of chdirring in the wrapper
-// instead of using Docker's exec WorkingDir: that runtime failure reports 127
-// on stdout, indistinguishable from a missing command. Cancellation is not
-// what this asserts, because the execution is already terminal; the test below
-// covers cancel after such a failure.
 func TestLiveExecBadCwdCostsOneExecution(t *testing.T) {
 	c := liveClient(t)
 	sb := liveSandbox(t, c, "alpine:3.20", 64)
@@ -104,8 +82,6 @@ func TestLiveExecBadCwdCostsOneExecution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stream: %v", err)
 	}
-	// A non-zero exit is a completed execution, not a stream failure: the SDK
-	// hands the outcome back and leaves the judgement to the caller.
 	if ex.State != "completed" {
 		t.Fatalf("state = %s, want completed", ex.State)
 	}
@@ -118,14 +94,10 @@ func TestLiveExecBadCwdCostsOneExecution(t *testing.T) {
 	if !strings.Contains(ex.Stderr, "cwd is not a usable directory") {
 		t.Fatalf("stderr = %q, want the cwd marker", ex.Stderr)
 	}
-	// The step that turns an outcome into an error, so the sentinel the
-	// contract promises for a non-zero exit is exercised too.
 	if _, err := c.Exec(context.Background(), sb.ID, []string{"sh", "-c", "exit 3"}); !errors.Is(err, sandbox.ErrNonZeroExit) {
 		t.Errorf("Exec error = %v, want ErrNonZeroExit", err)
 	}
 
-	// The sandbox must survive: a typo should cost one execution, not the
-	// container.
 	after, err := c.GetSandbox(context.Background(), sb.ID)
 	if err != nil {
 		t.Fatalf("get sandbox: %v", err)
@@ -138,15 +110,6 @@ func TestLiveExecBadCwdCostsOneExecution(t *testing.T) {
 	}
 }
 
-// TestLiveExecCancelStillWorksWithABadCwd proves a bad cwd does not break the
-// cancel path for a following execution.
-//
-// A bad cwd fails on its own, so canceling it proves nothing: the execution is
-// already terminal and CancelExecution returns the record unchanged. What the
-// wrapper's PID-first order protects is the next execution, so this cancels a
-// long-running command with a valid directory and asserts the cancel actually
-// ended the process group. TestLiveCancel covers the same path without a cwd;
-// this one runs it right after the failure, in the same sandbox.
 func TestLiveExecCancelStillWorksWithABadCwd(t *testing.T) {
 	c := liveClient(t)
 	sb := liveSandbox(t, c, "alpine:3.20", 64)
@@ -162,9 +125,6 @@ func TestLiveExecCancelStillWorksWithABadCwd(t *testing.T) {
 		t.Fatalf("bad cwd exit = %v, want 126", bad.ExitCode)
 	}
 
-	// A cwd that exists, so the command really runs and cancel has a process
-	// to signal. Requiring output first rules out cancelling a terminal
-	// record: without it, the assertion below would hold even if nothing ran.
 	started, err := c.StartExecution(context.Background(), sb.ID, sandbox.ExecuteRequest{
 		Command: []string{"sh", "-c", "sleep 30 & wait"},
 		Cwd:     "/tmp",
@@ -198,14 +158,10 @@ func TestLiveExecCancelStillWorksWithABadCwd(t *testing.T) {
 	}
 }
 
-// waitForRunning blocks until the execution reports running, so a cancel
-// cannot pass by returning a record that never started.
 func waitForRunning(t *testing.T, c *sandbox.Client, sandboxID, executionID string) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		// Bounded by the deadline, so an unresponsive daemon cannot hang the
-		// test beyond the timeout it was given.
 		pollCtx, cancel := context.WithDeadline(context.Background(), deadline)
 		ex, err := c.GetExecution(pollCtx, sandboxID, executionID)
 		cancel()

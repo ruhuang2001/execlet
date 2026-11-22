@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Repeatable real-Docker E2E suite. No fake-only unit tests.
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 OUT=${1:-$ROOT/artifacts/typescript-e2e}

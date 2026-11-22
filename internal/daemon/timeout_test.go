@@ -14,9 +14,6 @@ import (
 	"github.com/ruhuang2001/tiny-sandbox/internal/daemon/membackend"
 )
 
-// TestLifetimeTimeout covers the lifetime timeout rules in api.md: count from
-// creation, keep counting while paused with a kill action, count only while
-// running with a pause action, and arm a fresh interval on every resume.
 func TestLifetimeTimeout(t *testing.T) {
 	ctx := context.Background()
 
@@ -79,8 +76,6 @@ func TestLifetimeTimeout(t *testing.T) {
 			t.Fatalf("expires_at = %v while paused under a pause action, want null", got.ExpiresAt)
 		}
 
-		// Well past the original deadline: a paused pause-action sandbox is
-		// not counting, so the reaper must leave it alone.
 		h.clock.Advance(time.Hour)
 		h.s.Reap(ctx)
 		got, err = h.s.Get(sb.ID)
@@ -117,7 +112,7 @@ func TestLifetimeTimeout(t *testing.T) {
 		h.clock.Advance(10 * time.Second)
 		h.s.Reap(ctx)
 
-		h.clock.Advance(5 * time.Second) // still paused, not counting
+		h.clock.Advance(5 * time.Second)
 		got, err := h.s.Resume(ctx, sb.ID)
 		wantNoError(t, err)
 		if got.State != daemon.StateRunning {
@@ -128,8 +123,6 @@ func TestLifetimeTimeout(t *testing.T) {
 			t.Fatalf("expires_at = %v, want %v (now + timeout)", got.ExpiresAt, wantDeadline)
 		}
 
-		// An automatic resume (starting a command) arms a fresh deadline too,
-		// otherwise it would expire again immediately.
 		if _, err := h.s.Pause(ctx, sb.ID); err != nil {
 			t.Fatalf("pause: %v", err)
 		}
@@ -191,16 +184,12 @@ func TestLifetimeTimeout(t *testing.T) {
 	})
 }
 
-// TestExecutionTimeout covers an execution's own deadline: it ends the command
-// but not the sandbox, it does not extend while the sandbox is paused, it is
-// independent of the lifetime deadline, and the first deadline to arrive wins.
 func TestExecutionTimeout(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("kills the execution and leaves the sandbox running", func(t *testing.T) {
 		h := newHarness(t)
 		h.be.Programs["block"] = memLongBlock
-		// A lifetime long enough that only the execution deadline can fire.
 		sb := h.create(daemon.CreateRequest{TimeoutSeconds: ptr(0)})
 		ex, _, err := h.s.StartExecution(ctx, sb.ID, daemon.ExecuteRequest{
 			Command:        []string{"block"},
@@ -221,8 +210,6 @@ func TestExecutionTimeout(t *testing.T) {
 			t.Fatalf("reason = %v, want timeout", done.TerminationReason)
 		}
 
-		// The whole point of an execution deadline: the sandbox and its files
-		// survive it, unlike a lifetime kill.
 		sandbox, err := h.s.Get(sb.ID)
 		wantNoError(t, err)
 		if sandbox.State != daemon.StateRunning {
@@ -286,16 +273,12 @@ func TestExecutionTimeout(t *testing.T) {
 			t.Fatalf("pause: %v", err)
 		}
 
-		// Well past the deadline while paused: the container cannot be
-		// signalled, so nothing fires yet.
 		h.clock.Advance(time.Hour)
 		h.s.Reap(ctx)
 		if got, err := h.s.GetExecution(sb.ID, ex.ID); err != nil || got.State != daemon.ExecRunning {
 			t.Fatalf("execution while paused = %+v, want running", got)
 		}
 
-		// Resuming is what lets the escalation land; the deadline is not
-		// refreshed, so the very next beat applies it.
 		if _, err := h.s.Resume(ctx, sb.ID); err != nil {
 			t.Fatalf("resume: %v", err)
 		}
@@ -322,7 +305,6 @@ func TestExecutionTimeout(t *testing.T) {
 		if done.TerminationReason == nil || *done.TerminationReason != daemon.ReasonTimeout {
 			t.Fatalf("reason = %v, want timeout", done.TerminationReason)
 		}
-		// The lifetime deadline fired, so the sandbox is killed, not kept.
 		sandbox, err := h.s.Get(sb.ID)
 		wantNoError(t, err)
 		if sandbox.State != daemon.StateKilled {
@@ -331,8 +313,6 @@ func TestExecutionTimeout(t *testing.T) {
 	})
 }
 
-// TestIdleTimeout covers the idle rules: idle while running with no execution
-// and no stream, measured from the latest activity.
 func TestIdleTimeout(t *testing.T) {
 	ctx := context.Background()
 
@@ -464,8 +444,6 @@ func TestIdleTimeout(t *testing.T) {
 	})
 }
 
-// TestEvictSweep covers detection of a container stopped externally, which
-// must surface within the five-second budget without a request arriving.
 func TestEvictSweep(t *testing.T) {
 	ctx := context.Background()
 	h := newHarness(t)
@@ -481,8 +459,6 @@ func TestEvictSweep(t *testing.T) {
 	}
 }
 
-// TestReaperRun drives the periodic loop, which is what applies timeouts in
-// the running server.
 func TestReaperRun(t *testing.T) {
 	h := newHarness(t)
 	sb := h.create(daemon.CreateRequest{TimeoutSeconds: ptr(1)})
@@ -589,7 +565,6 @@ func TestDurableJournalSkipsIdleReapWritesAndPersistsTransitions(t *testing.T) {
 	noIdleIno := inodeOf(noIdle.ID)
 	killedIno := inodeOf(killed.ID)
 
-	// Idle Reap ticks with no state or activity change must not rewrite records.
 	s.Reap(ctx)
 	if got := inodeOf(live.ID); got != liveIno {
 		t.Fatalf("unchanged live sandbox was rewritten on Reap: ino %d -> %d", liveIno, got)
@@ -598,7 +573,6 @@ func TestDurableJournalSkipsIdleReapWritesAndPersistsTransitions(t *testing.T) {
 		t.Fatalf("killed tombstone was rewritten on Reap: ino %d -> %d", killedIno, got)
 	}
 
-	// Touch updates in-memory activity and marks the sandbox dirty for checkpointing.
 	clock.Advance(5 * time.Second)
 	s.Touch(live.ID)
 	s.Touch(noIdle.ID)
@@ -610,7 +584,6 @@ func TestDurableJournalSkipsIdleReapWritesAndPersistsTransitions(t *testing.T) {
 		t.Fatal("dirty live sandbox activity was not checkpointed on Reap")
 	}
 
-	// Eviction detected during Resume must persist StateKilled to the journal.
 	_, err = s.Pause(ctx, live.ID)
 	wantNoError(t, err)
 	be.Disappear(s.ContainerIDForTest(live.ID))
@@ -674,7 +647,6 @@ func TestBatchEvictSweepUsesSingleListAndProtectsConcurrentCreate(t *testing.T) 
 	}
 	be.Kill(s.ContainerIDForTest(sandboxes[0].ID))
 
-	// A sandbox created while OwnedLiveness is returning must never be falsely evicted.
 	var concurrent daemon.Sandbox
 	be.onBatch = func() {
 		var err error
@@ -701,7 +673,6 @@ func TestBatchEvictSweepUsesSingleListAndProtectsConcurrentCreate(t *testing.T) 
 		t.Fatalf("concurrently created sandbox was falsely evicted: %+v", fresh)
 	}
 
-	// A failed batch sweep must not evict surviving sandboxes.
 	be.failBatch = true
 	s.EvictSweep(ctx)
 	surviving, err := s.Get(sandboxes[1].ID)

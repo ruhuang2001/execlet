@@ -17,63 +17,39 @@ import (
 	"github.com/ruhuang2001/tiny-sandbox/internal/wirejson"
 )
 
-// Handler serves the HTTP contract in docs/api.md over a Sandboxes store. It
-// is the only place that translates between JSON and the domain.
 type Handler struct {
-	store   *Sandboxes
-	version string
-	apiKey  string
-	// shuttingDown is closed when the server begins a graceful shutdown. An
-	// event stream would otherwise keep its handler alive until the shutdown
-	// deadline expires, and http.Server.Shutdown does not cancel request
-	// contexts, so the stream is the one handler that needs to be told.
+	store        *Sandboxes
+	version      string
+	apiKey       string
 	shuttingDown <-chan struct{}
 	mux          *http.ServeMux
 }
 
-// NewHandler returns the server's HTTP handler over store.
-//
-// It panics when a route in the table has no handler. That is deliberate: the
-// alternative is a route that answers 503 on its first request, which the
-// route coverage test cannot see, because a mux with a fallback handler still
-// reports a matching pattern. A missing handler is a programming error and
-// must fail at startup, not under load.
 func NewHandler(store *Sandboxes, version string) *Handler {
 	h := &Handler{store: store, version: version}
 	h.mux = h.buildMux()
 	return h
 }
 
-// WithAPIKey enables bearer authentication for /v1 routes. Health probes stay
-// public, as the contract says.
 func (h *Handler) WithAPIKey(key string) *Handler {
 	h.apiKey = key
 	return h
 }
 
-// WithShutdown makes event streams end when the channel closes, so a graceful
-// shutdown can drain them instead of waiting out its deadline. A stream that
-// ends this way is not a failure: the execution keeps running until the store's
-// own shutdown removes its container.
 func (h *Handler) WithShutdown(done <-chan struct{}) *Handler {
 	h.shuttingDown = done
 	return h
 }
 
-// Handler reports the handler and pattern that would serve req, for the route
-// coverage test. It mirrors http.ServeMux.Handler without exposing the mux.
 func (h *Handler) Handler(req *http.Request) (http.Handler, string) {
 	return h.mux.Handler(req)
 }
 
-// ServeHTTP dispatches with authentication applied.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
 	id := requestID(r.Header.Values("X-Request-ID"))
 	w.Header().Set("X-Request-ID", id)
 	_, pattern := h.mux.Handler(r)
-	// ServeMux may return a cleaned request path for redirects. Log only
-	// templates from our own route table, never a path supplied by a caller.
 	registered := false
 	for _, route := range routes {
 		if pattern == routeKey(route.Method, route.Path) {
@@ -115,7 +91,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	completed = true
 }
 
-// authorized compares the bearer token in constant time.
 func (h *Handler) authorized(r *http.Request) bool {
 	header := r.Header.Get("Authorization")
 	token, ok := strings.CutPrefix(header, "Bearer ")
@@ -125,15 +100,10 @@ func (h *Handler) authorized(r *http.Request) bool {
 	return subtle.ConstantTimeCompare([]byte(token), []byte(h.apiKey)) == 1
 }
 
-// buildMux turns the route table into a mux.
 func (h *Handler) buildMux() *http.ServeMux {
 	return newMux(h, routes)
 }
 
-// newMux registers table routes on a mux. An entry with no handler is a
-// programming error and panics here, at construction, rather than answering
-// 503 on its first request. It is a function of the table rather than of
-// Handler alone so a test can pass a hand-built table and observe the panic.
 func newMux(h *Handler, table []Route) *http.ServeMux {
 	mux := http.NewServeMux()
 	for _, route := range table {
@@ -148,8 +118,6 @@ func newMux(h *Handler, table []Route) *http.ServeMux {
 	}
 	return mux
 }
-
-// ---------------------------------------------------------------- sandboxes
 
 func (h *Handler) createSandbox(w http.ResponseWriter, r *http.Request) {
 	var req CreateRequest
@@ -185,8 +153,6 @@ func (h *Handler) getSandbox(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, sb)
 }
 
-// updateSandbox changes the lifetime deadline. Body fields are mutually
-// exclusive, so one request can never both replace and extend.
 func (h *Handler) updateSandbox(w http.ResponseWriter, r *http.Request) {
 	var req UpdateRequest
 	if !decodeJSON(w, r, &req) {
@@ -212,7 +178,6 @@ func (h *Handler) deleteSandbox(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, sb)
 }
 
-// pauseSandbox and resumeSandbox differ only in the store method they call.
 func (h *Handler) pauseSandbox(w http.ResponseWriter, r *http.Request) {
 	h.lifecycle(w, r, h.store.Pause)
 }
@@ -230,8 +195,6 @@ func (h *Handler) lifecycle(w http.ResponseWriter, r *http.Request, op func(cont
 	contextLogger(r.Context()).InfoContext(r.Context(), "sandbox state changed", "sandbox_id", sb.ID, "state", sb.State)
 	writeJSON(w, http.StatusOK, sb)
 }
-
-// ---------------------------------------------------------------- executions
 
 func (h *Handler) startExecution(w http.ResponseWriter, r *http.Request) {
 	var req ExecuteRequest
@@ -277,9 +240,6 @@ func (h *Handler) cancelExecution(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, ex)
 }
 
-// ---------------------------------------------------------------- files
-
-// readFile serves the raw bytes of a file.
 func (h *Handler) readFile(w http.ResponseWriter, r *http.Request) {
 	path, ok := filePath(w, r)
 	if !ok {
@@ -295,9 +255,6 @@ func (h *Handler) readFile(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(data)
 }
 
-// writeFile stores raw bytes, creating parent directories. The body is bounded
-// one byte past the limit so an over-limit upload is a 413 rather than a
-// truncated file.
 func (h *Handler) writeFile(w http.ResponseWriter, r *http.Request) {
 	path, ok := filePath(w, r)
 	if !ok {
@@ -323,7 +280,6 @@ func (h *Handler) writeFile(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// filePath validates the shared ?path= parameter for regular file reads and writes.
 func filePath(w http.ResponseWriter, r *http.Request) (string, bool) {
 	p := r.URL.Query().Get("path")
 	if err := validateRegularFilePath(p); err != nil {
@@ -333,10 +289,6 @@ func filePath(w http.ResponseWriter, r *http.Request) (string, bool) {
 	return p, true
 }
 
-// ---------------------------------------------------------------- events
-
-// streamEvents serves the SSE stream: replay after Last-Event-ID, then live
-// events, a ping every 15 seconds while idle, and a close after complete.
 func (h *Handler) streamEvents(w http.ResponseWriter, r *http.Request) {
 	sandboxID := r.PathValue("sandbox_id")
 	executionID := r.PathValue("execution_id")
@@ -358,10 +310,6 @@ func (h *Handler) streamEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	defer stream.Close()
 
-	// The stream ends when the client goes away or the server begins to shut
-	// down. http.Server.Shutdown does not cancel request contexts, so without
-	// the second arm this handler blocks until the shutdown deadline and the
-	// container it was streaming outlives the process.
 	streamCtx, stopStream := context.WithCancel(r.Context())
 	defer stopStream()
 	if h.shuttingDown != nil {
@@ -385,17 +333,7 @@ func (h *Handler) streamEvents(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	// Events and pings both write to w, so one mutex keeps them from
-	// interleaving mid-event. The lock covers the flush as well as the write:
-	// Flush and Write share net/http's buffered writer, so a flush on one
-	// goroutine while the other writes corrupts the frame. The ping runs
-	// separately because the main loop must block on the next event, not on
-	// the ping interval, or a terminal event that arrives just after a batch
-	// waits a full 15 seconds.
 	var writeMu sync.Mutex
-	// write sends one frame and flushes it, under the lock. Callers that send
-	// a whole batch build the frames first and call this once, so a replay
-	// of a long log costs one write and one flush instead of one per event.
 	write := func(data []byte) error {
 		writeMu.Lock()
 		defer writeMu.Unlock()
@@ -410,9 +348,6 @@ func (h *Handler) streamEvents(w http.ResponseWriter, r *http.Request) {
 	var pingWait sync.WaitGroup
 	pingWait.Add(1)
 	defer func() {
-		// Stop the ping before returning: net/http reuses the response writer
-		// after ServeHTTP returns, and a ping still inside Write would race
-		// with the next request on the same connection.
 		close(pingDone)
 		pingWait.Wait()
 	}()
@@ -440,8 +375,6 @@ func (h *Handler) streamEvents(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if len(events) > 0 {
-			// One buffer, one write, one flush per batch: replaying a long
-			// log would otherwise cost a syscall and a packet per event.
 			var batch bytes.Buffer
 			for _, ev := range events {
 				data, err := renderEvent(ev)
@@ -460,9 +393,6 @@ func (h *Handler) streamEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// renderEvent formats one event in SSE form. Payloads differ by type:
-// stdout/stderr carry {"data": "<chunk>"}, truncated carries {"limit_bytes"},
-// and complete carries the full Execution.
 func renderEvent(ev Event) ([]byte, error) {
 	var payload any
 	switch ev.Type {
@@ -482,10 +412,6 @@ func renderEvent(ev Event) ([]byte, error) {
 	return fmt.Appendf(nil, "id: %d\nevent: %s\ndata: %s\n\n", ev.ID, ev.Type, data), nil
 }
 
-// ---------------------------------------------------------------- helpers
-
-// decodeJSON reads a bounded JSON body into v. A malformed or oversized body
-// has already been answered when it returns false.
 func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	limit := int64(MaxRequestBodyBytes)
 	if _, execution := v.(*ExecuteRequest); execution {
@@ -501,7 +427,6 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 		writeError(w, http.StatusBadRequest, string(CodeInvalidRequest), "malformed JSON body")
 		return false
 	}
-	// Preserve optional empty bodies, but never accept a second JSON value.
 	if len(bytes.Trim(body, " \t\r\n")) != 0 && wirejson.Unmarshal(body, v) != nil {
 		writeError(w, http.StatusBadRequest, string(CodeInvalidRequest), "malformed JSON body")
 		return false
@@ -509,7 +434,6 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
-// writeDaemonError logs only safe codes; runtime error text can contain secrets.
 func writeDaemonError(ctx context.Context, w http.ResponseWriter, err error) {
 	e, ok := errors.AsType[*Error](err)
 	if !ok {
@@ -523,7 +447,6 @@ func writeDaemonError(ctx context.Context, w http.ResponseWriter, err error) {
 	writeError(w, statusFor(e.Code), string(e.Code), e.Message)
 }
 
-// statusFor maps a contract code to its HTTP status.
 func statusFor(code Code) int {
 	switch code {
 	case CodeInvalidRequest:

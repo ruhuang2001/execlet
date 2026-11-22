@@ -27,7 +27,6 @@ def invoke(*args, env=None):
                           env={**os.environ, **(env or {})}, timeout=120)
 
 
-# 1. Manifest and fixtures are internally consistent and asymmetric.
 listed = invoke('--list')
 check('--list exits 0', listed.returncode == 0, listed.stderr)
 ids = [line.split()[0] for line in listed.stdout.splitlines()]
@@ -39,7 +38,6 @@ check('env value looks like injection', '$(touch' in fixtures['env_value'])
 check('listing crosses the 1000-entry page', '1007' in fixtures['listing'])
 
 
-# 2. The digest is reproducible and changes with content.
 first = runner.digest()
 check('digest is stable', first == runner.digest())
 temp = HERE / '.digest-probe.txt'
@@ -50,7 +48,6 @@ finally:
     temp.unlink()
 
 
-# 3. Missing prerequisites are not_run, never pass.
 with tempfile.TemporaryDirectory() as tmp:
     out = Path(tmp) / 'cloud'
     result = invoke('run', '--provider', 'e2b', '--out', str(out))
@@ -71,7 +68,6 @@ with tempfile.TemporaryDirectory() as tmp:
         check(f'rejects {args[0]}={args[1]}', result.returncode == 1, result.stdout + result.stderr)
 
 
-# 4. The comparison gate is driven by reference.json, not by a cloud capture.
 def good(**mutate):
     rows = {}
     for case in runner.CASES:
@@ -134,8 +130,6 @@ compare_case('gate rejects one language', False,
              report=good(apply=lambda r: r.update(languages=['python'])))
 compare_case('gate rejects the reference provider', False,
              report=good(apply=lambda r: r.update(provider='e2b')))
-# An alternative check is satisfied only when one of its names is present, so a
-# case that proved neither path of an either/or bound must still fail the gate.
 def drop_both_bound_checks(report):
     checks = report['rows']['python:A13']['checks']
     checks.pop('event-capped success keeps every line')
@@ -147,13 +141,11 @@ compare_case('gate accepts either alternative of a bound', True,
                  'event-capped success keeps every line')))
 compare_case('gate rejects a bound with no alternative proven', False,
              report=good(apply=drop_both_bound_checks))
-# The millisecond spelling exists only in TypeScript, so python must not need it.
 compare_case('gate scopes a language-only check', True,
              report=good(apply=lambda r: r['rows']['python:A06']['checks'].pop('1501 ms becomes 2 s', None)))
 compare_case('gate rejects a missing check in its own language', False,
              report=good(apply=lambda r: r['rows']['typescript:A06']['checks'].pop('1501 ms becomes 2 s')))
 
-# This is a fabricated report for gate mutation tests, never adapter evidence.
 runner.select_profile('background')
 listed = invoke('--list', '--profile', 'background')
 check('background lists 40 cases', listed.returncode == 0

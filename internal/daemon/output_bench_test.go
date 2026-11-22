@@ -2,7 +2,6 @@ package daemon
 
 import "testing"
 
-// Poll a full retained execution without new output, as a reconnecting client does.
 func BenchmarkRetainedSnapshot(b *testing.B) {
 	ex := &execution{log: newEventLog()}
 	chunk := make([]byte, MaxOutputBytes/MaxOutputEvents)

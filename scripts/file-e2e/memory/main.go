@@ -1,4 +1,3 @@
-// Command memory verifies archive regression scenarios through HTTP and the Go SDK.
 package main
 
 import (

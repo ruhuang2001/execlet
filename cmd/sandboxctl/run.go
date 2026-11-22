@@ -14,13 +14,6 @@ import (
 	sandbox "github.com/ruhuang2001/tiny-sandbox/sandbox-go"
 )
 
-// runFlags are the creation and execution options of `sandboxctl run`.
-//
-// given records which flags the caller actually passed. A numeric flag's value
-// cannot answer that question: for timeout and idle-timeout an explicit 0 is
-// meaningful (it disables the timeout), and for every numeric flag an explicit
-// -1 must be a usage error rather than "not given". Presence is therefore
-// tracked separately, from fs.Visit.
 type runFlags struct {
 	sandboxID               string
 	image                   string
@@ -42,12 +35,8 @@ type runFlags struct {
 	given map[string]bool
 }
 
-// set reports whether the caller passed the named flag.
 func (rf *runFlags) set(name string) bool { return rf.given[name] }
 
-// envFlags collects repeated --env flags. The flag package needs a Value, and
-// a repeatable flag is the only way to pass an environment that keeps names and
-// values apart without a delimiter the user has to escape.
 type envFlags []string
 
 func (e *envFlags) String() string { return strings.Join(*e, ",") }
@@ -61,7 +50,6 @@ func (e *envFlags) Set(value string) error {
 	return nil
 }
 
-// runCommand implements `sandboxctl run [flags] -- CMD [ARG...]`.
 func (in *invocation) runCommand(args []string) int {
 	flagsPart, command := splitCommand(args)
 	rf := &runFlags{}
@@ -130,8 +118,6 @@ func (in *invocation) runCommand(args []string) int {
 		return 2
 	}
 
-	// `run -- code 'PYTHON'` is shorthand for python3 -c. A new sandbox for
-	// it needs a Python image, unless one was asked for.
 	if command[0] == "code" {
 		if len(command) != 2 {
 			_, _ = fmt.Fprintln(in.stderr, "sandboxctl: code takes exactly one argument: the Python program")
@@ -227,8 +213,6 @@ func (in *invocation) runCommand(args []string) int {
 	return 0
 }
 
-// startFailed handles a start that did not go through. When the start was
-// canceled, the sandbox the CLI just created has no reason to survive.
 func (in *invocation) startFailed(client *sandbox.Client, sandboxID string, created, remove bool, err error) int {
 	if created && (remove || errors.Is(err, sandbox.ErrCanceled)) {
 		in.killQuietly(client, sandboxID)
@@ -236,15 +220,12 @@ func (in *invocation) startFailed(client *sandbox.Client, sandboxID string, crea
 	return in.fail(err)
 }
 
-// killQuietly kills a sandbox the CLI created, ignoring the error: the command
-// outcome is what the caller is reading.
 func (in *invocation) killQuietly(client *sandbox.Client, sandboxID string) {
 	kctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_, _ = client.KillSandbox(kctx, sandboxID)
 }
 
-// outcomeExit maps a completed execution to the CLI's error, or nil.
 func outcomeExit(ex *sandbox.Execution) error {
 	if ex == nil {
 		return nil
@@ -254,7 +235,6 @@ func outcomeExit(ex *sandbox.Execution) error {
 			return nil
 		}
 	}
-	// Reuse the SDK's mapping so the CLI and SDK agree on reasons and output.
 	code := 0
 	if ex.ExitCode != nil {
 		code = *ex.ExitCode
@@ -270,9 +250,6 @@ func outcomeExit(ex *sandbox.Execution) error {
 	}
 }
 
-// createRequest turns the flags into the SDK's request. A flag is forwarded
-// when the caller gave it, so --timeout 0 reaches the server and disables the
-// lifetime timeout instead of silently meaning "use the default".
 func (rf *runFlags) createRequest() sandbox.CreateSandboxRequest {
 	req := sandbox.CreateSandboxRequest{}
 	if rf.image != "" {
@@ -310,8 +287,6 @@ func (rf *runFlags) createRequest() sandbox.CreateSandboxRequest {
 	return req
 }
 
-// checkNoCreationFlags rejects creation flags combined with --sandbox: they
-// would silently do nothing.
 func checkNoCreationFlags(rf *runFlags) error {
 	var used []string
 	if rf.image != "" {
@@ -347,9 +322,6 @@ func checkNoCreationFlags(rf *runFlags) error {
 	if len(used) == 0 {
 		return nil
 	}
-	// A `code` shorthand sets --image implicitly, so only report flags the
-	// caller actually passed; the implicit image is applied after this check
-	// for a new sandbox.
 	if rf.sandboxID == "" {
 		return nil
 	}

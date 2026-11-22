@@ -60,5 +60,4 @@ def outcome_error(execution: Execution) -> Error | None:
         if execution.exit_code == 0:
             return None
         return Error(ERR_NONZERO_EXIT, execution=execution)
-    # Preserve future reason strings; an unknown reason must not mean success.
     return Error(reason, execution=execution)

@@ -1,5 +1,3 @@
-# Local compatibility profile, not an E2B cloud template. Pin the resulting
-# image ID at use time; apt packages are recorded by the acceptance workflow.
 FROM debian:12-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
 RUN apt-get update && apt-get install -y --no-install-recommends bash python3 coreutils ca-certificates \
     && apt-get clean && rm -rf /var/lib/apt/lists/*

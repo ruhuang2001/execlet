@@ -11,7 +11,6 @@ from tiny_sandbox import Client, Error
 
 
 def high_fd():
-    # Occupy the low slots only in this process; do not change the runner's limits.
     soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
     if soft != resource.RLIM_INFINITY and soft < 1100:
         resource.setrlimit(resource.RLIMIT_NOFILE, (1100, hard))

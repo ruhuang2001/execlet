@@ -73,7 +73,6 @@ func FuzzParse(f *testing.F) {
 			}
 			return
 		}
-		// Canonical output must always re-parse cleanly and preserve entry count.
 		reparsed, err := filearchive.Parse(archive.Bytes())
 		if err != nil {
 			t.Fatalf("canonical archive failed to re-parse: %v", err)

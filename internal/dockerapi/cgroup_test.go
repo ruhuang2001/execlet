@@ -27,8 +27,6 @@ func TestParseOOMKillCgroupV1(t *testing.T) {
 	}
 }
 
-// The counter names share a prefix: "oom", "oom_kill" and "oom_group_kill" are
-// three different numbers. Only the exact key counts.
 func TestParseOOMKillRequiresExactKey(t *testing.T) {
 	cases := map[string]string{
 		"oom counter only":        "oom 3\n",

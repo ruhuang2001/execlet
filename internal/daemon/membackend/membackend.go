@@ -1,12 +1,3 @@
-// Package membackend is an in-memory implementation of daemon.Backend, used
-// only by tests. It is deliberately imported by no binary: the daemon tests,
-// the HTTP handler tests and the contract tests share it so all three exercise
-// the same semantics without Docker.
-//
-// It models one container per sandbox, concurrent running processes per container,
-// a monotonically increasing oom_kill counter, and a file map. Tests drive it
-// through methods such as Kill (simulate an external stop), SetOOMKills
-// (simulate the kernel OOM killer), and Program (decide what a command does).
 package membackend
 
 import (
@@ -24,39 +15,23 @@ import (
 	"github.com/ruhuang2001/tiny-sandbox/internal/daemon"
 )
 
-// Program is what a command does when it runs. It writes output and returns an
-// exit code; ctx is done when the process is signalled or the container goes
-// away. Returning promptly after ctx is done keeps cancellation tests fast.
 type Program func(ctx context.Context, args []string) (stdout, stderr string, exitCode int)
 
-// Streamer is a Program that writes while it runs, so a test can observe
-// output events before the execution completes. write returns an error once
-// the process is gone.
 type Streamer func(ctx context.Context, write func(stdout, stderr []byte) error) (exitCode int)
 
-// Backend is the in-memory daemon.Backend.
 type Backend struct {
 	mu         sync.Mutex
 	containers map[string]*container
 	nextID     int
 
-	// Programs maps the first argument of a command to its behaviour. A
-	// command not in the map uses Streamers, then Default, which exits 0 with
-	// no output.
 	Programs  map[string]Program
 	Streamers map[string]Streamer
 	Default   Program
-	// CreateErr, if set, is returned by the next Create. Tests use it to
-	// exercise the create-failure path.
 	CreateErr error
-	// ExecErr, if set, is returned by the next Exec.
-	ExecErr error
+	ExecErr   error
 
-	// lastExec is the spec of the most recent Exec, for LastExecSpec.
 	lastExec daemon.ExecSpec
 
-	// createBlock, when non-nil, makes Create wait for it. Tests use it to
-	// observe the pending state, which is otherwise only concurrent.
 	createBlock chan struct{}
 }
 
@@ -93,7 +68,6 @@ type process struct {
 
 var _ daemon.Backend = (*Backend)(nil)
 
-// New returns an empty backend.
 func New() *Backend {
 	return &Backend{
 		containers: make(map[string]*container),
@@ -105,9 +79,6 @@ func New() *Backend {
 	}
 }
 
-// ---------------------------------------------------------------- containers
-
-// Create records a container. It fails with CreateErr when a test set one.
 func (b *Backend) Create(_ context.Context, spec daemon.ContainerSpec) (string, error) {
 	b.mu.Lock()
 	block := b.createBlock
@@ -132,7 +103,6 @@ func (b *Backend) Create(_ context.Context, spec daemon.ContainerSpec) (string, 
 	return c.id, nil
 }
 
-// Remove drops the container and ends its process.
 func (b *Backend) Remove(_ context.Context, id string) error {
 	b.mu.Lock()
 	c := b.containers[id]
@@ -149,7 +119,6 @@ func (b *Backend) Remove(_ context.Context, id string) error {
 	return nil
 }
 
-// Pause freezes the container.
 func (b *Backend) Pause(_ context.Context, id string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -164,7 +133,6 @@ func (b *Backend) Pause(_ context.Context, id string) error {
 	return nil
 }
 
-// Unpause resumes the container.
 func (b *Backend) Unpause(_ context.Context, id string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -179,16 +147,10 @@ func (b *Backend) Unpause(_ context.Context, id string) error {
 	return nil
 }
 
-// Exec starts a program in the container. The environment and directory are
-// recorded rather than applied: this backend runs Go functions, not processes,
-// and the contract test only needs the fields to be accepted and observable
-// instead of silently dropped.
 func (b *Backend) Exec(ctx context.Context, id string, spec daemon.ExecSpec) (daemon.Process, error) {
 	command := spec.Command
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	// Copy the slices: the caller owns the request and could reuse its
-	// backing array, which would change what LastExecSpec reports.
 	b.lastExec = daemon.ExecSpec{
 		Command: append([]string(nil), spec.Command...),
 		Env:     append([]string(nil), spec.Env...),
@@ -234,13 +196,10 @@ func (b *Backend) Exec(ctx context.Context, id string, spec daemon.ExecSpec) (da
 	if fn, ok := b.Programs[command[0]]; ok {
 		program = fn
 	}
-	// The program outlives the request that started it, as it does in the
-	// Docker backend: the daemon bounds the start handshake, not the process.
 	go p.run(context.WithoutCancel(ctx), program, command[1:])
 	return p, nil
 }
 
-// Liveness reports the container's state.
 func (b *Backend) Liveness(_ context.Context, id string) (daemon.Liveness, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -251,7 +210,6 @@ func (b *Backend) Liveness(_ context.Context, id string) (daemon.Liveness, error
 	return c.state, nil
 }
 
-// OOMKillCount returns the container's cumulative OOM counter.
 func (b *Backend) OOMKillCount(_ context.Context, id string) (int64, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -262,7 +220,6 @@ func (b *Backend) OOMKillCount(_ context.Context, id string) (int64, error) {
 	return c.oom, nil
 }
 
-// ReadFile returns a stored regular file.
 func (b *Backend) ReadFile(_ context.Context, id, p string) ([]byte, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -295,7 +252,6 @@ func (b *Backend) ReadFile(_ context.Context, id, p string) ([]byte, error) {
 	return append([]byte(nil), data...), nil
 }
 
-// WriteFile stores a file.
 func (b *Backend) WriteFile(_ context.Context, id, p string, data []byte) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -327,11 +283,6 @@ func (b *Backend) get(id string) (*container, error) {
 	return c, nil
 }
 
-// ---------------------------------------------------------------- test controls
-
-// Kill stops a container the way an external `docker kill` would: the
-// container is stopped and its process gets SIGKILL-like treatment, exiting
-// 137. The daemon must report this as evicted, never oom.
 func (b *Backend) Kill(id string) {
 	b.mu.Lock()
 	c := b.containers[id]
@@ -344,9 +295,6 @@ func (b *Backend) Kill(id string) {
 	b.mu.Unlock()
 }
 
-// Disappear removes the container record without stopping anything, modelling
-// a container that vanished. The process sees the container gone on our side
-// only through the daemon's liveness probe; the process itself ends 137.
 func (b *Backend) Disappear(id string) {
 	b.mu.Lock()
 	c := b.containers[id]
@@ -359,14 +307,10 @@ func (b *Backend) Disappear(id string) {
 	b.mu.Unlock()
 }
 
-// IgnoreTerm makes the container's process ignore SIGTERM, so a cancel falls
-// through to SIGKILL. It models a process that traps the signal.
 func (b *Backend) IgnoreTerm(id string) {
 	b.setIgnore(id, true, false)
 }
 
-// IgnoreSignals makes the container's process survive both signals, so a
-// cancel cannot be confirmed. It models a process the runtime cannot stop.
 func (b *Backend) IgnoreSignals(id string) {
 	b.setIgnore(id, true, true)
 }
@@ -384,8 +328,6 @@ func (b *Backend) setIgnore(id string, term, kill bool) {
 	}
 }
 
-// IDs returns every container ID the backend knows, in creation order. Tests
-// use it when they hold a sandbox ID but need the container behind it.
 func (b *Backend) IDs() []string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -397,7 +339,6 @@ func (b *Backend) IDs() []string {
 	return ids
 }
 
-// SetOOMKills sets the container's oom_kill counter, as the kernel would.
 func (b *Backend) SetOOMKills(id string, n int64) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -406,7 +347,6 @@ func (b *Backend) SetOOMKills(id string, n int64) {
 	}
 }
 
-// Process returns the latest process for compatibility with single-process assertions.
 func (b *Backend) Process(id string) *Process {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -417,7 +357,6 @@ func (b *Backend) Process(id string) *Process {
 	return &Process{proc: c.procs[len(c.procs)-1]}
 }
 
-// Processes returns every currently retained process in start order for assertions.
 func (b *Backend) Processes(id string) []*Process {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -432,15 +371,10 @@ func (b *Backend) Processes(id string) []*Process {
 	return out
 }
 
-// Process is a read-only view of a container's process.
 type Process struct{ proc *process }
 
-// Signals returns the signals the process received, in order.
 func (p *Process) Signals() []daemon.Signal { return p.proc.Signals() }
 
-// LastExecSpec returns the spec of the most recent Exec, so a test can prove
-// that the environment and directory reach the backend instead of being
-// dropped between the request and the process.
 func (b *Backend) LastExecSpec() daemon.ExecSpec {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -452,7 +386,6 @@ func (b *Backend) LastExecSpec() daemon.ExecSpec {
 	}
 }
 
-// State returns a container's liveness, for assertions.
 func (b *Backend) State(id string) daemon.Liveness {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -462,8 +395,6 @@ func (b *Backend) State(id string) daemon.Liveness {
 	return daemon.LivenessMissing
 }
 
-// HoldCreate makes the next Create block until the returned function is
-// called. It lets a test observe the pending state.
 func (b *Backend) HoldCreate() (release func()) {
 	ch := make(chan struct{})
 	b.mu.Lock()
@@ -480,22 +411,16 @@ func (b *Backend) HoldCreate() (release func()) {
 	}
 }
 
-// Signals returns the signals a process received, in order.
 func (p *process) Signals() []daemon.Signal {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return append([]daemon.Signal(nil), p.signals...)
 }
 
-// ---------------------------------------------------------------- process
-
-// Stdout returns the process's stdout reader.
 func (p *process) Stdout() io.Reader { return p.outR }
 
-// Stderr returns the process's stderr reader.
 func (p *process) Stderr() io.Reader { return p.errR }
 
-// Wait blocks until the process has exited.
 func (p *process) Wait() (int, error) {
 	<-p.done
 	p.mu.Lock()
@@ -503,8 +428,6 @@ func (p *process) Wait() (int, error) {
 	return p.exitCode, p.waitErr
 }
 
-// Signal records the signal and acts: SIGTERM asks the program to stop by
-// cancelling its context, SIGKILL ends it immediately.
 func (p *process) Signal(sig daemon.Signal) error {
 	p.mu.Lock()
 	p.signals = append(p.signals, sig)
@@ -516,10 +439,6 @@ func (p *process) Signal(sig daemon.Signal) error {
 	ignored := (sig == daemon.SignalTerm && p.ignoreTerm) || (sig == daemon.SignalKill && p.ignoreKill)
 	p.mu.Unlock()
 	if ignored {
-		// A process the runtime cannot stop still binds its context: the
-		// runtime removes the container, which is what ends it. Cancelling
-		// here models that the program survives the signal, not that it
-		// survives the removal.
 		return nil
 	}
 
@@ -543,7 +462,6 @@ func (p *process) finished() bool {
 	}
 }
 
-// runStreamer executes a streaming program, writing each chunk as it arrives.
 func (p *process) runStreamer(ctx context.Context, streamer Streamer) {
 	ctx, cancel := context.WithCancel(ctx)
 	p.mu.Lock()
@@ -574,7 +492,6 @@ func (p *process) runStreamer(ctx context.Context, streamer Streamer) {
 	p.finish(code, nil)
 }
 
-// run executes the program and publishes its result.
 func (p *process) run(ctx context.Context, program Program, args []string) {
 	ctx, cancel := context.WithCancel(ctx)
 	p.mu.Lock()
@@ -594,7 +511,6 @@ func (p *process) run(ctx context.Context, program Program, args []string) {
 	p.finish(code, nil)
 }
 
-// finish closes the pipes and the process exactly once.
 func (p *process) finish(code int, waitErr error) {
 	p.closeOnce.Do(func() {
 		p.mu.Lock()
@@ -608,7 +524,6 @@ func (p *process) finish(code int, waitErr error) {
 	})
 }
 
-// stopProcess ends a container's process, as removing or killing it would.
 func (c *container) stopProcess() {
 	for _, p := range c.procs {
 		p.mu.Lock()
@@ -620,5 +535,3 @@ func (c *container) stopProcess() {
 		p.finish(137, nil)
 	}
 }
-
-// ---------------------------------------------------------------- helpers

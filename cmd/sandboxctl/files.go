@@ -95,7 +95,6 @@ func (in *invocation) archive(args []string) int {
 	return 0
 }
 
-// saveArchive replaces the destination only after a complete local save.
 func saveArchive(file *os.File, destination string, data []byte) error {
 	if _, err := file.Write(data); err != nil {
 		return errors.Join(err, file.Close())
@@ -120,7 +119,6 @@ func readLocalArchive(ctx context.Context, name string) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, sandbox.ErrCanceled
 	}
-	// Nonblocking open prevents a raced-in FIFO from blocking between stat and open.
 	file, err := os.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err

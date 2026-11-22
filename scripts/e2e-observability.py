@@ -74,7 +74,6 @@ class Forward(socketserver.BaseRequestHandler):
             return
         with socket.socket(socket.AF_UNIX) as upstream:
             upstream.connect(socket_path)
-            # One request per connection makes fault changes deterministic.
             head, body = data.split(b'\r\n\r\n', 1)
             head = b'\r\n'.join(line for line in head.split(b'\r\n') if not line.lower().startswith(b'connection:'))
             upstream.sendall(head + b'\r\nConnection: close\r\n\r\n' + body)

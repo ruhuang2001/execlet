@@ -14,8 +14,6 @@ import (
 	sandbox "github.com/ruhuang2001/tiny-sandbox/sandbox-go"
 )
 
-// harness wires the real HTTP handler over a backend the test can steer, so
-// the example is tested through the same path an agent would use.
 type harness struct {
 	be     *membackend.Backend
 	store  *daemon.Sandboxes
@@ -57,7 +55,6 @@ func TestToolDefinitionIsUsableByAnAgent(t *testing.T) {
 		t.Errorf("required = %v, want [code]", schema["required"])
 	}
 
-	// The definition must survive JSON, because that is how it reaches a model.
 	if _, err := json.Marshal(def); err != nil {
 		t.Fatalf("definition does not marshal: %v", err)
 	}
@@ -91,7 +88,6 @@ func TestRunNonZeroExitKeepsOutput(t *testing.T) {
 	if !result.IsError || result.Outcome != "nonzero_exit" {
 		t.Fatalf("result = %+v, want nonzero_exit", result)
 	}
-	// The model needs the traceback to decide what to do next.
 	if result.Stderr != "Traceback: boom\n" || result.Stdout != "partial\n" {
 		t.Errorf("output was lost: %+v", result)
 	}
@@ -105,9 +101,6 @@ func TestRun137WithoutAnOOMDeltaIsNotOOM(t *testing.T) {
 	h.be.Programs["python3"] = func(context.Context, []string) (string, string, int) { return "", "", 137 }
 
 	result := agenttool.New(h.client).Run(context.Background(), agenttool.Input{Code: "x = bytearray(1<<30)"})
-	// Exit 137 alone never means oom: without a cgroup delta and with the
-	// container alive, it is an ordinary exit. This is the contract's rule,
-	// and an agent that conflated the two would give the wrong advice.
 	if result.Outcome != "nonzero_exit" {
 		t.Fatalf("outcome = %q, want nonzero_exit without an OOM delta", result.Outcome)
 	}
@@ -115,8 +108,6 @@ func TestRun137WithoutAnOOMDeltaIsNotOOM(t *testing.T) {
 
 func TestRunOOM(t *testing.T) {
 	h := newHarness(t)
-	// The container's oom_kill counter moves during the execution, as the
-	// kernel would, and the process exits 137.
 	h.be.Programs["python3"] = func(_ context.Context, _ []string) (string, string, int) {
 		h.be.SetOOMKills(h.onlyContainer(t), 1)
 		return "", "", 137
@@ -145,7 +136,6 @@ func TestRunTimeoutIsDistinct(t *testing.T) {
 		done <- tool.Run(context.Background(), agenttool.Input{Code: "while True: pass", TimeoutSeconds: 5})
 	}()
 
-	// Let the execution start, then expire the sandbox.
 	time.Sleep(50 * time.Millisecond)
 	clock.Advance(6 * time.Second)
 	h.store.Reap(context.Background())
@@ -247,7 +237,6 @@ func TestRunInHonorsTimeoutAndUnknownOutcomeDoesNotAdviseBlindRetry(t *testing.T
 		t.Fatal("RunIn did not honor TimeoutSeconds")
 	}
 
-	// Ambiguous exit 137 in multi-slot sandbox produces ReasonUnknown; it must not claim "unavailable" + "retry once".
 	delete(h.be.Streamers, "python3")
 	h.be.Programs["python3"] = func(context.Context, []string) (string, string, int) { return "", "", 137 }
 	unknownRes := tool.RunIn(context.Background(), sb.ID, agenttool.Input{Code: "import os, signal; os.kill(os.getpid(), 9)"})
@@ -256,8 +245,6 @@ func TestRunInHonorsTimeoutAndUnknownOutcomeDoesNotAdviseBlindRetry(t *testing.T
 	}
 }
 
-// onlyContainer returns the single container the harness created, so a
-// program can move that container's OOM counter.
 func (h *harness) onlyContainer(t *testing.T) string {
 	t.Helper()
 	ids := h.be.IDs()
@@ -267,8 +254,6 @@ func (h *harness) onlyContainer(t *testing.T) string {
 	return ids[0]
 }
 
-// fakeClock is the daemon's injectable clock, advanced by the test from one
-// goroutine while the engine reads it from another, so it needs a lock.
 type fakeClock struct {
 	mu  sync.Mutex
 	now time.Time

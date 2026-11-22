@@ -1,4 +1,3 @@
-// Command file-e2e verifies the Go SDK against a live Docker sandbox.
 package main
 
 import (

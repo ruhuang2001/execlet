@@ -40,13 +40,10 @@ try:
         except importlib.metadata.PackageNotFoundError:
             version = getattr(sdk, "__version__", None)
     Sandbox = sdk.Sandbox
-    # Provider configuration is deliberately confined to this bootstrap.
     options = json.loads(os.environ.get("CONTRACT_OPTIONS", "{}"))
-    # Template/image selection is create-only, so connect never receives it.
     connect_options = {k: v for k, v in options.items() if k not in {"image", "template"}}
     emit({"ready": True, "version": version, "module": sdk.__name__, "runtime": sys.version, "pid": os.getpid()})
 except ModuleNotFoundError as e:
-    # A missing SDK or adapter module is not_run; a broken dependency is a failure.
     expected = {"e2b", "tiny_sandbox", "tiny_sandbox.e2b", os.environ.get("CONTRACT_MODULE", "")}
     emit({"ready": False, "status": "not_run" if e.name in expected else "failed", "reason": str(e)})
     sys.exit(2)
@@ -90,7 +87,6 @@ def failure(exc):
     data = {"family": family, "class": type(exc).__name__, "message": str(exc)}
     if family == "exit":
         data.update(result(exc))
-    # Diagnostic extensions are not coerced into normal E2B exit errors.
     for name in ("code", "execution_id", "idempotency_key", "termination_reason", "output_truncated", "stdout", "stderr"):
         v = getattr(exc, name, None)
         if isinstance(v, (str, int, bool)):

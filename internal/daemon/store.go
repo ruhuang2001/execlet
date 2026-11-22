@@ -8,91 +8,51 @@ import (
 	"time"
 )
 
-// Clock is the daemon's only source of wall time. Tests inject a clock they
-// advance by hand, so timeout behaviour is deterministic.
 type Clock interface {
 	Now() time.Time
 }
 
-// realClock is the production clock.
 type realClock struct{}
 
 func (realClock) Now() time.Time { return time.Now() }
 
-// SleepFunc waits for d or until ctx is done, reporting whether the sleep ran
-// to completion. Classification uses it for the ambiguous-137 re-sampling
-// window, so tests do not spend wall-clock time.
 type SleepFunc func(ctx context.Context, d time.Duration) bool
 
-// Option configures Sandboxes.
 type Option func(*Sandboxes)
 
-// WithClock replaces the clock.
 func WithClock(c Clock) Option { return func(s *Sandboxes) { s.clock = c } }
 
-// WithCleanupInterval sets how long the reaper waits between checks on a
-// sandbox that has nothing due. It is capped at one second, as api.md requires.
 func WithCleanupInterval(d time.Duration) Option {
 	return func(s *Sandboxes) { s.cleanupInterval = d }
 }
 
-// WithClassifierSleep replaces the sleep classification uses while re-sampling
-// container liveness after an ambiguous exit.
 func WithClassifierSleep(f SleepFunc) Option { return func(s *Sandboxes) { s.sleep = f } }
 
-// WithOwnerLabel sets the value of the tiny-sandbox.owner label on every
-// container, so a restart removes its own leftovers.
 func WithOwnerLabel(owner string) Option { return func(s *Sandboxes) { s.owner = owner } }
 
-// WithCancelGrace sets how long a cancel waits between SIGTERM and SIGKILL.
 func WithCancelGrace(d time.Duration) Option { return func(s *Sandboxes) { s.cancelGrace = d } }
 
-// WithCancelDeadline sets how long a cancel waits for confirmation before it
-// removes the container.
 func WithCancelDeadline(d time.Duration) Option { return func(s *Sandboxes) { s.cancelDeadline = d } }
 
-// WithMaxSandboxes sets how many live sandboxes the store accepts. A create
-// beyond it is rate_limited.
 func WithMaxSandboxes(n int) Option { return func(s *Sandboxes) { s.maxSandboxes = n } }
 
-// WithMaxRetainedSandboxes sets how many killed records are kept.
 func WithMaxRetainedSandboxes(n int) Option {
 	return func(s *Sandboxes) { s.maxRetainedSandboxes = n }
 }
 
-// WithMaxRetainedOutputBytes sets the total output budget across sandboxes.
 func WithMaxRetainedOutputBytes(n int) Option {
 	return func(s *Sandboxes) { s.maxRetainedOutput = n }
 }
 
-// OwnerLabelKey is the label that ties a container to the server instance
-// that created it.
 const OwnerLabelKey = "tiny-sandbox.owner"
 
-// Ambiguity re-sampling: after an exit code of 137 with no recorded intent and
-// no OOM delta, container liveness is sampled until it settles or this window
-// runs out, and the last observation decides. A confirmed stop ends the wait
-// early, so the usual external kill costs one or two intervals; the window is
-// the bound for the case CI showed, where the daemon keeps reporting "running"
-// long after the kill. The 137 path is the only one that pays this cost, and it
-// fits the five-second eviction budget in api.md.
 const (
-	ambiguousWindow   = 2 * time.Second
-	ambiguousInterval = 50 * time.Millisecond
-	// ambiguousMinSamples is how many answers are collected before a
-	// confirmed stop may end the wait early.
+	ambiguousWindow     = 2 * time.Second
+	ambiguousInterval   = 50 * time.Millisecond
 	ambiguousMinSamples = 3
 	ambiguousSamples    = int(ambiguousWindow / ambiguousInterval)
 )
 
-// Sandboxes is the daemon's in-memory store of sandboxes and their
-// executions, plus every lifecycle transition in docs/api.md. It is the
-// domain object the HTTP handlers call; it knows nothing about HTTP.
-//
-// State is per process and lost on restart, as the contract says. Each sandbox
-// has its own mutex, so a blocking cancel on one sandbox never delays requests
-// on another, and the reaper skips a sandbox whose lock is held instead of
-// waiting for it.
 type Sandboxes struct {
 	backend        Backend
 	metrics        metrics
@@ -112,26 +72,16 @@ type Sandboxes struct {
 
 	mu    sync.Mutex
 	byID  map[string]*sandbox
-	order []*sandbox // creation order, for newest-first listings
-	// live counts sandboxes that are not killed: every one of them holds a
-	// container. Admission checks it, so an agent loop that never deletes cannot
-	// exhaust the host one sandbox at a time.
-	live int
+	order []*sandbox
+	live  int
 
-	// retryMu guards retryIDs: containers the runtime would not remove. It is
-	// a separate lock so a retry pass never waits on the store lock, and the
-	// reaper never waits on a removal it is itself scheduling.
 	retryMu            sync.Mutex
 	retryIDs           map[string]struct{}
 	removalPassRunning bool
 }
 
-// removalPassBudget bounds one removal-retry pass as a whole, so a hung runtime
-// cannot let the pass starve timeout and eviction checks by holding its
-// goroutine for one backend timeout per queued container.
 const removalPassBudget = 2 * time.Second
 
-// New returns Sandboxes backed by backend.
 func New(backend Backend, opts ...Option) *Sandboxes {
 	s := &Sandboxes{
 		backend:              backend,
@@ -171,7 +121,6 @@ func New(backend Backend, opts ...Option) *Sandboxes {
 	return s
 }
 
-// sleepContext waits for d or until ctx is done.
 func sleepContext(ctx context.Context, d time.Duration) bool {
 	t := time.NewTimer(d)
 	defer t.Stop()
@@ -183,10 +132,8 @@ func sleepContext(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-// now is the store's single source of time, always in UTC.
 func (s *Sandboxes) now() time.Time { return s.clock.Now().UTC() }
 
-// sandbox is one sandbox and everything that belongs to it.
 type sandbox struct {
 	mu sync.Mutex
 
@@ -195,37 +142,21 @@ type sandbox struct {
 	opts      sandboxOptions
 	createdAt time.Time
 
-	state State
-	// released records that this sandbox gave back its live-sandbox slot, so a
-	// kill that races a failed create cannot free the same slot twice.
-	released   bool
-	forgotten  bool
-	dirty      bool
-	killReason *KillReason
-	// expiresAt is non-nil only while a lifetime deadline is armed: for a
-	// kill-action sandbox in any live state, and for a pause-action sandbox
-	// only while running.
-	expiresAt *time.Time
-	// lastActivity is the latest of: an authenticated request addressing the
-	// sandbox, the end of an execution, and the close of an event stream.
+	state        State
+	released     bool
+	forgotten    bool
+	dirty        bool
+	killReason   *KillReason
+	expiresAt    *time.Time
 	lastActivity time.Time
 
-	executions  []*execution // in start order; newest last
+	executions  []*execution
 	running     map[string]*execution
 	idempotency map[string]*execution
 
 	streams int
 }
 
-// pruneExecutionsLocked enforces MaxExecutionsPerSandbox. Callers hold sb.mu.
-//
-// Dropping a completed execution also drops its idempotency key, so a replay
-// of a key that is older than the retained history starts a new execution
-// instead of returning the old record. That is the deliberate trade: keeping
-// every key forever makes the map grow without bound, and the alternative —
-// keeping the record but discarding its output — still costs a record per
-// command and still leaves the memory question open. The contract documents the
-// window. The running execution is never dropped.
 func (sb *sandbox) pruneExecutionsLocked() {
 	for len(sb.executions) > MaxExecutionsPerSandbox {
 		if _, ok := sb.dropOldestLocked(); !ok {
@@ -234,9 +165,6 @@ func (sb *sandbox) pruneExecutionsLocked() {
 	}
 }
 
-// ---------------------------------------------------------------- creation
-
-// Create starts a container and returns the sandbox once it is running.
 func (s *Sandboxes) Create(ctx context.Context, req CreateRequest) (result Sandbox, retErr error) {
 	start := time.Now()
 	defer func() {
@@ -304,17 +232,11 @@ func (s *Sandboxes) Create(ctx context.Context, req CreateRequest) (result Sandb
 	}
 	containerID, err := s.backend.Create(ctx, spec)
 	if err != nil {
-		// The container may exist despite the error; removing it is the only
-		// way to be sure. A failed remove is left for startup cleanup by
-		// label.
 		if containerID != "" {
 			if removeErr := s.backend.Remove(context.WithoutCancel(ctx), containerID); removeErr != nil && !errors.Is(removeErr, ErrNotFound) {
 				s.scheduleRemoval(containerID)
 			}
 		}
-		// The reservation from reserve() never became a sandbox record. A kill
-		// that landed while the container was being created already released
-		// it, so the sandbox decides whether this call owns the slot.
 		sb.mu.Lock()
 		released := sb.released
 		sb.mu.Unlock()
@@ -328,9 +250,6 @@ func (s *Sandboxes) Create(ctx context.Context, req CreateRequest) (result Sandb
 	sb.mu.Lock()
 	sb.container = containerID
 	if sb.state != StatePending {
-		// The sandbox was killed while the container was being created; the
-		// transition table allows delete from pending, so the container that
-		// appeared afterwards must not survive.
 		sb.mu.Unlock()
 		_ = s.backend.Remove(context.WithoutCancel(ctx), containerID)
 		return sb.snapshot(), nil
@@ -339,8 +258,6 @@ func (s *Sandboxes) Create(ctx context.Context, req CreateRequest) (result Sandb
 	sb.armLifetimeLocked(s.now())
 	err = s.saveSandboxLocked(sb)
 	if err != nil {
-		// No successful response can identify this container for the caller.
-		// Reclaim it now; a failed removal stays reserved and queued.
 		_ = s.terminateLocked(ctx, sb, KillEvicted)
 	}
 	sb.mu.Unlock()
@@ -350,10 +267,6 @@ func (s *Sandboxes) Create(ctx context.Context, req CreateRequest) (result Sandb
 	return sb.snapshot(), nil
 }
 
-// reserve claims a live-sandbox slot, or reports rate_limited when the store
-// is full. Live sandboxes hold containers, so the bound is what keeps an
-// agent that never deletes from exhausting the host. The reservation is taken
-// before the container exists and released on every failure path.
 func (s *Sandboxes) reserve() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -365,20 +278,16 @@ func (s *Sandboxes) reserve() error {
 	return nil
 }
 
-// release gives back a live-sandbox slot. It is called when a sandbox becomes
-// killed, by every path that does so: a delete, a timeout, and an eviction.
 func (s *Sandboxes) release() {
 	s.mu.Lock()
 	s.live--
 	s.mu.Unlock()
 }
 
-// forget removes a sandbox that never started.
 func (s *Sandboxes) forget(sb *sandbox) {
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
 	if s.journal != nil {
-		// A partially pruned tombstone must not claim history already removed.
 		history := sb.executions
 		sb.executions = nil
 		err := s.saveSandboxLocked(sb)
@@ -409,9 +318,6 @@ func (s *Sandboxes) forget(sb *sandbox) {
 	}
 }
 
-// ---------------------------------------------------------------- reads
-
-// Get returns one sandbox. Reads never change state.
 func (s *Sandboxes) Get(id string) (Sandbox, error) {
 	sb, err := s.lookup(id)
 	if err != nil {
@@ -422,8 +328,6 @@ func (s *Sandboxes) Get(id string) (Sandbox, error) {
 	return sb.snapshot(), nil
 }
 
-// List returns every sandbox, newest first. Killed sandboxes are included
-// until the process restarts.
 func (s *Sandboxes) List() []Sandbox {
 	s.mu.Lock()
 	order := append([]*sandbox(nil), s.order...)
@@ -438,9 +342,6 @@ func (s *Sandboxes) List() []Sandbox {
 	return out
 }
 
-// Touch records an authenticated request that addressed the sandbox. The idle
-// timeout measures from the latest such request, the last execution end, and
-// the last stream close.
 func (s *Sandboxes) Touch(id string) {
 	sb, err := s.lookup(id)
 	if err != nil {
@@ -454,16 +355,12 @@ func (s *Sandboxes) Touch(id string) {
 }
 
 func (sb *sandbox) touchLocked(now time.Time) {
-	// The idle deadline is the only recovery decision based on this clock.
 	if sb.opts.idleTimeoutSeconds > 0 && !now.Equal(sb.lastActivity) {
 		sb.dirty = true
 	}
 	sb.lastActivity = now
 }
 
-// OpenStream records an open event stream for the idle timeout and returns the
-// function that closes it. An open stream is activity, and a stream that stays
-// open keeps the sandbox from being idle.
 func (s *Sandboxes) OpenStream(id string) (closeStream func(), err error) {
 	sb, err := s.lookup(id)
 	if err != nil {
@@ -493,15 +390,6 @@ func (s *Sandboxes) OpenStream(id string) (closeStream func(), err error) {
 	}, nil
 }
 
-// ---------------------------------------------------------------- lifecycle
-
-// Update changes a live sandbox's lifetime. It is the only mutable property,
-// because image, memory, CPU and network describe the container itself.
-//
-// TimeoutSeconds replaces the deadline with now plus the value, which may
-// shorten it. ExtendSeconds applies the connect rule instead: the deadline is
-// the later of the current one and now plus the value, so it can only extend.
-// A killed or pending sandbox cannot be updated; a live one keeps its state.
 func (s *Sandboxes) Update(_ context.Context, id string, req UpdateRequest) (result Sandbox, retErr error) {
 	if req.TimeoutSeconds != nil && req.ExtendSeconds != nil {
 		return Sandbox{}, errorf(CodeInvalidRequest, "timeout_seconds and extend_seconds are mutually exclusive")
@@ -528,8 +416,6 @@ func (s *Sandboxes) Update(_ context.Context, id string, req UpdateRequest) (res
 	now := s.now()
 	switch {
 	case req.TimeoutSeconds != nil:
-		// Replacing also changes the policy the sandbox was created with, so a
-		// later resume or arm uses the new value rather than the old one.
 		sb.opts.timeoutSeconds = *req.TimeoutSeconds
 		if *req.TimeoutSeconds == 0 {
 			sb.expiresAt = nil
@@ -541,8 +427,6 @@ func (s *Sandboxes) Update(_ context.Context, id string, req UpdateRequest) (res
 		deadline := now.Add(time.Duration(*req.TimeoutSeconds) * time.Second)
 		sb.expiresAt = &deadline
 	case *req.ExtendSeconds == 0:
-		// Extending by zero is a no-op: a connect must never remove a deadline
-		// the caller did not ask to remove.
 		return sb.snapshot(), nil
 	default:
 		deadline := now.Add(time.Duration(*req.ExtendSeconds) * time.Second)
@@ -561,8 +445,6 @@ func (s *Sandboxes) Update(_ context.Context, id string, req UpdateRequest) (res
 	return sb.snapshot(), nil
 }
 
-// Pause freezes the sandbox. It is invalid while pending or killed and a
-// no-op while paused.
 func (s *Sandboxes) Pause(ctx context.Context, id string) (result Sandbox, retErr error) {
 	sb, err := s.lookup(id)
 	if err != nil {
@@ -586,8 +468,6 @@ func (s *Sandboxes) Pause(ctx context.Context, id string) (result Sandbox, retEr
 		return Sandbox{}, s.backendFailure(ctx, sb, err)
 	}
 	sb.state = StatePaused
-	// A pause-timeout sandbox does not count while paused, so it shows no
-	// deadline. A kill-timeout sandbox keeps counting, as api.md says.
 	if sb.opts.timeoutAction == ActionPause {
 		sb.expiresAt = nil
 	}
@@ -597,8 +477,6 @@ func (s *Sandboxes) Pause(ctx context.Context, id string) (result Sandbox, retEr
 	return sb.snapshot(), nil
 }
 
-// Resume thaws the sandbox. It is invalid while pending or killed and a no-op
-// while running.
 func (s *Sandboxes) Resume(ctx context.Context, id string) (Sandbox, error) {
 	sb, err := s.lookup(id)
 	if err != nil {
@@ -620,9 +498,6 @@ func (s *Sandboxes) Resume(ctx context.Context, id string) (Sandbox, error) {
 	return sb.snapshot(), nil
 }
 
-// unpauseLocked resumes the container and arms a fresh deadline when the
-// lifetime timeout acts by pausing. Every transition to running starts a new
-// interval; otherwise an automatic resume would expire again immediately.
 func (s *Sandboxes) unpauseLocked(ctx context.Context, sb *sandbox) error {
 	callCtx, cancel := backendCtx(ctx)
 	err := s.backend.Unpause(callCtx, sb.container)
@@ -635,14 +510,6 @@ func (s *Sandboxes) unpauseLocked(ctx context.Context, sb *sandbox) error {
 	return s.saveSandboxLocked(sb)
 }
 
-// Delete kills the sandbox with reason requested and removes its container. It
-// is idempotent.
-//
-// An unconfirmed removal is not success. The record is killed either way, but a
-// caller that reads 200 as "nothing of this sandbox is running" would be wrong
-// while the container survives, so a removal the runtime refused is reported as
-// backend_error with the retry still scheduled. Repeating the delete confirms
-// removal only after the background retry succeeds.
 func (s *Sandboxes) Delete(ctx context.Context, id string) (Sandbox, error) {
 	sb, err := s.lookup(id)
 	if err != nil {
@@ -663,9 +530,6 @@ func (s *Sandboxes) Delete(ctx context.Context, id string) (Sandbox, error) {
 	return sb.snapshot(), nil
 }
 
-// unconfirmedRemoval is the error for a container removal that has not
-// happened. It is a backend failure, not a client mistake: the request was
-// valid and the sandbox is ended; the runtime is what did not confirm.
 func (s *Sandboxes) unconfirmedRemoval(containerID string) error {
 	return &Error{
 		Code:    CodeBackendError,
@@ -673,8 +537,6 @@ func (s *Sandboxes) unconfirmedRemoval(containerID string) error {
 	}
 }
 
-// removalPending reports whether a container is still waiting for a removal
-// retry.
 func (s *Sandboxes) removalPending(containerID string) bool {
 	s.retryMu.Lock()
 	defer s.retryMu.Unlock()
@@ -682,10 +544,6 @@ func (s *Sandboxes) removalPending(containerID string) bool {
 	return ok
 }
 
-// killLocked moves the sandbox to killed and records why. A running execution
-// inherits the outcome: an explicit delete cancels it, either timeout marks it
-// timed out, and an eviction completes it as evicted. This is the only place
-// the terminal state is set.
 func (s *Sandboxes) killLocked(sb *sandbox, reason KillReason) {
 	if sb.state == StateKilled {
 		return
@@ -695,7 +553,6 @@ func (s *Sandboxes) killLocked(sb *sandbox, reason KillReason) {
 	sb.killReason = &r
 	sb.expiresAt = nil
 	sb.dirty = true
-	// A killed sandbox holds no container, so its slot is free immediately.
 	if !sb.released {
 		sb.released = true
 		s.release()
@@ -721,20 +578,8 @@ func (s *Sandboxes) killLocked(sb *sandbox, reason KillReason) {
 	sb.pruneExecutionsLocked()
 }
 
-// terminateLocked kills the sandbox and removes its container. Removal is
-// best effort: a container that is already gone is not an error. The removal
-// is detached from the caller's context (a delete must not be cancelled
-// halfway by a disconnecting client) but bounded, so a runtime that never
-// answers does not pin the sandbox lock forever. A removal that fails or times
-// out is scheduled for the reaper to retry: the record is already killed, and
-// nothing else would revisit that container.
-//
-// It returns the removal error so a caller answering a request can say the
-// container is still there. Callers with no requester to answer, such as a
-// timeout or an eviction, ignore it: the retry is what matters to them.
 func (s *Sandboxes) terminateLocked(ctx context.Context, sb *sandbox, reason KillReason) error {
 	s.killLocked(sb, reason)
-	// Record deletion intent before removing; a crash must not re-adopt it.
 	persistErr := s.saveSandboxLocked(sb)
 	if sb.container == "" {
 		return persistErr
@@ -745,21 +590,10 @@ func (s *Sandboxes) terminateLocked(ctx context.Context, sb *sandbox, reason Kil
 		s.scheduleRemoval(sb.container)
 		return s.unconfirmedRemoval(sb.container)
 	}
-	// A sibling execution can observe the same eviction and confirm a removal
-	// the first observer could not. Don't keep reporting it as outstanding.
 	s.forgetRemoval(sb.container)
 	return persistErr
 }
 
-// ---------------------------------------------------------------- shutdown
-
-// Shutdown removes every container this process created and drops all state.
-//
-// Without it, shutdown leaves running containers behind and the only way back
-// is the next process's owner-label cleanup. That cleanup keys on the listen
-// address, so a restart on a different port finds nothing and the containers
-// become orphans. Removal is bounded as a whole, because a shutdown that waits
-// on a stuck runtime is not a shutdown.
 func (s *Sandboxes) Shutdown(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownBudget)
 	defer cancel()
@@ -778,7 +612,6 @@ func (s *Sandboxes) Shutdown(ctx context.Context) {
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			// ErrNotFound is success: the container is gone either way.
 			_ = s.backend.Remove(ctx, container)
 		}()
 	}
@@ -792,15 +625,9 @@ func (s *Sandboxes) Shutdown(ctx context.Context) {
 }
 
 const (
-	// shutdownBudget bounds the whole container sweep.
-	shutdownBudget = 10 * time.Second
-	// shutdownWorkers bounds how many removals run at once, so a large store
-	// finishes well inside the budget without opening one connection per
-	// container.
+	shutdownBudget  = 10 * time.Second
 	shutdownWorkers = 8
 )
-
-// ---------------------------------------------------------------- helpers
 
 func (s *Sandboxes) lookup(id string) (*sandbox, error) {
 	s.mu.Lock()
@@ -812,8 +639,6 @@ func (s *Sandboxes) lookup(id string) (*sandbox, error) {
 	return sb, nil
 }
 
-// backendFailure maps a runtime failure. If the container is gone the sandbox
-// is evicted rather than answered with a 502 that will never clear.
 func (s *Sandboxes) backendFailure(_ context.Context, sb *sandbox, err error) error {
 	if errors.Is(err, ErrNotFound) {
 		s.killLocked(sb, KillEvicted)
@@ -825,10 +650,6 @@ func (s *Sandboxes) backendFailure(_ context.Context, sb *sandbox, err error) er
 	return backendError(err)
 }
 
-// armLifetimeLocked sets expiresAt for the current state. A kill action counts
-// from creation and keeps counting while paused; a pause action counts only
-// while running, and every transition to running arms a fresh interval from
-// now, so an automatic resume does not expire again immediately.
 func (sb *sandbox) armLifetimeLocked(now time.Time) {
 	if sb.opts.timeoutSeconds == 0 || sb.state == StateKilled || sb.state == StatePending {
 		sb.expiresAt = nil
@@ -847,13 +668,10 @@ func (sb *sandbox) armLifetimeLocked(now time.Time) {
 	sb.expiresAt = &deadline
 }
 
-// deadlined reports whether the lifetime deadline is due at now.
 func (sb *sandbox) deadlined(now time.Time) bool {
 	return sb.expiresAt != nil && !now.Before(*sb.expiresAt)
 }
 
-// idleFor returns how long the sandbox has been idle at now, or a negative
-// duration when it is not idle by definition.
 func (sb *sandbox) idleFor(now time.Time) time.Duration {
 	if sb.state != StateRunning || len(sb.running) != 0 || sb.streams > 0 ||
 		sb.opts.idleTimeoutSeconds <= 0 {
@@ -866,7 +684,6 @@ func (sb *sandbox) invalidState() error {
 	return errorf(CodeInvalidState, "sandbox %s is %s", sb.id, sb.state)
 }
 
-// snapshot returns the contract view. Callers hold sb.mu.
 func (sb *sandbox) snapshot() Sandbox {
 	return Sandbox{
 		MaxConcurrentExecutions: sb.opts.maxConcurrentExecutions,

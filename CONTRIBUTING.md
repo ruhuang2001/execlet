@@ -7,7 +7,7 @@
 - For SDK and full coverage checks: Node 22+ and Python 3.10+. CI uses Python
   3.10 and 3.15; select a suitable local interpreter with `PYTHON`. Scripts
   that call `python3` directly also require that executable on `PATH`.
-- Install golangci-lint for `make lint` and GoReleaser for release verification.
+- `make lint` needs golangci-lint and Python 3.10+ with venv and pip. The first run installs the comment parsers. Install GoReleaser for release verification.
 
 Build the daemon and CLI with `make build`. See the [quick start](docs/quickstart.md)
 for Docker socket selection and running the service.
@@ -55,6 +55,10 @@ inspect diagnostics; setup retries do not retry scenario requests.
 The E2B subset has its own [setup and acceptance requirements](scripts/e2b-compatibility/README.md),
 including a compatible image digest, Python 3.11+ and Node 22.19+. Its source-derived
 reference does not require an E2B Cloud account or key.
+
+### Code comments
+
+Run `make comment-lint` to check changes against the merge base with `origin/main`. Use `COMMENT_BASE=<revision>` to select another base. The checker uses Python 3.10+ and installs its parsers into a local virtual environment. The same rule runs in `make lint` and CI. Existing comments can be removed incrementally. New or rewritten prose comments fail the check. Keep design rationale in an ADR and open issues for implementation compromises. The [delete-comment skill](.agents/skills/delete-comment/SKILL.md) describes the audit. The [first audit](docs/comment-audit.md) records original line ranges and dispositions.
 
 ### Coverage and CI
 

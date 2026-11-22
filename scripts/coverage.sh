@@ -1,12 +1,4 @@
 #!/usr/bin/env bash
-# Merges the unit profile with the end-to-end profile and enforces the gate.
-#
-#   bash scripts/coverage.sh <unit-dir> <e2e-dir> [gate-percent]
-#
-# Both directories hold covdata files: unit from `go test -coverpkg=./...
-# -args -test.gocoverdir=...`, end to end from binaries built with `-cover`
-# running under GOCOVERDIR. One number comes out, which is what CI gates on;
-# either profile alone undercounts a different half of the program.
 set -euo pipefail
 
 UNIT_DIR=${1:?usage: coverage.sh <unit-dir> <e2e-dir> [gate]}
@@ -31,13 +23,9 @@ joined=$(IFS=,; echo "${inputs[*]}")
 go tool covdata merge -i="$joined" -o="$MERGED"
 go tool covdata textfmt -i="$MERGED" -o="$PROFILE"
 
-# The merged percentage counts statements in every instrumented package,
-# including ones no test reached, which is the honest denominator.
 printf '\n=== merged coverage (%s) ===\n' "$joined"
 go tool covdata percent -i="$MERGED" | tail -20
 
-# covdata percent prints one line per package and no total, so the total is
-# computed from the merged profile: covered statements over all statements.
 total=$(awk '
   /^mode:/ { next }
   NF >= 3 {

@@ -11,7 +11,6 @@ import (
 	"github.com/ruhuang2001/tiny-sandbox/internal/daemon"
 )
 
-// collect drains a stream into a slice.
 func collect(t *testing.T, st *daemon.Stream) []daemon.Event {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -29,9 +28,6 @@ func collect(t *testing.T, st *daemon.Stream) []daemon.Event {
 	}
 }
 
-// TestEventStream covers the event contract: dense IDs from 1, chunk size,
-// exactly one truncated event, complete always last, and replay that
-// reproduces the retained output.
 func TestEventStream(t *testing.T) {
 	ctx := context.Background()
 
@@ -68,7 +64,7 @@ func TestEventStream(t *testing.T) {
 	t.Run("replay from zero reproduces the retained output", func(t *testing.T) {
 		h := newHarness(t)
 		sb := h.create(daemon.CreateRequest{})
-		payload := strings.Repeat("0123456789", 5000) // 50 KB
+		payload := strings.Repeat("0123456789", 5000)
 		h.be.Programs["flood"] = memFlood
 		ex, _, err := h.s.StartExecution(ctx, sb.ID, daemon.ExecuteRequest{
 			Command: []string{"flood", "50000"},
@@ -178,9 +174,6 @@ func TestEventStream(t *testing.T) {
 	})
 }
 
-// TestTruncation covers the two retention bounds: 1 MiB of output and 4096
-// output events. Exceeding either discards later output, sends one truncated
-// event, sets output_truncated, and leaves the process running.
 func TestTruncation(t *testing.T) {
 	ctx := context.Background()
 
@@ -192,7 +185,6 @@ func TestTruncation(t *testing.T) {
 			for i := range chunk {
 				chunk[i] = 'x'
 			}
-			// 33 chunks is 1 MiB plus 32 KiB: the last one crosses the bound.
 			for i := 0; i < 33; i++ {
 				if err := write(chunk, nil); err != nil {
 					return 1
@@ -302,7 +294,6 @@ func TestTruncation(t *testing.T) {
 	})
 }
 
-// memFlood writes n copies of a ten-character pattern to stdout.
 func memFlood(_ context.Context, args []string) (string, string, int) {
 	n := 0
 	for _, a := range args {
@@ -318,18 +309,12 @@ func memFlood(_ context.Context, args []string) (string, string, int) {
 	return b.String()[:n], "", 0
 }
 
-// TestUTF8SurvivesChunkBoundaries pins the rule that no output event ends
-// inside a UTF-8 sequence. Output events are JSON strings encoded one event at
-// a time, so a rune split across two events would arrive as two U+FFFD
-// replacement characters and the bytes the program wrote would be lost.
 func TestUTF8SurvivesChunkBoundaries(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("a rune straddling the per-event limit", func(t *testing.T) {
 		h := newHarness(t)
 		sb := h.create(daemon.CreateRequest{})
-		// Pad to one byte before the limit, then a three-byte character: the
-		// cut lands inside it.
 		pad := strings.Repeat("a", daemon.MaxEventDataBytes-1)
 		h.be.Streamers["spew"] = func(_ context.Context, write func([]byte, []byte) error) int {
 			if err := write([]byte(pad+"中文\n"), nil); err != nil {
@@ -353,8 +338,6 @@ func TestUTF8SurvivesChunkBoundaries(t *testing.T) {
 			if ev.Type != daemon.EventStdout {
 				continue
 			}
-			// Round-trip through the same encoding the handler uses: that is
-			// where a split rune would become U+FFFD.
 			payload, err := json.Marshal(map[string]string{"data": string(ev.Data)})
 			if err != nil {
 				t.Fatalf("encode: %v", err)
@@ -374,7 +357,6 @@ func TestUTF8SurvivesChunkBoundaries(t *testing.T) {
 		h := newHarness(t)
 		sb := h.create(daemon.CreateRequest{})
 		h.be.Streamers["odd"] = func(_ context.Context, write func([]byte, []byte) error) int {
-			// 0xe4 starts a three-byte sequence that never completes.
 			if err := write([]byte{'a', 0xe4, 0xb8}, nil); err != nil {
 				return 1
 			}
@@ -389,10 +371,6 @@ func TestUTF8SurvivesChunkBoundaries(t *testing.T) {
 	})
 }
 
-// TestEventStreamRejectsACursorBeyondTheLog pins the rule that a Last-Event-ID
-// past the newest event is invalid. No such event will ever exist, so a
-// running execution would otherwise make the caller wait for a replay that
-// cannot arrive.
 func TestEventStreamRejectsACursorBeyondTheLog(t *testing.T) {
 	h := newHarness(t)
 	sb := h.create(daemon.CreateRequest{})
@@ -407,7 +385,6 @@ func TestEventStreamRejectsACursorBeyondTheLog(t *testing.T) {
 		wantCode(t, err, daemon.CodeInvalidRequest)
 	}
 
-	// The newest event ID itself is valid: it asks for nothing and closes.
 	newest, err := h.s.LastEventID(sb.ID, ex.ID)
 	wantNoError(t, err)
 	st, err := h.s.Events(sb.ID, ex.ID, newest)
@@ -418,9 +395,6 @@ func TestEventStreamRejectsACursorBeyondTheLog(t *testing.T) {
 	}
 }
 
-// TestExecutionHistoryIsPruned pins MaxExecutionsPerSandbox: the oldest
-// completed executions and their idempotency keys are dropped, the running one
-// never is.
 func TestExecutionHistoryIsPruned(t *testing.T) {
 	h := newHarness(t)
 	h.be.Programs["echo"] = memEcho
@@ -449,7 +423,6 @@ func TestExecutionHistoryIsPruned(t *testing.T) {
 		t.Fatal("the oldest execution survived the retention limit")
 	}
 
-	// The evicted key no longer replays; a fresh start with it runs again.
 	ex, created, err := h.s.StartExecution(context.Background(), sb.ID, daemon.ExecuteRequest{
 		Command:        []string{"echo", "x"},
 		IdempotencyKey: "key-0",

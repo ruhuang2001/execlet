@@ -1,10 +1,4 @@
 #!/usr/bin/env bash
-# One acceptance run. Cloud needs --allow-cloud and E2B_API_KEY.
-#
-#   bash scripts/e2b-compatibility/run.sh tiny artifacts/e2b-tiny \
-#     --image sha256:<digest>
-#   E2B_API_KEY=... bash scripts/e2b-compatibility/run.sh e2b artifacts/e2b-ref \
-#     --allow-cloud --languages python
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 PROVIDER=${1:?provider: e2b or tiny}

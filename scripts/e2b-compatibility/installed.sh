@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Build and test the shipped entry points, without probe modules or E2B runtime.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
@@ -19,14 +18,11 @@ mkdir -p "$OUT"
 OUT=$(cd "$OUT" && pwd)
 unset PYTHONPATH CONTRACT_MODULE CONTRACT_TS_MODULE CONTRACT_TS_WORKER
 
-# The reference package is used only to compile the shared application against
-# its pinned declarations. The copied worker runs with only our tarball installed.
 "$HERE/node_modules/.bin/tsc" -p "$HERE/tsconfig.json"
 mkdir -p "$OUT/wheels" "$OUT/npm" "$OUT/consumer"
 "$PYTHON" -m venv "$OUT/venv"
 "$OUT/venv/bin/python" -m pip wheel --no-deps --wheel-dir "$OUT/wheels" "$ROOT/sandbox-python" >"$OUT/install-python.log" 2>&1
 "$OUT/venv/bin/python" -m pip install --no-deps "$OUT"/wheels/tiny_sandbox-*.whl >>"$OUT/install-python.log" 2>&1
-# prepack builds dist; consumer checks include those generated declarations.
 (cd "$ROOT/sandbox-ts" && npm pack --pack-destination "$OUT/npm" && npm run check) >"$OUT/install-typescript.log" 2>&1
 npm install --prefix "$OUT/consumer" --ignore-scripts --no-audit --no-fund "$OUT"/npm/*.tgz >>"$OUT/install-typescript.log" 2>&1
 sed "s|'../src/e2b.js'|'@tiny-sandbox/sdk/e2b'|" "$ROOT/sandbox-ts/checks/e2b-api.ts" >"$OUT/consumer/contract.mts"

@@ -118,12 +118,10 @@ class Suite:
         return self.direct.sandbox(CreateSandboxRequest(timeout_seconds=0, network="none", **kwargs))
 
     def requests(self, name, method=None, suffix=None):
-        # Flush the handler's finally record after the client receives a response.
         time.sleep(.06)
         return self.proxy.requests(name, method, suffix)
 
     def pool_process(self, case):
-        # Fork in a clean interpreter, not in this threaded proxy process.
         result = subprocess.run([sys.executable, '-I', str(Path(__file__).with_name('pool_process.py')), case],
                                 env=dict(os.environ, SANDBOX_DOMAIN=self.domain, SANDBOX_API_KEY=self.key),
                                 capture_output=True, text=True, timeout=20)
@@ -218,7 +216,6 @@ class Suite:
                 started = self.client.start_execution(sb.id, request)
                 return started, self.client.stream_execution(sb.id, started.id)
 
-            # A shell would reject MY-VAR; reaching env proves the name passed through unchanged.
             started, done = finish(ExecuteRequest(
                 command=["sh", "-c", "pwd; env"], env={"GREETING": "hello-env", "MY-VAR": "dash"}, cwd="/tmp",
             ))
@@ -233,7 +230,6 @@ class Suite:
             require(later.stdout == "unset", "the environment leaked into a later execution")
             require(later_started.cwd is None and "cwd" not in later_started.extra, "missing cwd must decode as None")
 
-            # The command prints nothing, so the secret can only appear if a response echoed env.
             secret_started, secret_done = finish(ExecuteRequest(command=["true"], env={"SECRET": "e2e-secret-value"}))
             views = [secret_started, secret_done, self.client.get_execution(sb.id, secret_started.id),
                      next(v for v in self.client.list_executions(sb.id) if v.id == secret_started.id)]
@@ -312,8 +308,6 @@ class Suite:
         return evidence
 
     def credential_redirect(self, name):
-        # A different localhost port is a different origin. The sink forwards to
-        # the same real daemon only if the SDK incorrectly follows the redirect.
         sink = FaultProxy(self.proxy.upstream_port, self.artifacts / "redirect-sink.ndjson")
         try:
             self.proxy.arm(name, Fault("GET", "/v1/sandboxes", "redirect", status=307,
@@ -347,7 +341,6 @@ class Suite:
                 except OSError:
                     records.append({"at": time.monotonic(), "client_hello_bytes": 0})
                 accepted.set()
-                # Keep each accepted TCP socket open without sending TLS bytes.
         thread = threading.Thread(target=serve, daemon=True)
         thread.start()
         token = CancellationToken()
@@ -437,9 +430,6 @@ class Suite:
             if fail:
                 faults.append(Fault("POST", r".*/executions", "status", remaining=20))
             self.proxy.arm(name, *faults)
-            # The caller's env changes while the start is in flight. Recovery
-            # must replay the invocation that was sent, or the server sees a
-            # different env under the same key and refuses it as a conflict.
             env = {"PHASE": "original"}
             def interrupt():
                 if hold.accepted.wait(10):
@@ -500,8 +490,6 @@ class Suite:
             require(exc.idempotency_key and exc.execution and exc.execution.id, "budget failure lost recovery key or execution IDs")
             executions = self.direct.list_executions(sb.id)
             require(len(executions) == 1, "budget recovery started duplicate work")
-            # The server finished canceling even though its held response missed
-            # the client deadline. Only direct follow-up can establish that fact.
             final = self.direct.get_execution(sb.id, executions[0].id)
             require(final.state == "completed", "server-side cancel was not observed")
             time.sleep(max(0, 7.0 - elapsed))

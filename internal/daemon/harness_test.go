@@ -10,8 +10,6 @@ import (
 	"github.com/ruhuang2001/tiny-sandbox/internal/daemon/membackend"
 )
 
-// fakeClock is the injectable clock. Tests advance it by hand, so timeout
-// behaviour is deterministic.
 type fakeClock struct {
 	mu  sync.Mutex
 	now time.Time
@@ -33,10 +31,8 @@ func (c *fakeClock) Advance(d time.Duration) {
 	c.mu.Unlock()
 }
 
-// noSleep makes classification and cancellation instantaneous in tests.
 func noSleep(context.Context, time.Duration) bool { return true }
 
-// harness bundles a store, its backend and its clock.
 type harness struct {
 	t     *testing.T
 	clock *fakeClock
@@ -66,7 +62,6 @@ func (h *harness) create(req daemon.CreateRequest) daemon.Sandbox {
 	return sb
 }
 
-// containerOf returns the backend container ID of a sandbox.
 func (h *harness) containerOf(id string) string {
 	h.t.Helper()
 	container := h.s.ContainerIDForTest(id)
@@ -95,7 +90,6 @@ func wantNoError(t *testing.T, err error) {
 
 func ptr[T any](v T) *T { return &v }
 
-// waitCompleted waits for an execution to reach the completed state.
 func (h *harness) waitCompleted(sandboxID, executionID string) daemon.Execution {
 	h.t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -113,10 +107,6 @@ func (h *harness) waitCompleted(sandboxID, executionID string) daemon.Execution 
 	return daemon.Execution{}
 }
 
-// spinCompleted is waitCompleted without the sleep. It returns the moment the
-// execution reads as completed, the way a client polling in a loop sees it,
-// so a test can check what that client may do next. A sleep would hide any
-// state the engine updates only after completion becomes visible.
 func (h *harness) spinCompleted(sandboxID, executionID string) daemon.Execution {
 	h.t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -133,7 +123,6 @@ func (h *harness) spinCompleted(sandboxID, executionID string) daemon.Execution 
 	return daemon.Execution{}
 }
 
-// memEcho prints its arguments, one per line.
 func memEcho(_ context.Context, args []string) (string, string, int) {
 	out := ""
 	for _, a := range args {
@@ -142,8 +131,6 @@ func memEcho(_ context.Context, args []string) (string, string, int) {
 	return out, "", 0
 }
 
-// memBlock blocks for a fixed time, reporting 137 the way a killed process
-// would. It ignores its arguments so a busy test can start a second one.
 func memBlock(ctx context.Context, _ []string) (string, string, int) {
 	t := time.NewTimer(50 * time.Millisecond)
 	defer t.Stop()
@@ -155,7 +142,6 @@ func memBlock(ctx context.Context, _ []string) (string, string, int) {
 	}
 }
 
-// memExit writes output and exits with the code in args[0] ("0".."255").
 func memExit(_ context.Context, args []string) (string, string, int) {
 	code := 0
 	for _, a := range args {
@@ -166,23 +152,16 @@ func memExit(_ context.Context, args []string) (string, string, int) {
 	return "", "", code
 }
 
-// memLongBlock blocks until cancelled, for tests that need a live execution
-// while the clock moves.
 func memLongBlock(ctx context.Context, _ []string) (string, string, int) {
 	<-ctx.Done()
 	return "", "", 137
 }
 
-// flaky is a membackend whose Pause, Liveness and Remove can be made to fail,
-// so the error paths that a broken runtime produces are covered.
 type flaky struct {
 	*membackend.Backend
-	pauseErr    error
-	livenessErr error
-	// pauseThenErr makes Pause act on the container and then report an error,
-	// the way a request that times out after Docker already paused it does.
-	pauseThenErr error
-	// removeFailures is how many Remove calls fail before one succeeds.
+	pauseErr       error
+	livenessErr    error
+	pauseThenErr   error
 	removeFailures int
 
 	mu       sync.Mutex
@@ -209,7 +188,6 @@ func (f *flaky) Liveness(ctx context.Context, id string) (daemon.Liveness, error
 	return f.Backend.Liveness(ctx, id)
 }
 
-// Remove fails the first removeFailures calls, then delegates.
 func (f *flaky) Remove(ctx context.Context, id string) error {
 	f.mu.Lock()
 	f.removals++

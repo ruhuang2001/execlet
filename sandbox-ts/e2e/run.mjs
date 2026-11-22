@@ -25,8 +25,6 @@ const watchdog = setTimeout(() => {
 watchdog.unref();
 
 function evidence(event) {
-  // Large terminal payloads have exact byte lengths and hashes in artifacts.
-  // Small events retain their text, making replay assertions independently readable.
   const value = JSON.parse(JSON.stringify(event));
   function summarize(object, field) {
     if (typeof object[field] !== 'string' || object[field].length < 8192) return;
@@ -85,8 +83,6 @@ const cancelRequests = () => proxy.requests().filter(r => r.path.endsWith('/canc
 const starts = () => proxy.requests().filter(r => r.method === 'POST' && r.path.endsWith('/executions'));
 const sseJSON = (raw, mutate) => raw.replace(/^data: (.*)$/m, (_, data) => 'data: ' + JSON.stringify(mutate(JSON.parse(data))));
 
-// TCP may coalesce proxy writes. This adapter still fetches the real daemon
-// response, but makes parser reads exactly one byte to prove split UTF-8/CRLF.
 async function bytewiseFetch(input, init) {
   const response = await fetch(input, init);
   if (!response.body || !response.headers.get('content-type')?.includes('text/event-stream')) return response;
@@ -222,7 +218,6 @@ try {
       const started = await client.startExecution(sb.id, request);
       return { started, done: await client.streamExecution(sb.id, started.id, evidence) };
     };
-    // A shell would reject MY-VAR; reaching env proves the name passed through unchanged.
     const placed = await finish({ command: ['sh', '-c', 'pwd; env'], env: { GREETING: 'hello-env', 'MY-VAR': 'dash' }, cwd: '/tmp' });
     const lines = placed.done.stdout.split('\n');
     assert.equal(lines[0], '/tmp');
@@ -236,7 +231,6 @@ try {
     assert.equal(later.done.stdout, 'unset', 'the environment leaked into a later execution');
     assert.equal(later.started.cwd, null, 'an execution without cwd must report null');
 
-    // The command prints nothing, so the secret can only appear if a response echoed env.
     const secret = await finish({ command: ['true'], env: { SECRET: 'e2e-secret-value' } });
     const views = [secret.started, secret.done, await client.getExecution(sb.id, secret.started.id),
       (await client.listExecutions(sb.id)).find(value => value.id === secret.started.id)];
@@ -595,7 +589,6 @@ try {
     const terminal = events.at(-1);
     assert.equal(terminal.type, 'complete');
     assert.equal(terminal.execution.output_truncated, true);
-    // The server drops a whole chunk that would cross its byte budget.
     assert.ok(terminal.execution.stdout.length <= 1048576);
     assert.ok(terminal.execution.stdout.length >= 1048576 - 32768);
     assert.ok(JSON.stringify(terminal.execution).length > 5 * 1024 * 1024);
@@ -650,7 +643,7 @@ try {
   });
 } finally {
   proxy.configure('final-cleanup');
-  for (const id of owned) { try { await direct.killSandbox(id); } catch { /* Shell cleanup remains authoritative. */ } }
+  for (const id of owned) { try { await direct.killSandbox(id); } catch {} }
   await proxy.close();
   clearTimeout(watchdog);
 }

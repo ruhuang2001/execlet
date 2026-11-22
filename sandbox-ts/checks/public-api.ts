@@ -1,4 +1,3 @@
-// Written before implementation: a strict, DOM-only consumer contract.
 import { Client, SandboxError, type Event, type ExecutionOutcome, type Sandbox } from '../src/index.js';
 
 function describe(result: ExecutionOutcome): string {

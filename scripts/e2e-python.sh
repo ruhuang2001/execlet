@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Real Docker + sandboxd E2E. PYTHON selects the interpreter. SDK_INSTALLED=1
-# tests a previously installed wheel (CI); default builds into an isolated venv.
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 OUT=${1:-$ROOT/artifacts/python-e2e}

@@ -25,23 +25,24 @@ checkout; see [versioning](versioning.md) for compatibility.
 
 ```go
 type Config struct {
-    Domain     string       // default: $SANDBOX_DOMAIN, then "http://localhost:8080"
-    APIKey     string       // default: $SANDBOX_API_KEY
-    HTTPClient *http.Client // default: a client without a global timeout (streams are long-lived)
-    MaxRetries int          // default 3; 0 means use the default, negative disables retries
+    Domain     string
+    APIKey     string
+    HTTPClient *http.Client
+    MaxRetries int
 }
 
 func NewClient(cfg Config) (*Client, error)
 ```
 
-A domain without a scheme gets `http://`. Nonempty `Domain` and `APIKey` values override the environment; empty strings use the environment defaults.
+An empty `Config.Domain` uses `SANDBOX_DOMAIN`, then `http://localhost:8080`. A domain without a scheme gets `http://`. An empty `Config.APIKey` uses `SANDBOX_API_KEY`. Nonempty configuration values take precedence.
+
+A nil `Config.HTTPClient` selects a client without a global timeout so streams can stay open. `Config.MaxRetries == 0` selects three retries after the initial attempt. A positive value sets the retry limit and a negative value disables retries.
 
 ## Methods
 
 All methods take a `context.Context` first and return typed results.
 
 ```go
-// sandboxes
 CreateSandbox(ctx, CreateSandboxRequest) (*Sandbox, error)
 GetSandbox(ctx, sandboxID) (*Sandbox, error)
 ListSandboxes(ctx) ([]*Sandbox, error)
@@ -49,7 +50,6 @@ PauseSandbox(ctx, sandboxID) (*Sandbox, error)
 ResumeSandbox(ctx, sandboxID) (*Sandbox, error)
 KillSandbox(ctx, sandboxID) (*Sandbox, error)
 
-// executions
 StartExecution(ctx, sandboxID, ExecuteRequest) (*Execution, error)
 StreamExecution(ctx, sandboxID, executionID, onEvent func(Event) error) (*Execution, error)
 GetExecution(ctx, sandboxID, executionID) (*Execution, error)
@@ -61,11 +61,9 @@ RequireCapabilities(ctx, capabilities ...string) error
 AttachCommand(ctx, sandboxID string, pid int) (*CommandAttachment, error)
 KillExecution(ctx, sandboxID, executionID string) (*CommandKill, error)
 
-// conveniences
-Exec(ctx, sandboxID, command []string) (*Execution, error)                      // = ExecStream with nil onEvent
+Exec(ctx, sandboxID, command []string) (*Execution, error)
 ExecStream(ctx, sandboxID, command []string, onEvent func(Event) error) (*Execution, error)
 
-// files
 ListFiles(ctx, sandboxID, path string, options ListFilesOptions) (*FileList, error)
 ReadArchive(ctx, sandboxID, path string) ([]byte, error)
 WriteArchive(ctx, sandboxID, path string, data []byte) error
@@ -191,11 +189,11 @@ validation and transfer limits.
 
 ```go
 type Error struct {
-    StatusCode     int        // 0 for client-side errors
-    Code           string     // API code, or "canceled" / "cancel_unconfirmed" / "nonzero_exit" / reason name
+    StatusCode     int
+    Code           string
     Message        string
-    Execution      *Execution // when available; carries retained output and exit code
-    IdempotencyKey string     // set for cancel_unconfirmed during start
+    Execution      *Execution
+    IdempotencyKey string
     Cause          error
 }
 func (e *Error) Error() string
@@ -204,16 +202,26 @@ func (e *Error) Is(target error) bool
 func (e *Error) Retryable() bool
 
 var (
-    ErrNonZeroExit       // termination_reason "exited" with a nonzero exit code
-    ErrTimeout           // termination_reason "timeout": the sandbox lifetime, or the execution's own deadline
-    ErrCanceled          // canceled outcome, or local cancellation with confirmed remote termination
-    ErrUnknown           // termination_reason "unknown"
-    ErrOOM               // termination_reason "oom"
-    ErrEvicted           // termination_reason "evicted"
-    ErrCancelUnconfirmed // the caller's context ended but the SDK could not confirm the server stopped the work
+    ErrNonZeroExit
+    ErrTimeout
+    ErrCanceled
+    ErrUnknown
+    ErrOOM
+    ErrEvicted
+    ErrCancelUnconfirmed
     ErrNotFound, ErrUnauthorized, ErrBusy, ErrInvalidState
 )
 ```
+
+`Error.StatusCode` is zero when there is no HTTP response. For an HTTP API error, `Error.Code` contains the server’s code, such as `not_found`, `busy` or `invalid_state`. SDK-generated codes identify what happened locally or to the command.
+
+| `Error.Code` | Meaning |
+| --- | --- |
+| `nonzero_exit` | An ordinary exit reported a nonzero status or lacked an exit code. |
+| `timeout`, `oom`, `evicted`, `unknown` | The execution’s recorded termination reason. A future reason is preserved as its wire string. |
+| `canceled` | The command was canceled, the request was canceled before dispatch, or automatic cleanup confirmed remote termination after local cancellation. |
+| `cancel_unconfirmed` | Cleanup could not confirm that the execution stopped. During start recovery, `Error.IdempotencyKey` identifies the request for follow-up. |
+| `callback`, `transport`, `stream` | An event handler failed, an HTTP exchange failed, or the event stream could not be consumed. |
 
 The sentinels are mutually exclusive. An execution matches the sentinel for its termination reason and nothing else; `ErrNonZeroExit` therefore means the command exited on its own with a non-zero status, never an OOM kill, timeout, cancellation, or eviction that also happened to report a non-zero code. `ErrTimeout` does not distinguish the two deadlines that produce it: an execution timeout normally leaves the sandbox running, while a lifetime timeout with action `kill` removes it, so inspect the `Sandbox` when that difference matters.
 

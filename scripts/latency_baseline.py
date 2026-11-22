@@ -21,7 +21,6 @@ def measure(domain, key, spec, samples):
             try:
                 assert sb.state == 'running' and sb.image == spec['image'], sb
                 row['create_ready'] = created - started
-                # Alternate order so neither command is always first in a new container.
                 for echo in ((False, True) if i % 2 else (True, False)):
                     chunks = []
                     argv = ['/bin/echo', 'ok'] if echo else ['/bin/true']
@@ -43,7 +42,7 @@ def measure(domain, key, spec, samples):
                 end = time.perf_counter_ns()
                 assert removed.id == sb.id and removed.state == 'killed', removed
             row.update(delete=end-t, workload=end-started)
-            if i:  # discard one complete warmup, including its lifecycle
+            if i:
                 rows.append({k: v / 1e6 for k, v in row.items()})
 
     summary = {}

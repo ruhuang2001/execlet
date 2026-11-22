@@ -31,8 +31,6 @@ class CancellationToken:
 
     def cancel(self) -> None:
         self._event.set()
-        # Only internal socket-shutdown callbacks register here. Run them
-        # under the lock so unregister is a barrier before recycling a socket.
         with self._lock:
             while self._callbacks:
                 self._callbacks.pop()()

@@ -60,6 +60,8 @@ sandbox-ts/              TypeScript SDK: browser-safe fetch, SSE, outcomes and A
 examples/agent-tool/     the SDK used as an agent tool function (built and tested in CI)
 ```
 
+The daemon and each runtime backend share a [container backend contract](adr/0001-daemon.md#container-backend-contract) covering concurrency, resource limits and observable process failures.
+
 ## Key decisions
 
 ### Sandbox lifecycle

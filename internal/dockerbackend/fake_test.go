@@ -22,8 +22,6 @@ import (
 	"github.com/ruhuang2001/tiny-sandbox/internal/dockerapi"
 )
 
-// fakeDaemon speaks the subset of the Engine API the backend uses, over a
-// real unix socket. Tests configure its answers per scenario.
 type fakeDaemon struct {
 	t    *testing.T
 	sock string
@@ -32,7 +30,7 @@ type fakeDaemon struct {
 	nextCtr    int
 	nextExec   int
 	containers map[string]*fakeContainer
-	byName     map[string]string // container name -> id, as Docker accepts names
+	byName     map[string]string
 	execs      map[string]*fakeExec
 
 	creates      []dockerapi.ContainerConfig
@@ -42,13 +40,10 @@ type fakeDaemon struct {
 	execCommands [][]string
 	execEnvs     [][]string
 
-	// Scenario switches.
-	failStart   bool
-	failInspect bool
-	nameTaken   string
-	noPidFile   bool
-	// missingImages makes create answer 404 "No such image" until the image is
-	// pulled, which is what a clean host does.
+	failStart     bool
+	failInspect   bool
+	nameTaken     string
+	noPidFile     bool
 	missingImages map[string]bool
 	pulled        []string
 	pullError     string
@@ -58,7 +53,7 @@ type fakeDaemon struct {
 type fakeContainer struct {
 	id     string
 	spec   dockerapi.ContainerConfig
-	state  string // running, paused, exited
+	state  string
 	labels map[string]string
 	files  map[string][]byte
 }
@@ -74,12 +69,8 @@ type fakeExec struct {
 	started     bool
 }
 
-// newFakeDaemon starts a daemon on a temporary unix socket.
 func newFakeDaemon(t *testing.T) *fakeDaemon {
 	t.Helper()
-	// A unix socket path is limited to ~104 bytes on macOS, and t.TempDir()
-	// alone can exceed that. A short directory under the system temp root
-	// keeps the path well inside the limit.
 	dir, err := os.MkdirTemp("", "ts-docker")
 	if err != nil {
 		t.Fatalf("temp dir: %v", err)
@@ -105,7 +96,6 @@ func newFakeDaemon(t *testing.T) *fakeDaemon {
 	return f
 }
 
-// client dials the fake and negotiates the version, as production does.
 func (f *fakeDaemon) client(t *testing.T) *dockerapi.Client {
 	t.Helper()
 	c, err := dockerapi.Dial(t.Context(), f.sock)
@@ -120,7 +110,6 @@ func (f *fakeDaemon) backend(t *testing.T) *Backend {
 	return New(f.client(t))
 }
 
-// ServeHTTP routes the Engine API paths the backend uses.
 func (f *fakeDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.URL.Path == "/version":
@@ -157,8 +146,6 @@ func (f *fakeDaemon) serveV152(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// pullImage models POST /images/create: a progress stream that ends with the
-// image being available, or with an error line when the pull fails.
 func (f *fakeDaemon) pullImage(w http.ResponseWriter, r *http.Request) {
 	repository := r.URL.Query().Get("fromImage")
 	tag := r.URL.Query().Get("tag")
@@ -175,8 +162,6 @@ func (f *fakeDaemon) pullImage(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	f.pulled = append(f.pulled, image)
 	errMessage := f.pullError
-	// A failed pull leaves the image missing; a successful one makes it
-	// available, which is what the caller's retry depends on.
 	if errMessage == "" {
 		delete(f.missingImages, image)
 	}
@@ -192,7 +177,6 @@ func (f *fakeDaemon) pullImage(w http.ResponseWriter, r *http.Request) {
 	writeJSONLine(w, map[string]string{"status": "Status: Downloaded newer image for " + image})
 }
 
-// writeJSONLine writes one line of the pull progress stream.
 func writeJSONLine(w http.ResponseWriter, v any) {
 	data, err := json.Marshal(v)
 	if err != nil {
@@ -201,7 +185,6 @@ func writeJSONLine(w http.ResponseWriter, v any) {
 	_, _ = w.Write(append(data, '\n'))
 }
 
-// containerOp serves start, pause, unpause, kill and delete.
 func (f *fakeDaemon) containerOp(w http.ResponseWriter, r *http.Request, tail string) {
 	action := ""
 	id := tail
@@ -215,7 +198,7 @@ func (f *fakeDaemon) containerOp(w http.ResponseWriter, r *http.Request, tail st
 	if !ok {
 		return
 	}
-	id = c.id // a name resolves to the ID a later delete must key on
+	id = c.id
 	switch {
 	case action == "start" && r.Method == http.MethodPost:
 		if f.failStart {
@@ -224,7 +207,6 @@ func (f *fakeDaemon) containerOp(w http.ResponseWriter, r *http.Request, tail st
 		}
 		w.WriteHeader(204)
 	case action == "pause" && r.Method == http.MethodPost:
-		// Docker answers 204 for an already paused container.
 		if c.state == "running" {
 			c.state = "paused"
 		}
@@ -266,8 +248,6 @@ func (f *fakeDaemon) create(w http.ResponseWriter, r *http.Request) {
 	name := r.URL.Query().Get("name")
 	if f.nameTaken != "" && name == f.nameTaken {
 		if _, held := f.byName[name]; !held {
-			// The first conflict creates the leftover that holds the name, so
-			// the caller can remove it and retry, as a real daemon allows.
 			id := "ctr_leftover"
 			f.containers[id] = &fakeContainer{id: id, state: "exited", labels: map[string]string{}}
 			f.byName[name] = id
@@ -296,10 +276,6 @@ func (f *fakeDaemon) create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 201, map[string]string{"Id": id})
 }
 
-// container resolves a name or a full ID. Docker accepts a unique name or an
-// ID prefix; resolving names here is enough for the backend, which always
-// passes an ID except when removing a leftover by name.
-// resolveContainer maps a name to the ID it owns, if any.
 func (f *fakeDaemon) resolveContainer(id string) string {
 	if mapped, ok := f.byName[id]; ok {
 		return mapped
@@ -336,7 +312,6 @@ func (f *fakeDaemon) list(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, out)
 }
 
-// matchesID applies Docker's rule: an id filter matches a prefix.
 func matchesID(id string, want []string) bool {
 	if len(want) == 0 {
 		return true
@@ -349,8 +324,6 @@ func matchesID(id string, want []string) bool {
 	return false
 }
 
-// matchesLabel applies Docker's rule: every filter must match, and a filter
-// without "=" matches any value.
 func matchesLabel(labels map[string]string, want []string) bool {
 	for _, pair := range want {
 		key, value, hasValue := strings.Cut(pair, "=")
@@ -362,8 +335,6 @@ func matchesLabel(labels map[string]string, want []string) bool {
 	return true
 }
 
-// execCreate records the command and, for the PID-file wrapper, writes the PID
-// file the command would have written.
 func (f *fakeDaemon) execCreate(w http.ResponseWriter, r *http.Request, containerID string) {
 	var cfg struct {
 		Cmd []string `json:"Cmd"`
@@ -398,8 +369,6 @@ func (f *fakeDaemon) execCreate(w http.ResponseWriter, r *http.Request, containe
 	writeJSON(w, 201, map[string]string{"Id": ex.id})
 }
 
-// programLocked decides what an exec does. Callers hold f.mu. The default
-// reads the cgroup files for the OOM script and succeeds silently otherwise.
 func (f *fakeDaemon) programLocked(containerID string, c *fakeContainer, cmd []string) (string, string, int) {
 	if f.programFn != nil {
 		return f.programFn(containerID, cmd)
@@ -407,8 +376,6 @@ func (f *fakeDaemon) programLocked(containerID string, c *fakeContainer, cmd []s
 	if len(cmd) == 3 && cmd[0] == "/bin/sh" && cmd[2] == dockerapi.OOMScript {
 		return "low 0\nhigh 0\nmax 0\noom 0\noom_kill 5\n", "", 0
 	}
-	// The post-write check: report what the container actually holds. The
-	// target arrives as a container-root-relative path, as the archive does.
 	if len(cmd) == 5 && cmd[0] == "/bin/sh" && cmd[2] == writeVerifyScript {
 		for _, name := range []string{cmd[4], "/" + cmd[4]} {
 			if _, ok := c.files[name]; ok {
@@ -417,12 +384,9 @@ func (f *fakeDaemon) programLocked(containerID string, c *fakeContainer, cmd []s
 		}
 		return "missing", "", 0
 	}
-	// The ownership probe: name the default user's ids and the missing parents.
 	if len(cmd) == 5 && cmd[0] == "/bin/sh" && cmd[2] == writeOwnershipScript {
 		return "uid=0\x00gid=0\x00", "", 0
 	}
-	// "cat <pid file> 2>/dev/null": return the file the wrapper would have
-	// written, or nothing when the test withholds it.
 	if len(cmd) == 3 && cmd[0] == "/bin/sh" && strings.HasPrefix(cmd[2], "cat ") {
 		path := strings.TrimSuffix(strings.TrimPrefix(cmd[2], "cat "), " 2>/dev/null")
 		if f.noPidFile {
@@ -436,7 +400,6 @@ func (f *fakeDaemon) programLocked(containerID string, c *fakeContainer, cmd []s
 	return "", "", 0
 }
 
-// setProgram replaces what every exec does.
 func (f *fakeDaemon) setProgram(fn func(containerID string, cmd []string) (stdout, stderr string, exitCode int)) {
 	f.mu.Lock()
 	f.programFn = fn
@@ -569,14 +532,6 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"message": message})
 }
 
-// unwrap recovers the PID path, the directory, the environment entries the
-// wrapper re-applies, and the real argv from a wrapped exec. The wrapper argv
-// is: shell, -c, script, pidPath, dir, envCount, separatorFlag, env...,
-// [separator,] command...
-//
-// The flag, not the command's shape, decides whether the separator is there: a
-// legitimate command could start with the same four arguments, and sniffing for
-// them would strip a command nobody ran.
 func unwrap(cmd []string) (pidPath, dir string, env, actual []string, ok bool) {
 	if len(cmd) < 7 || cmd[0] != "/bin/sh" || cmd[1] != "-c" || cmd[2] != execWrapper {
 		return "", "", nil, nil, false
@@ -599,7 +554,6 @@ func unwrap(cmd []string) (pidPath, dir string, env, actual []string, ok bool) {
 	return cmd[3], cmd[4], cmd[7 : 7+n], rest, true
 }
 
-// file returns a container's stored file.
 func (f *fakeDaemon) file(containerID, path string) []byte {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -609,7 +563,6 @@ func (f *fakeDaemon) file(containerID, path string) []byte {
 	return nil
 }
 
-// lastExecEnv returns the environment of the most recent exec.
 func (f *fakeDaemon) lastExecEnv() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -619,7 +572,6 @@ func (f *fakeDaemon) lastExecEnv() []string {
 	return f.execEnvs[len(f.execEnvs)-1]
 }
 
-// lastExecCommand returns the most recent exec argv.
 func (f *fakeDaemon) lastExecCommand() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -629,7 +581,6 @@ func (f *fakeDaemon) lastExecCommand() []string {
 	return f.execCommands[len(f.execCommands)-1]
 }
 
-// removedContainers returns every removed container ID.
 func (f *fakeDaemon) removedContainers() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()

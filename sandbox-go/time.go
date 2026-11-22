@@ -7,13 +7,10 @@ import (
 	json "github.com/ruhuang2001/tiny-sandbox/internal/wirejson"
 )
 
-// Time is an RFC 3339 timestamp as the API sends it. The server always emits
-// UTC; Time keeps the parse error phraseable.
 type Time struct {
 	time.Time
 }
 
-// UnmarshalJSON parses an RFC 3339 string. A JSON null leaves the zero time.
 func (t *Time) UnmarshalJSON(data []byte) error {
 	if string(data) == "null" {
 		t.Time = time.Time{}
@@ -31,7 +28,6 @@ func (t *Time) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// MarshalJSON writes an RFC 3339 UTC string.
 func (t Time) MarshalJSON() ([]byte, error) {
 	if t.IsZero() {
 		return []byte("null"), nil

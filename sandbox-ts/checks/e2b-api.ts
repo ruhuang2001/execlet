@@ -1,4 +1,3 @@
-// Application-source contract for the deliberately bounded compatibility API.
 import { Sandbox, CommandExitError, FileType, type CommandResult, type EntryInfo } from '../src/e2b.js';
 
 async function migration(image: string) {

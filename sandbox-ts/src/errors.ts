@@ -7,7 +7,6 @@ export interface SandboxErrorDetails {
   cause?: unknown;
 }
 
-/** Stable codes are the branching API; messages are for people. */
 export class SandboxError extends Error {
   readonly code: string;
   readonly statusCode: number;
@@ -51,7 +50,7 @@ export function statusError(status: number, text: string): SandboxError {
   try {
     const value: unknown = JSON.parse(text);
     if (value && typeof value === 'object') payload = value;
-  } catch { /* Router and proxy errors can be plain text. */ }
+  } catch {}
   return new SandboxError(
     typeof payload.code === 'string' ? payload.code : 'http_error',
     typeof payload.message === 'string' ? payload.message : 'sandbox: unexpected HTTP status ' + status,

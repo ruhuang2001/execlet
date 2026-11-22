@@ -1,12 +1,5 @@
 //go:build live
 
-// Live SDK tests against a running sandboxd with a Docker backend:
-//
-//	make build && ./bin/sandboxd -addr 127.0.0.1:18080 &
-//	SANDBOX_DOMAIN=http://127.0.0.1:18080 go test -tags live ./sandbox-go/ -v
-//
-// They prove the SDK against the real server, not a fake: SSE replay, live
-// output, cancellation, OOM classification, and files.
 package sandbox_test
 
 import (
@@ -163,7 +156,6 @@ func TestLiveReplayAfterComplete(t *testing.T) {
 		t.Fatalf("exec: %v", err)
 	}
 
-	// A second stream of a finished execution replays and closes.
 	var replayed strings.Builder
 	again, err := c.StreamExecution(context.Background(), sb.ID, ex.ID, func(ev sandbox.Event) error {
 		if ev.Type == sandbox.EventStdout {

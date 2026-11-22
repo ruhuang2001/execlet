@@ -122,6 +122,14 @@ class Suite:
         time.sleep(.06)
         return self.proxy.requests(name, method, suffix)
 
+    def pool_process(self, case):
+        # Fork in a clean interpreter, not in this threaded proxy process.
+        result = subprocess.run([sys.executable, '-I', str(Path(__file__).with_name('pool_process.py')), case],
+                                env=dict(os.environ, SANDBOX_DOMAIN=self.domain, SANDBOX_API_KEY=self.key),
+                                capture_output=True, text=True, timeout=20)
+        require(result.returncode == 0, result.stderr)
+        return json.loads(result.stdout)
+
     def entry(self, name):
         with self.sandbox() as sb:
             command = ["sh", "-c", "i=0; while [ $i -lt 100 ]; do printf 'chunk-%s-世界\n' $i; i=$((i+1)); sleep 0.15; done; sleep 30"]
@@ -694,6 +702,7 @@ class Suite:
         try:
             self.start()
             scenarios = [("installed-distribution", self.distribution), ("entry-replay-confirmed-cancel", self.entry), ("lifecycle-files-resources", self.lifecycle), ("env-cwd", self.env_cwd), ("stdin-once", self.stdin_once), ("concurrency", self.concurrency),
+                         ("high-fd", self.pool_process), ("fork", self.pool_process),
                          ("retry-status-matrix", self.retry_statuses), ("retry-after", self.retry_after),
                          ("retry-configuration-and-cancel", self.retry_configuration), ("redirect-credential-boundary", self.credential_redirect),
                          ("tls-predispatch-cancellation", self.tls_predispatch_cancel),

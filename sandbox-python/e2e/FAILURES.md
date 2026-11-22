@@ -4,6 +4,10 @@ The suite uses a real sandboxd and Docker. An HTTP fault proxy sits between the
 installed Python distribution and the server, retaining request/event traces.
 No post-implementation unit tests or mocked execution backend are added.
 
+- A warm client with sockets beyond `select()`'s FD limit must still complete
+  a second authenticated request without retries. After a real fork, an
+  inherited client must reject both requests and close; a new child client
+  and the original parent client must still work independently.
 - Creation is not idempotent: transport errors, truncated responses and 5xx must
   never create a second sandbox. Repeatable methods respect the retry bound,
   status allowlist, jitter window and positive integer Retry-After.

@@ -129,6 +129,41 @@ def main():
     def kill(sid):
         assert http('/v1/sandboxes/' + sid, 'DELETE')[0] == 200
 
+    def listing_fallbacks():
+        status, sb = create()
+        assert status == 201, sb
+        sid = sb['id']
+        try:
+            container, = owned()
+            setup = run(sid, "import os; from pathlib import Path; p=Path('/tmp/list-ok'); p.mkdir(); "
+                        "(p/'sample').write_bytes(b'abc'); Path('/tmp/list-empty').mkdir(mode=0o111); "
+                        "print(os.getuid(),os.getgid(),int(os.access('/tmp/list-empty',os.R_OK)))")
+            uid, gid, readable = map(int, setup['stdout'].split())
+            assert setup['exit_code'] == 0 and uid != 0 and readable == 0, setup
+
+            def listing(label, path, expected, archive):
+                with proxy.lock:
+                    offset = len(proxy.requests)
+                status, page = http('/v1/sandboxes/' + sid + '/files/list?path=' + path)
+                with proxy.lock:
+                    used_archive = any(line.startswith('GET ') and '/archive?' in line
+                                       for line in proxy.requests[offset:])
+                actual = [(e['name'], e['type'], e['size'], e['uid'], e['gid']) for e in page.get('entries', [])]
+                check(label, status == 200 and 'entries' in page and actual == expected and used_archive == archive,
+                      dict(page=page, docker_archive=used_archive))
+
+            sample = [('sample', 'file', 3, uid, gid)]
+            listing('readable directory uses guest metadata', '/tmp/list-ok', sample, False)
+            listing('unreadable empty directory uses archive', '/tmp/list-empty', [], True)
+            # Administer only this disposable container's tools. stat is present
+            # but rejects the format flag, unlike the missing-binary case.
+            cli('exec', '-u', '0', container, 'sh', '-ec',
+                "printf '#!/bin/sh\\nexit 2\\n' >/usr/local/bin/stat; chmod 755 /usr/local/bin/stat")
+            assert cli('exec', container, 'sh', '-ec', 'command -v stat') == '/usr/local/bin/stat'
+            listing('incompatible guest stat uses archive', '/tmp/list-ok', sample, True)
+        finally:
+            kill(sid)
+
     def start_reliability(durable, managed, fault):
         label = 'start %s durable=%s managed=%s' % (fault, durable, managed)
         extra = ['-state-dir', str(out / ('start-state-' + str(managed) + '-' + fault))] if durable else []
@@ -201,6 +236,7 @@ def main():
                 for fault in ['drop', 'stall']:
                     start_reliability(durable, managed, fault)
         start(['-policy', str(policy)])
+        listing_fallbacks()
         status, sb = create()
         assert status == 201, sb
         long_command = ['python3', '-u', '-c', "import time; print('before',flush=True); time.sleep(6); print('after')"]

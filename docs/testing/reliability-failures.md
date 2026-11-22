@@ -21,6 +21,11 @@ They do not change the historical v0.0.2 contract or claim stronger isolation.
   preserve existing PID-handshake behavior when an observable process exists.
 - Failed removal must stay visible and retryable, including resource reservations.
   All verification containers are owned by this run and independently removed.
+- Directory listing under the non-root compatibility image must use the bounded
+  Docker archive for an unreadable directory or an incompatible `stat`. A
+  readable directory with normal tools must not request an archive. Check both
+  the authenticated result and the Docker request, since an empty result alone
+  cannot distinguish fallback from a shell glob that silently skipped entries.
 
 ## Go SDK: public HTTP contract
 

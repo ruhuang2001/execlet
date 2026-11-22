@@ -185,7 +185,6 @@ class FileEntry(_Model):
         from ._errors import Error
 
         entry = super().from_dict(data)
-        # None represents an omitted name/target in Python, not a JSON null.
         for key in ("owner", "group", "symlink_target"):
             if key in data and data[key] is None:
                 raise Error("decode", "invalid response field: " + key)

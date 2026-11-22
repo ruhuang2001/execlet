@@ -1,4 +1,3 @@
-// Command sandboxd is the reference server for tiny-sandbox.
 package main
 
 import (
@@ -73,8 +72,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// The default in-memory mode reclaims owned orphans. Durable mode instead
-	// reconciles the journal before admission. Pin -owner across port changes.
 	if journal == nil {
 		if removed, err := backend.RemoveOwned(ctx, daemon.OwnerLabelKey, *owner); err != nil {
 			slog.Error("startup cleanup incomplete; refusing admission", "removed", removed, "error_category", runtimeErrorCategory(err))
@@ -102,9 +99,6 @@ func main() {
 	reaperDone := make(chan struct{})
 	go func() { defer close(reaperDone); store.Run(ctx) }()
 
-	// shuttingDown tells event streams to end. Without it a live SSE handler
-	// outlives the shutdown deadline: http.Server.Shutdown stops accepting and
-	// waits for handlers, but does not cancel their request contexts.
 	shuttingDown := make(chan struct{})
 	handler := daemon.NewHandler(store, version).WithShutdown(shuttingDown)
 	if key := os.Getenv("SANDBOX_API_KEY"); key != "" {
@@ -116,10 +110,6 @@ func main() {
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	// The drain runs in its own goroutine because it must unblock
-	// ListenAndServe. main then waits on it: returning as soon as
-	// ListenAndServe reports ErrServerClosed would kill the sweep halfway and
-	// leave the containers behind.
 	srvDone := make(chan struct{})
 	go func() {
 		defer close(srvDone)
@@ -130,7 +120,6 @@ func main() {
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			slog.Warn("http shutdown incomplete", "error", err)
 		}
-		// Durable mode preserves idle containers, never live execution state.
 		<-reaperDone
 		if journal == nil {
 			store.Shutdown(context.Background())
@@ -145,13 +134,9 @@ func main() {
 		slog.Error("http server failed", "error", err)
 		os.Exit(1)
 	}
-	// ListenAndServe returns as soon as Shutdown begins. Wait for the drain and
-	// the container sweep before exiting.
 	<-srvDone
 }
 
-// runtimeErrorCategory preserves actionable failure classes without Docker's
-// response body, which may contain private image names or runtime payloads.
 func runtimeErrorCategory(err error) string {
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
@@ -171,8 +156,6 @@ func runtimeErrorCategory(err error) string {
 	return "runtime_error"
 }
 
-// defaultDockerSocket honours DOCKER_HOST and otherwise uses the standard
-// unix socket.
 func defaultDockerSocket() string {
 	if host := os.Getenv("DOCKER_HOST"); host != "" {
 		const prefix = "unix://"
@@ -184,8 +167,6 @@ func defaultDockerSocket() string {
 	return "/var/run/docker.sock"
 }
 
-// isLoopback reports whether addr binds a loopback interface. An empty host,
-// such as ":8080", binds every interface and is not loopback.
 func isLoopback(addr string) bool {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil || host == "" {

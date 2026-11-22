@@ -38,7 +38,6 @@ def _connect(conn, cancel):
     if cancel is None:
         conn.connect()
         return
-    # The worker only connects; it cannot send requests after cancellation.
     finished, abandoned = threading.Event(), threading.Event()
     errors = []
 
@@ -95,7 +94,6 @@ class _Deadlines:
             self.condition.notify()
 
     def remove(self, interrupt):
-        # A shutdown already in progress finishes before this socket is reused.
         with self.condition:
             self.pending.pop(interrupt, None)
             self.condition.notify()
@@ -179,7 +177,7 @@ class Transport:
                     conn.timeout = timeout
                     sock.settimeout(timeout)
                     return conn, True
-                except (OSError, ValueError):  # select() cannot probe a high-numbered fd
+                except (OSError, ValueError):
                     conn.close()
         connection_type = (
             http.client.HTTPSConnection if self._url.scheme == "https"
@@ -234,8 +232,6 @@ class Transport:
             if not reused:
                 _connect(conn, cancel)
             if cancel is not None:
-                # Capture this lease's socket: http.client may clear conn.sock
-                # before we finish reading a response marked Connection: close.
                 sock = conn.sock
 
                 def interrupt():
@@ -248,8 +244,6 @@ class Transport:
                 if cancel._deadline is not None:
                     self._deadlines.add(interrupt, cancel._deadline)
                 cancel._check()
-            # Even a partial write can reach the server. Only _request decides
-            # whether to retry and counts every attempt against its budget.
             dispatched = True
             conn.request(method, target_path, body, request_headers)
             response = conn.getresponse()

@@ -16,7 +16,6 @@ func contextLogger(ctx context.Context) *slog.Logger {
 	return slog.Default()
 }
 
-// requestID accepts one bounded token; rejected values never enter logs.
 func requestID(values []string) string {
 	if len(values) == 1 && len(values[0]) > 0 && len(values[0]) <= 128 {
 		valid := true
@@ -64,7 +63,6 @@ func (w *responseRecorder) Write(p []byte) (int, error) {
 
 func (w *responseRecorder) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
-// Expose Flusher only when the underlying writer supports it.
 type flushingResponse struct{ *responseRecorder }
 
 func (w *flushingResponse) Flush() {

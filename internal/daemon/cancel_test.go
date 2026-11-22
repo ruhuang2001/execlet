@@ -8,10 +8,6 @@ import (
 	"github.com/ruhuang2001/tiny-sandbox/internal/daemon"
 )
 
-// TestCancel covers the cancellation rules from api.md: terminate the process
-// group with SIGTERM then SIGKILL, respond only once the execution is
-// completed, leave a completed execution unchanged, and remove the container
-// when the processes cannot be confirmed gone.
 func TestCancel(t *testing.T) {
 	ctx := context.Background()
 
@@ -170,8 +166,6 @@ func TestCancel(t *testing.T) {
 	})
 }
 
-// TestExecutionStartsAreSerialized checks that a sandbox never runs two
-// executions at once, which keeps container-wide OOM evidence attributable.
 func TestExecutionStartsAreSerialized(t *testing.T) {
 	ctx := context.Background()
 	h := newHarness(t)
@@ -196,10 +190,6 @@ func TestExecutionStartsAreSerialized(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 }
 
-// TestCancelIgnoresTheCallersDeadline pins the rule that the escalation waits
-// are bounded by the cancel grace and deadline, not by the request context. A
-// client that gives up on the cancel request must not make the server skip
-// SIGTERM's grace and remove the container immediately.
 func TestCancelIgnoresTheCallersDeadline(t *testing.T) {
 	h := newHarness(t)
 	h.be.Programs["block"] = memLongBlock
@@ -207,7 +197,6 @@ func TestCancelIgnoresTheCallersDeadline(t *testing.T) {
 	ex, _, err := h.s.StartExecution(context.Background(), sb.ID, daemon.ExecuteRequest{Command: []string{"block"}})
 	wantNoError(t, err)
 
-	// The caller's context is already done when the cancel starts.
 	caller, cancel := context.WithCancel(context.Background())
 	cancel()
 

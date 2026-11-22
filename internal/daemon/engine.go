@@ -11,25 +11,16 @@ import (
 	"time"
 )
 
-// intentRecord is the termination intent the daemon recorded before it acted.
-// Recorded intents win over whatever exit status follows, which is why a 137
-// from a cancel is never classified as oom or exited.
 type intentRecord struct {
 	reason Reason
 }
 
-// execution is one execution and its live engine state.
-//
-// Lock order: the sandbox lock may be held while taking an execution lock, but
-// never the reverse. Code holding an execution lock therefore never touches
-// its sandbox; finishing an execution hands the cleanup back to the runner.
 type execution struct {
 	mu sync.Mutex
 
-	id        string
-	sandboxID string
-	command   []string
-	// Env identity retains no raw names or values. Cwd remains diagnostic data.
+	id             string
+	sandboxID      string
+	command        []string
 	envDigest      [32]byte
 	envCount       int
 	cwd            string
@@ -40,7 +31,7 @@ type execution struct {
 	fingerprintKey [32]byte
 	persist        func(Execution, []Event) error
 	forget         func() error
-	outputLost     bool // restart interrupted the nondurable live output stream
+	outputLost     bool
 
 	startedAt time.Time
 	finished  *time.Time
@@ -51,28 +42,16 @@ type execution struct {
 	log      *eventLog
 	logger   *slog.Logger
 
-	// intent is the recorded termination intent: canceled or timeout. It is
-	// set before the daemon acts and never cleared, so it wins over whatever
-	// exit status follows.
 	intent *intentRecord
 
-	// deadline is when this execution's own timeout fires, or nil when it has
-	// none. It is fixed at start: the point of an execution timeout is that a
-	// command cannot extend it by staying busy.
 	deadline *time.Time
-	// timedOut records that the reaper already started this execution's
-	// timeout escalation, so a later beat does not start a second one.
 	timedOut bool
 
 	proc        Process
 	oomBaseline int64
 	done        chan struct{}
-	// confirmedGone is closed once the process tree is known to be gone. A
-	// cancel that cannot confirm this removes the container instead.
 }
 
-// setIntent records the first termination intent. Later intents do not
-// overwrite it: the first reason the daemon acted on is the true one.
 func (ex *execution) setIntent(reason Reason) {
 	ex.mu.Lock()
 	defer ex.mu.Unlock()
@@ -81,8 +60,6 @@ func (ex *execution) setIntent(reason Reason) {
 	}
 }
 
-// finish completes the execution exactly once. It records the outcome, appends
-// the terminal event, and closes done. It does not touch the sandbox.
 func (ex *execution) finish(at time.Time, exitCode int, outcome ExecOutcome) bool {
 	ex.mu.Lock()
 	defer ex.mu.Unlock()
@@ -105,7 +82,6 @@ func (ex *execution) finish(at time.Time, exitCode int, outcome ExecOutcome) boo
 	}
 	ex.reason = &reason
 
-	// Store the terminal record without a second output payload in the journal.
 	terminal := Execution{
 		ID:                ex.id,
 		PID:               ex.pid,
@@ -123,7 +99,6 @@ func (ex *execution) finish(at time.Time, exitCode int, outcome ExecOutcome) boo
 		events := append(append([]Event(nil), ex.log.events...), Event{ID: ex.log.nextID + 1, Type: EventComplete, Execution: &terminal})
 		terminal.OutputTruncated = ex.log.truncated
 		if err := ex.persist(terminal, events); err != nil {
-			// Storage uncertainty must never be published as confirmed success.
 			ex.reason = new(ReasonUnknown)
 			ex.exitCode = nil
 			ex.log.truncated = true
@@ -148,12 +123,10 @@ func (ex *execution) finish(at time.Time, exitCode int, outcome ExecOutcome) boo
 	return true
 }
 
-// retained reports how many bytes of output the execution keeps.
 func (ex *execution) retained() int {
 	return ex.log.retainedBytes()
 }
 
-// snapshot returns the contract view with retained output.
 func (ex *execution) snapshot() Execution {
 	ex.mu.Lock()
 	defer ex.mu.Unlock()
@@ -185,9 +158,6 @@ func (ex *execution) completed() bool {
 	return ex.state == ExecCompleted
 }
 
-// summary returns the contract view without copying retained output. List
-// endpoints use it so a sandbox with a long history does not copy every
-// execution's stdout and stderr only to discard them.
 func (ex *execution) summary() ExecutionSummary {
 	ex.mu.Lock()
 	defer ex.mu.Unlock()
@@ -206,14 +176,6 @@ func (ex *execution) summary() ExecutionSummary {
 	}
 }
 
-// ---------------------------------------------------------------- start
-
-// StartExecution starts command in the sandbox.
-//
-// The rules come straight from api.md: the sandbox's state decides whether a
-// start is allowed; a paused sandbox resumes first; one execution runs at a
-// time, so an overlapping start is busy; and a reused idempotency key returns
-// the existing execution instead of starting a second process.
 func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req ExecuteRequest) (Execution, bool, error) {
 	start := time.Now()
 	defer s.metrics.observe("tiny_sandbox_execution_start_seconds{operation=\"start\"}", start)
@@ -260,9 +222,6 @@ func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req Ex
 	}
 	sb.mu.Lock()
 
-	// State comes first: a killed or pending sandbox rejects any start, even a
-	// replay of an idempotency key it accepted earlier. Idempotency answers
-	// "did this request already run", not "is this sandbox usable".
 	switch sb.state {
 	case StateRunning:
 	case StatePaused:
@@ -300,16 +259,6 @@ func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req Ex
 		return Execution{}, false, errorf(CodeBusy, "sandbox %s has reached its execution limit", sandboxID)
 	}
 
-	// The counter read happens while the request is still alive, so the
-	// request's context is fine there. The process itself outlives the
-	// request that started it: net/http cancels the request context when the
-	// handler returns, and a command must keep running after that.
-	//
-	// One failed read would otherwise disable OOM attribution for the whole
-	// execution (baseline -1 makes the classifier skip the delta check), so
-	// the read is retried once. A second failure is rare and is reported in
-	// the log, because OOM detection is the one thing a 137 cannot recover
-	// from afterwards.
 	baseline, oomErr := int64(-1), error(nil)
 	if sb.opts.maxConcurrentExecutions == 1 {
 		baseline, oomErr = s.readOOMBaseline(ctx, sb.container)
@@ -318,11 +267,6 @@ func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req Ex
 		contextLogger(ctx).WarnContext(ctx, "oom baseline unavailable", "sandbox_id", sandboxID)
 	}
 
-	// The start call is bounded so a hung runtime cannot hold sb.mu forever:
-	// the reaper skips a busy sandbox, so a permanent lock would mean its
-	// timeouts never fire again. The bound covers the start handshake only;
-	// the process itself outlives this context, which the backend detaches
-	// from the request.
 	ex := &execution{
 		id: newID("exe_"), sandboxID: sandboxID, command: append([]string(nil), req.Command...),
 		envDigest: keyedFingerprint(s.fingerprintKey, req.envPairs()), envCount: len(req.Env), cwd: req.Cwd, key: req.IdempotencyKey,
@@ -361,9 +305,6 @@ func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req Ex
 	startErr := err
 	if err != nil && proc == nil {
 		if s.journal != nil || req.TimeoutMS != nil || errors.Is(err, ErrStartUnconfirmed) {
-			// No observer can establish whether user code ran. Retain the
-			// invocation even without a journal, then retire the sandbox so a
-			// lost start acknowledgment cannot admit a second incarnation.
 			if s.journal == nil {
 				sb.executions = append(sb.executions, ex)
 				if ex.key != "" {
@@ -401,8 +342,6 @@ func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req Ex
 			return Execution{}, false, errorf(CodeBackendError, "runtime did not confirm managed identity")
 		}
 		ex.pid = managed.PID()
-		// The in-guest supervisor owns this exact deadline. A second reaper
-		// clock could overwrite a natural exit with an unconfirmed timeout.
 	}
 	if s.journal == nil {
 		sb.executions = append(sb.executions, ex)
@@ -417,8 +356,6 @@ func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req Ex
 	}
 	sb.touchLocked(s.now())
 	sb.pruneExecutionsLocked()
-	// The contract reports the execution as running with empty output; the
-	// pumps below deliver the rest through the event log.
 	out := ex.snapshotLocked()
 	sb.mu.Unlock()
 
@@ -433,12 +370,6 @@ func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req Ex
 	return out, true, nil
 }
 
-// readOOMBaseline returns the cgroup oom_kill counter, retrying once. A
-// failed read is reported to the caller, which records -1: the classifier then
-// skips the delta check rather than guess.
-//
-// Both attempts share one bounded context, so a runtime that never answers
-// cannot hold the sandbox lock for longer than BackendCallTimeout.
 func (s *Sandboxes) readOOMBaseline(ctx context.Context, containerID string) (int64, error) {
 	callCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), BackendCallTimeout)
 	defer cancel()
@@ -453,8 +384,6 @@ func (s *Sandboxes) readOOMBaseline(ctx context.Context, containerID string) (in
 	return baseline, nil
 }
 
-// run pumps output, waits for the process, classifies the exit, and finishes
-// the execution. Eviction may finish it first; finish admits one terminal writer.
 func (s *Sandboxes) run(ctx context.Context, sb *sandbox, ex *execution) {
 	var pumps sync.WaitGroup
 	pumps.Go(func() {
@@ -484,28 +413,15 @@ func (s *Sandboxes) run(ctx context.Context, sb *sandbox, ex *execution) {
 		outcome = classifyWithAttribution(context.WithoutCancel(context.Background()), s.backend, sb.container, baseline, exitCode, intent, s.sleep, false)
 	}
 	if len(outcome.sampled) > 0 {
-		// One line per ambiguous 137: the observed liveness sequence and how
-		// long it took to settle. This is the evidence a machine we cannot
-		// reproduce on leaves behind for a misclassification.
 		contextLogger(ctx).InfoContext(ctx, "execution liveness settled", "sandbox_id", ex.sandboxID, "execution_id", ex.id, "samples", outcome.sampled, "duration_ms", outcome.elapsed.Milliseconds(), "reason", outcome.Reason)
 	}
 	if waitErr != nil && intent == nil && !outcome.SandboxLost {
-		// The runtime failed to report an exit status. Keep the reason the
-		// classification gave, but the exit code stays unknown.
 		exitCode = -1
 		if outcome.Reason == ReasonExited {
 			outcome.Reason = ReasonUnknown
 		}
 	}
 
-	// Completion and the sandbox's release happen under one sandbox lock.
-	// finish makes the execution visible as completed, and a client that
-	// sees that may act at once: start the next command, or read the
-	// sandbox. If running were cleared only afterwards, that start would find
-	// the sandbox busy; if a lost sandbox were marked killed only afterwards,
-	// the client would see it running and start a command against a
-	// container that is gone. The lock order (sandbox, then execution) allows
-	// finish to run inside it.
 	now := s.now()
 	sb.mu.Lock()
 	if ex.finish(now, exitCode, outcome) {
@@ -514,18 +430,12 @@ func (s *Sandboxes) run(ctx context.Context, sb *sandbox, ex *execution) {
 		_ = s.saveSandboxLocked(sb)
 	}
 	if outcome.SandboxLost {
-		_ = s.terminateLocked(context.WithoutCancel(context.Background()), sb, KillEvicted) // Removal failures are queued for retry.
+		_ = s.terminateLocked(context.WithoutCancel(context.Background()), sb, KillEvicted)
 	}
 	sb.pruneExecutionsLocked()
 	sb.mu.Unlock()
 }
 
-// pump copies r into the event log in chunks no larger than the per-event
-// limit. A read can end inside a UTF-8 sequence, and an event whose payload is
-// half a rune would be turned into U+FFFD by the JSON encoder on the wire, so
-// the incomplete tail is carried into the next read instead of being
-// delivered. At most utf8.UTFMax-1 bytes are ever pending. A read error ends
-// the pump; the process wait is the authority on the outcome.
 func pump(log *eventLog, kind EventType, r io.Reader) {
 	if r == nil {
 		return
@@ -533,14 +443,9 @@ func pump(log *eventLog, kind EventType, r io.Reader) {
 	buf := make([]byte, MaxEventDataBytes)
 	carry := 0
 	for {
-		// Read at most MaxEventDataBytes in total, so a large write produces
-		// full events rather than a full one plus a small remainder.
 		n, err := r.Read(buf[carry:])
 		total := carry + n
 
-		// Hold back a partial rune; the next read completes it. Nothing is
-		// held back at EOF: a truncated sequence has no completion coming,
-		// and the encoder will substitute U+FFFD for it.
 		tail := 0
 		if err == nil && total > 0 {
 			tail = incompleteRuneTail(buf[:total])
@@ -550,8 +455,6 @@ func pump(log *eventLog, kind EventType, r io.Reader) {
 		}
 		carry = tail
 		if tail > 0 {
-			// Move the pending bytes to the front only after the data before
-			// them has been sent: copying first would overwrite that data.
 			copy(buf, buf[total-tail:total])
 		}
 		if err != nil {
@@ -560,15 +463,6 @@ func pump(log *eventLog, kind EventType, r io.Reader) {
 	}
 }
 
-// ---------------------------------------------------------------- cancel
-
-// CancelExecution terminates an execution's whole process group: SIGTERM,
-// then SIGKILL after the grace period. It answers only once the execution is
-// completed. Canceling a completed execution returns it unchanged.
-//
-// If the process tree cannot be confirmed gone within the cancel deadline, the
-// container is removed so nothing keeps running, and the sandbox ends killed
-// with reason requested.
 func (s *Sandboxes) CancelExecution(ctx context.Context, sandboxID, executionID string) (Execution, error) {
 	sb, ex, err := s.execution(sandboxID, executionID)
 	if err != nil {
@@ -578,8 +472,6 @@ func (s *Sandboxes) CancelExecution(ctx context.Context, sandboxID, executionID 
 		return ex.snapshot(), nil
 	}
 
-	// A paused container delivers no signals, and the contract says a cancel
-	// in a paused sandbox resumes it first.
 	sb.mu.Lock()
 	if sb.state == StatePaused {
 		if err := s.unpauseLocked(ctx, sb); err != nil {
@@ -589,15 +481,8 @@ func (s *Sandboxes) CancelExecution(ctx context.Context, sandboxID, executionID 
 	}
 	sb.mu.Unlock()
 
-	// Record the intent before acting: it explains whatever exit code follows.
 	ex.setIntent(ReasonCanceled)
 
-	// The escalation waits below must not inherit the caller's request
-	// context. A client that gives up on the cancel request (a timeout, a
-	// closed terminal, a dropped proxy connection) would otherwise cut both
-	// waits short and move straight to removing the container, turning a
-	// slow signal into sandbox destruction. The cancel grace and deadline
-	// bound the action; the connection does not.
 	cleanup := context.WithoutCancel(ctx)
 	_ = ex.proc.Signal(SignalTerm)
 	if s.waitDone(cleanup, ex.done, s.cancelGrace) {
@@ -608,45 +493,25 @@ func (s *Sandboxes) CancelExecution(ctx context.Context, sandboxID, executionID 
 		return ex.snapshot(), nil
 	}
 
-	// The process tree could not be confirmed gone. Removing the container is
-	// the only way to guarantee nothing keeps running.
 	sb.mu.Lock()
-	_ = s.terminateLocked(cleanup, sb, KillRequested) // The execution snapshot below remains the cancellation result.
+	_ = s.terminateLocked(cleanup, sb, KillRequested)
 	sb.mu.Unlock()
-	// Removing the container ends the process, so the runner finishes the
-	// execution. Give it a moment, then report what is known.
 	s.waitDone(cleanup, ex.done, s.cancelGrace)
 	return ex.snapshot(), nil
 }
 
-// timeoutExecution ends one execution whose own deadline is due. It runs on
-// its own goroutine because the reaper is a single goroutine and the SIGTERM
-// grace alone outlasts a beat.
-//
-// The escalation is the cancel escalation with a different reason: SIGTERM,
-// then SIGKILL after the grace period, and container removal only when the
-// process tree cannot be confirmed gone. Unlike a cancel it normally leaves
-// the sandbox running, because the command timed out, not the sandbox. The
-// container-removal fallback is the exception: it ends the sandbox with
-// kill_reason timeout, the same reason a lifetime kill records.
 func (s *Sandboxes) timeoutExecution(ctx context.Context, sb *sandbox, ex *execution) {
 	if s.waitDone(ctx, ex.done, 0) {
 		return
 	}
 
-	// A paused container delivers no signals. A timeout that reaches the
-	// execution while the sandbox is paused resumes it, so the signal can
-	// land; the deadline was already due, so this does not extend anything.
 	sb.mu.Lock()
 	if sb.state == StatePaused {
 		callCtx, cancel := backendCtx(ctx)
 		err := s.backend.Unpause(callCtx, sb.container)
 		cancel()
 		if err != nil {
-			// The process outlives its deadline by one beat and timedOut is
-			// already set, so the deadline is not reclaimed. Removing the
-			// container is the only guarantee left.
-			_ = s.terminateLocked(ctx, sb, KillTimeout) // Removal failures are queued for retry.
+			_ = s.terminateLocked(ctx, sb, KillTimeout)
 			sb.mu.Unlock()
 			return
 		}
@@ -669,12 +534,10 @@ func (s *Sandboxes) timeoutExecution(ctx context.Context, sb *sandbox, ex *execu
 	}
 
 	sb.mu.Lock()
-	_ = s.terminateLocked(cleanup, sb, KillTimeout) // Removal failures are queued for retry.
+	_ = s.terminateLocked(cleanup, sb, KillTimeout)
 	sb.mu.Unlock()
 }
 
-// waitDone waits for done or ctx or the timeout, reporting whether done
-// closed.
 func (s *Sandboxes) waitDone(ctx context.Context, done <-chan struct{}, timeout time.Duration) bool {
 	if timeout <= 0 {
 		select {
@@ -696,9 +559,6 @@ func (s *Sandboxes) waitDone(ctx context.Context, done <-chan struct{}, timeout 
 	}
 }
 
-// ---------------------------------------------------------------- reads
-
-// GetExecution returns one execution with retained output.
 func (s *Sandboxes) GetExecution(sandboxID, executionID string) (Execution, error) {
 	_, ex, err := s.execution(sandboxID, executionID)
 	if err != nil {
@@ -707,8 +567,6 @@ func (s *Sandboxes) GetExecution(sandboxID, executionID string) (Execution, erro
 	return ex.snapshot(), nil
 }
 
-// ListExecutions returns every execution of the sandbox, newest first, without
-// output.
 func (s *Sandboxes) ListExecutions(sandboxID string) ([]ExecutionSummary, error) {
 	sb, err := s.lookup(sandboxID)
 	if err != nil {
@@ -720,15 +578,11 @@ func (s *Sandboxes) ListExecutions(sandboxID string) ([]ExecutionSummary, error)
 
 	out := make([]ExecutionSummary, 0, len(list))
 	for i := len(list) - 1; i >= 0; i-- {
-		// summary() reads the fields without copying retained output, so a
-		// long history costs one slice allocation, not one output copy per
-		// execution.
 		out = append(out, list[i].summary())
 	}
 	return out, nil
 }
 
-// execution looks up one execution inside a sandbox.
 func (s *Sandboxes) execution(sandboxID, executionID string) (*sandbox, *execution, error) {
 	sb, err := s.lookup(sandboxID)
 	if err != nil {
@@ -749,11 +603,6 @@ func (s *Sandboxes) execution(sandboxID, executionID string) (*sandbox, *executi
 	return sb, found, nil
 }
 
-// ---------------------------------------------------------------- events
-
-// Stream delivers one execution's events. It keeps its own cursor, so calling
-// Next repeatedly never re-delivers an event: that is what makes a reconnect
-// with Last-Event-ID lossless. Closing a stream never affects the execution.
 type Stream struct {
 	log    *eventLog
 	cursor uint64
@@ -761,14 +610,6 @@ type Stream struct {
 	close  func()
 }
 
-// Events returns a Stream positioned after lastEventID. A lastEventID of 0
-// replays from the first event, which reproduces the retained stdout and
-// stderr exactly. The stream must be closed; an open stream counts as
-// activity for the idle timeout.
-//
-// A cursor beyond the newest event is rejected: no event will ever have the
-// requested ID, and a running execution would otherwise leave the caller
-// waiting for a replay that cannot arrive.
 func (s *Sandboxes) Events(sandboxID, executionID string, lastEventID uint64) (*Stream, error) {
 	_, ex, err := s.execution(sandboxID, executionID)
 	if err != nil {
@@ -788,9 +629,6 @@ func (s *Sandboxes) Events(sandboxID, executionID string, lastEventID uint64) (*
 	return &Stream{log: ex.log, cursor: lastEventID, close: closeStream}, nil
 }
 
-// Next returns every event after the cursor, blocking until at least one is
-// available, the log completes, or ctx is done. done is true once the complete
-// event has been delivered.
 func (st *Stream) Next(ctx context.Context) (events []Event, done bool, err error) {
 	events, done, err = st.log.wait(ctx, st.cursor)
 	if len(events) > 0 {
@@ -799,13 +637,10 @@ func (st *Stream) Next(ctx context.Context) (events []Event, done bool, err erro
 	return events, done, err
 }
 
-// Close releases the stream.
 func (st *Stream) Close() {
 	st.once.Do(st.close)
 }
 
-// LastEventID returns the newest event ID of an execution, for diagnostics
-// and for a client that wants to resume without replaying.
 func (s *Sandboxes) LastEventID(sandboxID, executionID string) (uint64, error) {
 	_, ex, err := s.execution(sandboxID, executionID)
 	if err != nil {
@@ -814,10 +649,6 @@ func (s *Sandboxes) LastEventID(sandboxID, executionID string) (uint64, error) {
 	return ex.log.lastEventID(), nil
 }
 
-// ---------------------------------------------------------------- files
-
-// ReadFile returns a file inside the sandbox. A paused sandbox resumes first,
-// as the transition table says.
 func (s *Sandboxes) ReadFile(ctx context.Context, sandboxID, p string) ([]byte, error) {
 	if err := validateRegularFilePath(p); err != nil {
 		return nil, err
@@ -840,7 +671,6 @@ func (s *Sandboxes) ReadFile(ctx context.Context, sandboxID, p string) ([]byte, 
 	return data, nil
 }
 
-// WriteFile writes a file inside the sandbox, creating parent directories.
 func (s *Sandboxes) WriteFile(ctx context.Context, sandboxID, p string, data []byte) error {
 	if err := validateRegularFilePath(p); err != nil {
 		return err
@@ -875,8 +705,6 @@ func validateRegularFilePath(p string) error {
 	return nil
 }
 
-// prepareFiles applies the state rules for file access: allowed while running,
-// a resume first while paused, invalid while pending or killed.
 func (s *Sandboxes) prepareFiles(ctx context.Context, sandboxID string) (*sandbox, error) {
 	sb, err := s.lookup(sandboxID)
 	if err != nil {
@@ -901,9 +729,6 @@ func isAbsPath(path string) bool {
 	return len(path) > 0 && path[0] == '/'
 }
 
-// validateExecEnv enforces the environment limits from docs/api.md. Every bound
-// is checked before the sandbox lookup, so a malformed request costs nothing
-// and answers the same way whatever the sandbox's state is.
 func validateExecEnv(env map[string]string) error {
 	if len(env) == 0 {
 		return nil
@@ -933,12 +758,6 @@ func validateExecEnv(env map[string]string) error {
 	return nil
 }
 
-// validateCwd checks only what the daemon can decide without asking the
-// runtime: the path is absolute and bounded. Whether the directory exists is
-// deliberately not checked here. A stat would cost a backend round trip on
-// every start and could race with the command that creates the directory; the
-// wrapper reports an unusable directory as exit 126 instead, which the
-// execution record then carries.
 func validateCwd(cwd string) error {
 	switch {
 	case cwd == "":
@@ -953,10 +772,6 @@ func validateCwd(cwd string) error {
 	return nil
 }
 
-// sameInvocation reports whether an existing execution was started with this
-// request. It is the idempotency comparison: a key identifies one invocation,
-// and a replay with different environment or stdin would otherwise return an
-// execution that ran with the old one.
 func sameInvocation(ex *execution, req ExecuteRequest) bool {
 	return equalStrings(ex.command, req.Command) &&
 		((ex.timeoutMS == nil && req.TimeoutMS == nil) || (ex.timeoutMS != nil && req.TimeoutMS != nil && *ex.timeoutMS == *req.TimeoutMS)) &&
@@ -965,8 +780,6 @@ func sameInvocation(ex *execution, req ExecuteRequest) bool {
 		ex.cwd == req.Cwd &&
 		ex.stdinDigest == keyedFingerprint(ex.fingerprintKey, []string{req.Stdin})
 }
-
-// ---------------------------------------------------------------- small helpers
 
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
@@ -988,10 +801,6 @@ func cloneInt(v *int) *int {
 	return &c
 }
 
-// cwdPtr returns a pointer to cwd for the snapshot, or nil when the execution
-// used the image's working directory. The field is nullable on the wire so a
-// client can tell "no cwd requested" from a directory it happens to share with
-// the image's default.
 func cwdPtr(cwd string) *string {
 	if cwd == "" {
 		return nil
@@ -999,8 +808,6 @@ func cwdPtr(cwd string) *string {
 	return &cwd
 }
 
-// cloneString copies a *string so a caller cannot mutate a snapshot through the
-// pointer it was handed.
 func cloneString(v *string) *string {
 	if v == nil {
 		return nil

@@ -25,10 +25,6 @@ func TestExecInspectConfirmsExactStoppedExec(t *testing.T) {
 	}
 }
 
-// The Engine API ignores a field it does not recognize, so a mistyped JSON
-// name is not an error: it is a limit that silently does nothing. The fake
-// daemon decodes into the same struct, which would round-trip any spelling.
-// These assertions pin the wire names to what Docker documents.
 func TestHostConfigJSONFieldNames(t *testing.T) {
 	pids := int64(1024)
 	initProcess := true
@@ -52,15 +48,11 @@ func TestHostConfigJSONFieldNames(t *testing.T) {
 			t.Errorf("%s is missing from %s", key, data)
 		}
 	}
-	// Docker decodes numbers into int64; a float would be a JSON type error on
-	// strict daemons and is rejected here so the shape is checked, not assumed.
 	if _, ok := got["PidsLimit"].(float64); !ok {
 		t.Errorf("PidsLimit = %T, want a JSON number", got["PidsLimit"])
 	}
 }
 
-// An unset PidsLimit must not become zero. Docker reads zero as "unlimited",
-// so an omitted limit and an explicit zero would mean opposite things.
 func TestHostConfigOmitsUnsetLimits(t *testing.T) {
 	data, err := json.Marshal(HostConfig{Memory: 64 << 20})
 	if err != nil {

@@ -11,8 +11,6 @@ import time
 from runner import Worker, observer, NotRun
 
 FIX = json.loads((Path(__file__).parent / 'fixtures.json').read_text())
-# Shell-embedded fixtures keep real characters: ensure_ascii would turn an
-# emoji into a surrogate pair, and Python refuses to encode those.
 src = lambda value: json.dumps(value, ensure_ascii=False)
 
 
@@ -20,13 +18,11 @@ class Context:
     def __init__(self, provider, language, out, env, budget, local):
         self.provider, self.language, self.out = provider, language, Path(out)
         self.env, self.local = env, local
-        # Leave room inside the parent watchdog for cleanup and evidence.
         self.deadline = time.monotonic() + budget - 15
         self.checks: dict[str, object] = {}
         self.workers = []
         self.worker = self.spawn()
 
-    # -- transport helpers ---------------------------------------------------
     def spawn(self, language=None, **overrides):
         language = language or self.language
         env = dict(self.env, CONTRACT_OWNED=str(self.out / 'owned.jsonl'), **overrides)
@@ -130,7 +126,6 @@ def check_entry(ctx, entry, kind=None):
         ctx.check(f'{entry["name"]} type', entry['type'] == kind, entry['type'])
 
 
-# ------------------------------------------------------------------ A01
 def a01(ctx):
     sid = ctx.create(duration=60)
     ctx.check('id is opaque text', bool(sid) and isinstance(sid, str))
@@ -144,7 +139,6 @@ def a01(ctx):
     ctx.check('killed sandbox is gone', not alive['alive'], alive)
 
 
-# ------------------------------------------------------------------ A02
 def a02(ctx):
     sid = ctx.create(duration=120)
     value = ctx.must_run(sid, FIX['shell'])
@@ -163,7 +157,6 @@ def a02(ctx):
     ctx.ok('kill', 'kill', id=sid)
 
 
-# ------------------------------------------------------------------ A03
 def a03(ctx):
     sid = ctx.create(duration=120, options={'envs': {'CONTRACT_A': 'base', 'CONTRACT_VALUE': FIX['env_value']}})
     read = lambda sandbox_id=sid, worker=None: json.loads(
@@ -183,7 +176,6 @@ def a03(ctx):
     ctx.ok('kill', 'kill', id=sid)
 
 
-# ------------------------------------------------------------------ A04
 def a04(ctx):
     sid = ctx.create(duration=120)
     stdout = FIX['stdout'] * 200
@@ -204,7 +196,6 @@ def a04(ctx):
     ctx.ok('kill', 'kill', id=sid)
 
 
-# ------------------------------------------------------------------ A05
 def a05(ctx):
     sid = ctx.create(duration=60)
     reply = ctx.call('run', id=sid, command="printf 'before-out'; printf 'before-err' >&2; "
@@ -230,8 +221,6 @@ def a05(ctx):
     ctx.check('callback error is not retried', reply.get('value', {}).get('callback_error_preserved') is True, reply)
     ctx.check('callback error does not kill the process', ctx.wait_until(
         lambda: ctx.call('read', id=sid, path='/tmp/callback-alive', quiet=True).get('value') == 'alive\n', 10))
-    # A file side effect precedes execution reaping. Do not assume it releases
-    # the single-execution slot; the next independent probe gets a new sandbox.
     ctx.ok('kill', 'kill', id=sid)
     sid = ctx.create(duration=60)
     reply = ctx.call('run', id=sid, command="printf '%s' sdk-cb", callback_error='sdk', quiet=True)
@@ -239,7 +228,6 @@ def a05(ctx):
     ctx.ok('kill', 'kill', id=sid)
 
 
-# ------------------------------------------------------------------ A06
 def a06(ctx):
     now = time.time()
     sid = ctx.create(duration=60)
@@ -261,7 +249,6 @@ def a06(ctx):
     ctx.ok('kill', 'kill', id=other)
 
 
-# ------------------------------------------------------------------ A07
 def a07(ctx):
     sid = ctx.create(duration=30)
     first = ctx.ok('info', 'initial lifetime', id=sid)['end']
@@ -282,7 +269,6 @@ def a07(ctx):
     ctx.ok('kill', 'kill', id=sid)
 
 
-# ------------------------------------------------------------------ A08
 def a08(ctx):
     sid = ctx.create(duration=120)
     ctx.write(sid, '/home/user/text.txt', text=FIX['text'])
@@ -302,7 +288,6 @@ def a08(ctx):
     ctx.ok('kill', 'kill', id=sid)
 
 
-# ------------------------------------------------------------------ A09
 def a09(ctx):
     sid = ctx.create(duration=120)
     info = ctx.write(sid, '/home/user/nested/deep/file.txt', text='a' * 50)
@@ -320,7 +305,6 @@ def a09(ctx):
     ctx.ok('kill', 'kill', id=sid)
 
 
-# ------------------------------------------------------------------ A10
 def a10(ctx):
     sid = ctx.create(duration=180)
     ctx.must_run(sid, 'mkdir -p /home/user/empty')
@@ -342,7 +326,6 @@ def a10(ctx):
     ctx.ok('kill', 'kill', id=sid)
 
 
-# ------------------------------------------------------------------ A11
 def a11(ctx):
     before = ctx.count() if ctx.provider == 'tiny' else None
     clean = ctx.ok('context', 'context without error', raise_error=False)
@@ -355,7 +338,6 @@ def a11(ctx):
         ctx.check('no leftover containers', ctx.count() == before, ctx.count())
 
 
-# ------------------------------------------------------------------ A12
 def a12(ctx, background_invalid=True):
     creates = len(ctx.container_creates()) if ctx.local else 0
     sid = ctx.create(duration=60)
@@ -396,7 +378,6 @@ def a12(ctx, background_invalid=True):
     ctx.ok('kill', 'kill', id=sid)
 
 
-# ------------------------------------------------------------------ A13
 def a13(ctx):
     sid = ctx.create(duration=300)
     limit = 10 << 20
@@ -415,8 +396,6 @@ def a13(ctx):
               and error.get('output_truncated') is True and bool(error.get('execution_id'))
               and len(error.get('stdout', '')) == 1 << 20,
               {k: len(v) if k in ('stdout', 'stderr') else v for k, v in error.items()})
-    # Truncation stops waiting immediately, without terminating the process.
-    # Explicit cleanup isolates the next probe from that still-running work.
     ctx.ok('kill', 'kill', id=sid)
     sid = ctx.create(duration=120)
     events = ctx.call('run', id=sid, command="python3 -c \"import sys\nfor i in range(4200): print(i, flush=True)\"", quiet=True)
@@ -434,14 +413,11 @@ def a13(ctx):
     ctx.ok('kill', 'kill', id=sid)
 
 
-# ------------------------------------------------------------------ A14
 def a14(ctx):
-    from local import Fault  # the existing real-Docker fault proxy
+    from local import Fault
     sid = ctx.create(duration=120)
     ctx.must_run(sid, 'rm -f /tmp/counter')
     ctx.local.faults.arm('accepted-loss', Fault('POST', rf'/v1/sandboxes/{re.escape(sid)}/executions', 'truncate'))
-    # The local guard is about accepted-start loss, not the wait deadline, so
-    # it uses the default wait and lets the script's own runtime bound it.
     reply = ctx.call('run', id=sid, command=f'python3 -c {src(FIX["counter"])}', quiet=True)
     ctx.local.faults.arm('idle')
     ctx.check('accepted-start loss was injected', bool(ctx.local.faults.requests('accepted-loss', 'POST')))
@@ -454,8 +430,6 @@ def a14(ctx):
             break
         time.sleep(.5)
     ctx.check('side effect happened once', counter == '1', counter)
-    # A sandbox runs one foreground execution at a time, so the next start is
-    # only meaningful once the lost-start command has actually finished.
     ctx.check('sandbox accepts the next start', ctx.wait_until(
         lambda: ctx.call('run', id=sid, command='true', quiet=True)['ok'], 20))
     ctx.local.faults.arm('sse-cut', Fault('GET', rf'/v1/sandboxes/{re.escape(sid)}/executions/[^/]+/events', 'cut'))
@@ -482,7 +456,6 @@ def a14(ctx):
     ctx.ok('kill', 'kill', id=sid)
 
 
-# ------------------------------------------------------------------ A15
 def a15(ctx):
     sid = ctx.create(duration=120)
     ctx.local.docker.arm(True)
@@ -503,7 +476,6 @@ def a15(ctx):
     ctx.check('no orphan remains', ctx.count() == 0, ctx.count())
 
 
-# ------------------------------------------------------------------ A16
 def a16(ctx):
     before = ctx.count()
     key = 'apiKey' if ctx.language == 'typescript' else 'api_key'
@@ -533,7 +505,6 @@ def a16(ctx):
     conn.close()
 
 
-# ------------------------------------------------------------------ W01
 def w01(ctx):
     sid = ctx.create(duration=180)
     ctx.write(sid, '/home/user/task/input.txt', text='3\n14\n15\n')
@@ -553,7 +524,6 @@ def w01(ctx):
     ctx.check('sandbox is gone after the workflow', not ctx.state(sid)['alive'])
 
 
-# ------------------------------------------------------------------ W02
 def w02(ctx):
     sid = ctx.create(duration=60, options={'envs': {'TASK': 'first'}})
     ctx.check('environment set for the workflow', json.loads(ctx.must_run(
@@ -571,7 +541,6 @@ def w02(ctx):
     ctx.check('kill succeeds', ctx.ok('kill', 'kill', id=sid, worker=second) is True)
 
 
-# ------------------------------------------------------------------ W03
 def w03(ctx):
     sid = ctx.create(duration=120)
     reply = ctx.call('run', id=sid, command=f'python3 -c {src(FIX["counter"])}', callbacks=True)
@@ -580,8 +549,6 @@ def w03(ctx):
     ctx.check('callback order is preserved', ''.join(reply['callbacks']['stdout']) == reply['value']['stdout'])
     thin = ctx.spawn()
     ctx.ok('connect', 'connect for the deadline probe', thin, id=sid)
-    # Only this command can produce the marker, after its local wait expires.
-    # The earlier counter task already completed and cannot prove continuation.
     marker = '/tmp/deadline-finished'
     before = ctx.call('read', thin, id=sid, path=marker, quiet=True)
     assert not before['ok'] and before['error']['family'] == 'file_not_found', before

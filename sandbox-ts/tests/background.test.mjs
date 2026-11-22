@@ -1,5 +1,3 @@
-// Public package entry points with deterministic HTTP/SSE fixtures. Real guest
-// process and signal evidence belongs to the installed Docker acceptance suite.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -622,7 +620,7 @@ test('kill request budget is independent of a timed-out handle; auth remains aut
     if (c.path.endsWith('/kill')) {
       if (mode === 'held') return new Promise((resolve, reject) =>
         c.signal.addEventListener('abort', () => reject(new Error('lost confirmation')), { once: true }));
-      return failure('not_found', 401); // HTTP auth takes precedence over an inconsistent body code.
+      return failure('not_found', 401);
     }
   });
   const sb = await create({ requestTimeoutMs: 25 });

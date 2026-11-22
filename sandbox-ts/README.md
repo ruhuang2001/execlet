@@ -72,19 +72,18 @@ capability cache belongs to each client and its immutable endpoint/credential.
 ```ts
 import { Sandbox, type CommandHandle } from '@tiny-sandbox/sdk/e2b';
 
-const sandbox = await Sandbox.create(); // SANDBOX_E2B_IMAGE pins the local image
+const sandbox = await Sandbox.create();
 const command: CommandHandle = await sandbox.commands.run('sleep 2; printf done', {
   background: true, timeoutMs: 60_000,
   onStdout: async text => { console.log(text); },
 });
 const saved = { sandboxId: sandbox.sandboxId, pid: command.pid };
-console.log(command.executionId); // tiny-sandbox immutable execution identity extension
-await command.disconnect(); // local observation only; command keeps running
+console.log(command.executionId);
+await command.disconnect();
 
-// In another process, after Sandbox.connect(saved.sandboxId):
 const attached = await sandbox.commands.connect(saved.pid, { timeoutMs: 60_000 });
 console.log(await attached.wait());
-await sandbox.kill(); // explicit sandbox cleanup when finished
+await sandbox.kill();
 ```
 
 - `background: true` returns a `CommandHandle` even for fast exits. Omitted/false

@@ -7,8 +7,6 @@ import (
 	"time"
 )
 
-// ManagedProcess binds control to one unreaped runtime process lifetime.
-// A PID file followed by kill(-pid) does not implement this interface safely.
 type ManagedProcess interface {
 	Process
 	PID() int
@@ -17,13 +15,11 @@ type ManagedProcess interface {
 	Killed() bool
 }
 
-// CommandAttachment binds an execution snapshot to its atomic output watermark.
 type CommandAttachment struct {
 	Execution   Execution `json:"execution"`
 	LastEventID uint64    `json:"last_event_id"`
 }
 
-// CommandKill reports confirmed signal delivery and the terminal execution.
 type CommandKill struct {
 	Execution Execution `json:"execution"`
 	Signaled  bool      `json:"signaled"`
@@ -42,8 +38,6 @@ func (h *Handler) capabilities(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"capabilities": flags})
 }
 
-// AttachCommand selects the newest retained managed incarnation, then captures
-// its outcome and watermark under ex.mu -> log.mu, the completion lock order.
 func (s *Sandboxes) AttachCommand(sandboxID string, pid int) (CommandAttachment, error) {
 	if pid <= 0 {
 		return CommandAttachment{}, errorf(CodeInvalidRequest, "pid must be positive")
@@ -65,8 +59,6 @@ func (s *Sandboxes) AttachCommand(sandboxID string, pid int) (CommandAttachment,
 		ex.mu.Lock()
 		snapshot := ex.snapshotLocked()
 		ex.log.mu.Lock()
-		// Output pumps can advance without ex.mu. Refresh output while the
-		// watermark is held so no pre-attach chunk is later reintroduced.
 		snapshot.Stdout, snapshot.Stderr, snapshot.OutputTruncated = ex.log.outputLocked()
 		attached := CommandAttachment{snapshot, ex.log.nextID}
 		ex.log.mu.Unlock()
@@ -76,7 +68,6 @@ func (s *Sandboxes) AttachCommand(sandboxID string, pid int) (CommandAttachment,
 	return CommandAttachment{}, errorf(CodeNotFound, "managed command does not exist")
 }
 
-// KillExecution immediately kills one managed lifetime without retargeting a PID.
 func (s *Sandboxes) KillExecution(ctx context.Context, sandboxID, executionID string) (CommandKill, error) {
 	sb, ex, err := s.execution(sandboxID, executionID)
 	if err != nil {
@@ -105,8 +96,6 @@ func (s *Sandboxes) killManaged(ctx context.Context, sb *sandbox, ex *execution)
 	if signalErr == nil && s.waitDone(cleanup, ex.done, s.cancelDeadline) {
 		return CommandKill{Execution: ex.snapshot(), Signaled: signaled}, nil
 	}
-	// An unconfirmed signal must not be upgraded to ordinary success by
-	// deleting the whole sandbox; callers must see the collateral outcome.
 	sb.mu.Lock()
 	removalErr := s.terminateLocked(cleanup, sb, KillRequested)
 	sb.mu.Unlock()

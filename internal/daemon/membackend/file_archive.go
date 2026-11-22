@@ -13,7 +13,6 @@ import (
 	"github.com/ruhuang2001/tiny-sandbox/internal/filearchive"
 )
 
-// ReadArchive serializes files and explicit/implicit directories deterministically.
 func (b *Backend) ReadArchive(_ context.Context, id, p string) ([]byte, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -127,7 +126,6 @@ func (b *Backend) ReadArchive(_ context.Context, id, p string) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// WriteArchive applies a fully validated archive only after destination checks.
 func (b *Backend) WriteArchive(_ context.Context, id, p string, archive *filearchive.Archive) error {
 	if archive == nil || archive.Len() == 0 {
 		return &daemon.Error{Code: daemon.CodeInvalidRequest, Message: "archive must be constructed by filearchive.Parse"}
@@ -213,7 +211,6 @@ func (b *Backend) WriteArchive(_ context.Context, id, p string, archive *filearc
 	return nil
 }
 
-// Replacing a path must not retarget existing links to its new bytes.
 func (c *container) detachHardlinks(target string) {
 	for name, h := range c.archiveHeaders {
 		if h.Typeflag == tar.TypeLink && h.Linkname == target {

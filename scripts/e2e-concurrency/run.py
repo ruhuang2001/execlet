@@ -16,7 +16,6 @@ if not __debug__:
 base, artifact = sys.argv[1:]
 owned = []
 report = {"checks": [], "owned": owned, "cleanup": [], "request_errors": [], "passed": False}
-# This runner targets its own daemon, never the host's ambient HTTP proxy.
 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
@@ -112,7 +111,6 @@ def admission():
     assert get(sb, b)["state"] == "running"
     finish(sb, start(sb, ["true"]))
     cancel(sb, b)
-    # Concurrent HTTP admission at eight slots never accepts a ninth.
     sb = create(8)
     def attempt(_):
         try:
@@ -141,8 +139,6 @@ def deadlines():
     command = ["sh", "-c", "echo ready; sleep 30"]
     a = start(sb, command, timeout_seconds=3)
     b = start(sb, command, timeout_seconds=3)
-    # Docker's attached start acknowledges before the process necessarily runs.
-    # Observe both commands before pausing, or pause can race runtime startup.
     ready_deadline = time.monotonic() + 2
     while "ready" not in get(sb, a)["stdout"] or "ready" not in get(sb, b)["stdout"]:
         assert time.monotonic() < ready_deadline, "commands did not start before pause"
@@ -191,7 +187,6 @@ def retention_idle_unknown():
     cancel(sb, active)
     time.sleep(2.2)
     assert call("GET", "/v1/sandboxes/" + sb)["state"] == "killed"
-    # Keep history-count and global byte-pressure evidence independently clear.
     sb = create()
     active = start(sb, ["sleep", "300"])
     output_bytes = 0
@@ -238,15 +233,12 @@ def paused_missing_cancel():
     sb = create()
     command = ["sh", "-c", "echo ready; exec sleep 30"]
     a, b = start(sb, command), start(sb, command)
-    # An attached exec may not have reached its first instruction yet. This
-    # case evicts two running processes, not two in-flight Docker starts.
     deadline = time.monotonic() + 5
     while not all("ready" in get(sb, ex)["stdout"] for ex in (a, b)):
         assert time.monotonic() < deadline, "commands did not start before pause"
         time.sleep(.02)
     call("POST", "/v1/sandboxes/" + sb + "/pause")
     subprocess.run(["docker", "rm", "-f", "tiny-sandbox-" + sb], check=True, capture_output=True)
-    # A sweep may win the race and make cancel return the terminal record.
     try:
         call("POST", path(sb, a["id"]) + "/cancel")
     except AssertionError as error:
@@ -264,8 +256,6 @@ def lifetime_and_fallback():
     evidence = []
     for reason in ["canceled", "timeout"]:
         sb = create()
-        # Remove this command's PID file before its sibling starts. The real
-        # signal helper cannot find it, forcing actual container removal.
         a = start(sb, ["sh", "-c", "rm -f /run/tiny-sandbox/*; echo ready; sleep 60"],
                   **({"timeout_seconds": 1} if reason == "timeout" else {}))
         deadline = time.monotonic() + 5
@@ -275,8 +265,6 @@ def lifetime_and_fallback():
         b = start(sb, ["sleep", "60"])
         if reason == "canceled":
             call("POST", path(sb, a["id"]) + "/cancel")
-        # Timeout's signal attempts each retry a missing PID for three seconds,
-        # plus the normal grace/deadline. Allow the complete escalation budget.
         deadline = time.monotonic() + 25
         while get(sb, b)["state"] != "completed":
             assert time.monotonic() < deadline, get(sb, b)
@@ -315,6 +303,5 @@ finally:
             print("FAIL cleanup", sb, repr(error), file=sys.stderr)
     pathlib.Path(artifact).write_text(json.dumps(report, indent=2) + "\n")
 
-# Reached only without an original exception; cleanup failure still fails CI.
 if not report["passed"]:
     raise SystemExit(1)

@@ -10,8 +10,6 @@ import (
 	"time"
 )
 
-// Labels are fixed operation templates and outcomes, never IDs, commands,
-// images, credentials, query strings or arbitrary request paths.
 type metrics struct {
 	mu              sync.Mutex
 	timings         map[string]*timing

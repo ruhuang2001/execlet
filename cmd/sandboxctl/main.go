@@ -73,8 +73,6 @@ func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
-// run is main with its streams injected, so the end-to-end suite can assert
-// both what a command prints and what it returns.
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		_, _ = fmt.Fprint(stderr, usage)
@@ -82,8 +80,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	g := &globals{}
-	// Global flags may appear before the command; Flags stops at the first
-	// non-flag argument, which is the command name.
 	if code, done := g.parse(args, stdout, stderr); done {
 		return code
 	}
@@ -125,14 +121,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 }
 
-// globals holds the flags that apply to every command.
 type globals struct {
 	domain string
 	apiKey string
 	rest   []string
 }
 
-// parse reads global flags up to the command name (or "--").
 func (g *globals) parse(args []string, _, stderr io.Writer) (int, bool) {
 	fs := flag.NewFlagSet("sandboxctl", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -145,14 +139,12 @@ func (g *globals) parse(args []string, _, stderr io.Writer) (int, bool) {
 	return 0, false
 }
 
-// invocation is one command with its streams and configuration.
 type invocation struct {
 	stdout  io.Writer
 	stderr  io.Writer
 	globals *globals
 }
 
-// client builds the SDK client from the global flags and environment.
 func (in *invocation) client() (*sandbox.Client, error) {
 	cfg := sandbox.Config{Domain: in.globals.domain, APIKey: in.globals.apiKey}
 	c, err := sandbox.NewClient(cfg)
@@ -162,13 +154,10 @@ func (in *invocation) client() (*sandbox.Client, error) {
 	return c, nil
 }
 
-// contextWithSignals cancels work on Ctrl+C or SIGTERM.
 func contextWithSignals() (context.Context, context.CancelFunc) {
 	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 }
 
-// fail prints an error the way the contract specifies and returns the exit
-// code for it.
 func (in *invocation) fail(err error) int {
 	_, _ = fmt.Fprintf(in.stderr, "sandboxctl: %s\n", messageOf(err))
 	if hint := hintFor(err); hint != "" {
@@ -177,17 +166,12 @@ func (in *invocation) fail(err error) int {
 	return exitCode(err)
 }
 
-// messageOf strips the SDK's "sandbox: " prefix, because the CLI speaks for
-// itself.
 func messageOf(err error) string {
 	msg := err.Error()
 	msg = strings.TrimPrefix(msg, "sandbox: ")
 	return msg
 }
 
-// exitCode maps an SDK error to the CLI's exit code: the command's own code
-// when it is a normal exit status, 130 for cancellation, 1 for everything
-// else.
 func exitCode(err error) int {
 	var sdkErr *sandbox.Error
 	if !errors.As(err, &sdkErr) {
@@ -197,9 +181,6 @@ func exitCode(err error) int {
 		*sdkErr.Execution.TerminationReason == sandbox.ReasonExited &&
 		sdkErr.Execution.ExitCode != nil {
 		code := *sdkErr.Execution.ExitCode
-		// 1–125 are the command's own failures; 126/127 mean the sandbox
-		// could not run it at all, and every other outcome is a sandbox
-		// failure, so they all collapse to 1.
 		if code >= 1 && code <= 125 {
 			return code
 		}
@@ -211,7 +192,6 @@ func exitCode(err error) int {
 	return 1
 }
 
-// hintFor suggests the next step for the conditions cli.md lists.
 func hintFor(err error) string {
 	switch {
 	case errors.Is(err, sandbox.ErrOOM):
@@ -232,7 +212,6 @@ func hintFor(err error) string {
 	return ""
 }
 
-// isConnectionRefused detects a transport failure to reach the server.
 func isConnectionRefused(err error) bool {
 	var opErr *net.OpError
 	if errors.As(err, &opErr) {
@@ -245,16 +224,11 @@ func isConnectionRefused(err error) bool {
 	return strings.Contains(err.Error(), "connection refused")
 }
 
-// ---------------------------------------------------------------- output
-
-// printSandbox writes the stable one-line form used by list and lifecycle
-// commands.
 func (in *invocation) printSandbox(sb *sandbox.Sandbox) {
 	_, _ = fmt.Fprintf(in.stdout, "%s %s %s %s\n", sb.ID, sb.State, sb.Image,
 		sb.CreatedAt.UTC().Format(time.RFC3339))
 }
 
-// printExecutionStatus writes the status line the contract fixes.
 func (in *invocation) printExecutionStatus(ex *sandbox.Execution) {
 	if ex == nil {
 		return
@@ -270,12 +244,6 @@ func (in *invocation) printExecutionStatus(ex *sandbox.Execution) {
 	_, _ = fmt.Fprintf(in.stderr, "execution %s: %s (%s), exit %s\n", ex.ID, ex.State, reason, exit)
 }
 
-// ---------------------------------------------------------------- helpers
-
-// splitCommand separates command arguments from flags: everything after "--"
-// is the command, and a bare command with no "--" is accepted too, because
-// `sandboxctl run -- ls` is the documented form but `sandboxctl run ls` has no
-// other meaning.
 func splitCommand(args []string) (flags, command []string) {
 	for i, arg := range args {
 		if arg == "--" {
@@ -285,8 +253,6 @@ func splitCommand(args []string) (flags, command []string) {
 	return args, nil
 }
 
-// splitArgs splits trailing positional arguments from flags for the commands
-// that take IDs before flags.
 func splitArgs(args []string) (positional, flags []string) {
 	i := 0
 	for ; i < len(args); i++ {
@@ -298,8 +264,6 @@ func splitArgs(args []string) (positional, flags []string) {
 	return positional, args[i:]
 }
 
-// isLocalDomain reports whether a domain points at this machine, which decides
-// whether doctor can check Docker.
 func isLocalDomain(domain string) bool {
 	u, err := url.Parse(domain)
 	if err != nil {
@@ -313,8 +277,6 @@ func isLocalDomain(domain string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// healthProbe is doctor's only direct HTTP call. Everything else goes through
-// the SDK, so no path bypasses its start recovery.
 func healthProbe(ctx context.Context, domain string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(domain, "/")+"/healthz", nil)
 	if err != nil {

@@ -16,13 +16,10 @@ import (
 	"time"
 )
 
-// RecoveryBackend must enumerate exact owned IDs, not names or PID prefixes.
 type RecoveryBackend interface {
 	Owned(context.Context, string) ([]string, error)
 }
 
-// Journal is an opt-in, single-writer local control store. It is not a process
-// checkpoint: uncertain commands are never restarted or silently reattached.
 type Journal struct {
 	mu      sync.Mutex
 	dir     string
@@ -57,8 +54,6 @@ type journalHeader struct {
 	Key     [32]byte `json:"fingerprint_key"`
 }
 
-// OpenJournal validates ownership and holds a kernel lock until Close. A corrupt
-// store or a second daemon fails before Docker is touched. Use local storage.
 func OpenJournal(dir, owner string) (*Journal, error) {
 	if owner == "" {
 		return nil, errors.New("recovery requires a stable owner")
@@ -111,7 +106,6 @@ func OpenJournal(dir, owner string) (*Journal, error) {
 	return j, nil
 }
 
-// Close prevents late workers from writing after releasing the single-writer lock.
 func (j *Journal) Close() error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
@@ -133,7 +127,6 @@ func (j *Journal) read(name string, value any) error {
 		return err
 	}
 	defer func() { _ = f.Close() }()
-	// A single retained execution is bounded; refuse unbounded or corrupt files.
 	data, err := io.ReadAll(io.LimitReader(f, 8*MaxOutputBytes+1))
 	if err != nil {
 		return err
@@ -230,8 +223,6 @@ func (s *Sandboxes) saveSandboxExceptLocked(sb *sandbox, omit string) error {
 	return nil
 }
 
-// Remove the manifest entry first. A crash can retain extra history, never
-// silently forget a live sandbox's acknowledged idempotency record.
 func (s *Sandboxes) forgetExecution(sb *sandbox, ex *execution) error {
 	if err := s.saveSandboxExceptLocked(sb, ex.id); err != nil {
 		return err
@@ -247,9 +238,6 @@ func (s *Sandboxes) saveExecution(ex *execution, snapshot Execution, events []Ev
 	return s.journal.write(ex.sandboxID+"-"+ex.id+".json", storedExecution{1, snapshot, ex.key, ex.envDigest, ex.envCount, ex.stdinDigest, ex.timeoutMS, events, ex.outputLost})
 }
 
-// Recover validates every record before reconciling Docker. It preserves idle
-// containers, completes interrupted executions as unknown, and removes their
-// containers and owned orphans before admitting traffic. It never executes code.
 func (s *Sandboxes) Recover(ctx context.Context, j *Journal, backend RecoveryBackend) error {
 	entries, err := os.ReadDir(j.dir)
 	if err != nil {
@@ -291,8 +279,6 @@ func (s *Sandboxes) Recover(ctx context.Context, j *Journal, backend RecoveryBac
 			sandboxes = append(sandboxes, value)
 		}
 	}
-	// Validate the complete graph before even enumerating Docker. Corrupt
-	// history must not turn recovery into partial adoption or deletion.
 	seen := map[string]bool{}
 	containers := map[string]bool{}
 	for _, value := range sandboxes {
@@ -378,8 +364,6 @@ func (s *Sandboxes) Recover(ctx context.Context, j *Journal, backend RecoveryBac
 			}
 			if v.State == ExecRunning {
 				unsafe = true
-				// Live output was not durably committed. Do not replay an old cursor
-				// as a complete log or infer success from the surviving container.
 				ex.log.truncated = true
 			} else {
 				if !ex.log.complete || v.FinishedAt == nil || v.TerminationReason == nil {
@@ -415,13 +399,10 @@ func (s *Sandboxes) Recover(ctx context.Context, j *Journal, backend RecoveryBac
 			if adopter, ok := s.backend.(interface {
 				Adopt(context.Context, string, ContainerSpec) error
 			}); ok {
-				// Paused containers cannot execute the kernel verification probe.
 				unsafe = sb.state == StatePaused || adopter.Adopt(ctx, sb.container, ContainerSpec{Image: opts.image, MemoryMB: opts.memoryMB, PidsLimit: opts.pidsLimit, NanoCPUs: opts.nanoCPUs, Network: opts.network}) != nil
 			}
 		}
 		if unsafe {
-			// Commit the tombstone before completing uncertain records. A crash
-			// here must never make a still-live container look safe to adopt.
 			sb.state = StateKilled
 			sb.released = true
 			sb.expiresAt = nil
@@ -460,8 +441,6 @@ func (s *Sandboxes) Recover(ctx context.Context, j *Journal, backend RecoveryBac
 	return s.durableReady()
 }
 
-// DrainPersistent preserves idle sandboxes but ends active work on graceful
-// shutdown. Crash recovery remains conservative even if this drain fails.
 func (s *Sandboxes) DrainPersistent(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, shutdownBudget)
 	defer cancel()
@@ -472,7 +451,7 @@ func (s *Sandboxes) DrainPersistent(ctx context.Context) {
 		select {
 		case slots <- struct{}{}:
 		case <-ctx.Done():
-			return // Remaining live intents are reconciled on the next startup.
+			return
 		}
 		workers.Go(func() {
 			defer func() { <-slots }()

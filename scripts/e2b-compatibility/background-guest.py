@@ -24,7 +24,6 @@ def identity():
 
 def term(_sig, _frame):
     (root / 'TERM').write_text('received')
-    # Ignore TERM deliberately: native cancel must escalate, immediate kill must not send it.
 
 
 signal.signal(signal.SIGTERM, term)
@@ -56,15 +55,12 @@ def gate(name):
 
 gate('GO')
 if config.get('oom'):
-    # Bounded by this fixture's 48 MiB container cgroup, not host memory.
     blocks = []
     while True:
         blocks.append(bytearray(4 * 1024 * 1024))
 if config.get('event_steps'):
     for i in range(config['event_steps']):
         os.write(1, f'event:{i:04}\n'.encode())
-        # The independent SSE observer acknowledges every delivered frame;
-        # two writes therefore cannot coalesce into one output event.
         deadline = time.monotonic() + 20
         while not (root / 'ACK').exists() or (root / 'ACK').read_text() != str(i):
             if time.monotonic() >= deadline:
@@ -72,7 +68,6 @@ if config.get('event_steps'):
             time.sleep(.001)
 for i in range(config.get('lines', 12)):
     for stream, text in ((1, f'out:{i:02}:世界🌍\n'), (2, f'err:{i:02}:不同🙂\n')):
-        # Split UTF-8 code points across writes; assertions compare bytes/text, never chunks.
         data = text.encode()
         os.write(stream, data[:7])
         os.write(stream, data[7:])

@@ -35,8 +35,6 @@ func TestFailedCleanupRetriesWithoutAnotherWait(t *testing.T) {
 	}
 	p := proc.(*process)
 	f.mu.Lock()
-	// Exit was confirmed before the failed rm. Docker GC'ing the exec
-	// record must not prevent the worker from retrying that exact removal.
 	delete(f.execs, p.execID)
 	cmds := slices.Clone(f.execCommands)
 	f.mu.Unlock()

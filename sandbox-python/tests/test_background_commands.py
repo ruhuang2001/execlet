@@ -210,8 +210,6 @@ class BackgroundCommandsTests(unittest.TestCase):
         self.assertEqual(body["cwd"], "/tmp")
 
     def test_pinned_duration_conversion_via_public_api(self):
-        # The smallest supported deadline cannot reliably complete loopback HTTP.
-        # Mock only public native operations; still invoke the real adapter API.
         with patch.object(Client, "get_capabilities", return_value=Capabilities(capabilities=["e2b.background.v1"])), \
                 patch.object(Client, "start_execution", return_value=Execution.from_dict(execution())) as start:
             for seconds, milliseconds in ((0, 0), (1.25, 1250), (.00001, 1), (.0025, 2), (.0035, 4), (9223372036.854, 9223372036854)):
@@ -798,13 +796,13 @@ class BackgroundCommandsTests(unittest.TestCase):
         thread.start()
         try:
             with Client(domain=f"http://127.0.0.1:{server.server_port}", api_key="unit-key") as pooled:
-                pooled.get_sandbox(SID)  # warm both the socket and the server handler
+                pooled.get_sandbox(SID)
                 start = threading.Thread.start
                 with patch.object(threading.Thread, "start", autospec=True, side_effect=start) as spawned:
                     for _ in range(8):
                         token = CancellationToken(timeout=2)
                         self.assertEqual(pooled.get_sandbox(SID, cancel=token).id, SID)
-                        token.cancel()  # previous lease cannot interrupt the next borrower
+                        token.cancel()
                     self.assertLessEqual(spawned.call_count, 1)
             self.assertEqual(len(ports), 9)
             self.assertEqual(len(set(ports)), 1)
@@ -824,7 +822,7 @@ class BackgroundCommandsTests(unittest.TestCase):
             def do_GET(self):
                 calls.append((self.command, self.client_address[1]))
                 if len(calls) > 1:
-                    self.close_connection = True  # accepted, then disconnected before headers
+                    self.close_connection = True
                     return
                 data = json.dumps({"id": SID, "state": "running"}).encode()
                 self.send_response(200)

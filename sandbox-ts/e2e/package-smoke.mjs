@@ -23,7 +23,6 @@ try {
   writeFileSync(resolve(out, 'browser-bundle.js'), bundle);
   writeFileSync(resolve(out, 'browser-metafile.json'), JSON.stringify(bundled.metafile, null, 2));
   const context = vm.createContext({
-    // Deliberately only Web APIs. No process, Buffer, require, or Node modules.
     fetch, Headers, Request, Response, ReadableStream, TextEncoder, TextDecoder,
     URL, AbortController, AbortSignal, crypto: globalThis.crypto, setTimeout, clearTimeout,
     configuration: { domain, apiKey },

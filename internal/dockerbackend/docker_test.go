@@ -1,12 +1,5 @@
 //go:build docker
 
-// Package dockerbackend's real-Docker tests. They need a running Docker daemon
-// and are excluded from ordinary runs:
-//
-//	go test -tags docker ./internal/dockerbackend/ -run TestReal -v
-//
-// Each test cleans up its own containers and asserts the daemon's container
-// list is empty afterwards.
 package dockerbackend
 
 import (
@@ -21,7 +14,6 @@ import (
 	"github.com/ruhuang2001/tiny-sandbox/internal/dockerapi"
 )
 
-// dockerSocket returns the daemon socket path, honouring DOCKER_HOST.
 func dockerSocket(t *testing.T) string {
 	t.Helper()
 	if host := os.Getenv("DOCKER_HOST"); strings.HasPrefix(host, "unix://") {
@@ -30,8 +22,6 @@ func dockerSocket(t *testing.T) string {
 	return "/var/run/docker.sock"
 }
 
-// realHarness is a daemon store over the real Docker backend, with an owner
-// label unique to the test so cleanup can find everything it created.
 type realHarness struct {
 	t     *testing.T
 	owner string
@@ -93,7 +83,6 @@ func (h *realHarness) create() daemon.Sandbox {
 
 func ptr[T any](v T) *T { return &v }
 
-// exec runs a command and returns its execution ID.
 func (h *realHarness) exec(sandboxID string, command ...string) string {
 	h.t.Helper()
 	ex, _, err := h.s.StartExecution(context.Background(), sandboxID, daemon.ExecuteRequest{Command: command})
@@ -103,7 +92,6 @@ func (h *realHarness) exec(sandboxID string, command ...string) string {
 	return ex.ID
 }
 
-// output returns the retained stdout of an execution.
 func (h *realHarness) output(sandboxID, executionID string) string {
 	h.t.Helper()
 	ex, err := h.s.GetExecution(sandboxID, executionID)
@@ -113,7 +101,6 @@ func (h *realHarness) output(sandboxID, executionID string) string {
 	return ex.Stdout
 }
 
-// waitFor polls cond until it holds, failing the test on timeout.
 func (h *realHarness) waitFor(what string, timeout time.Duration, cond func() bool) {
 	h.t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -126,15 +113,11 @@ func (h *realHarness) waitFor(what string, timeout time.Duration, cond func() bo
 	h.t.Fatalf("timed out waiting for %s", what)
 }
 
-// TestRealCounterAdvancesAcrossPause proves pause freezes processes rather
-// than only flipping a state field: a counter that prints while it runs must
-// stop advancing while the sandbox is paused and continue after resume.
 func TestRealCounterAdvancesAcrossPause(t *testing.T) {
 	h := newRealHarness(t)
 	sb := h.create()
 	id := h.exec(sb.ID, "sh", "-c", "i=0; while true; do i=$((i+1)); echo $i; sleep 0.05; done")
 
-	// Let a few lines accumulate.
 	h.waitFor("initial output", 10*time.Second, func() bool {
 		return strings.Count(h.output(sb.ID, id), "\n") >= 3
 	})
@@ -142,7 +125,7 @@ func TestRealCounterAdvancesAcrossPause(t *testing.T) {
 	if _, err := h.s.Pause(context.Background(), sb.ID); err != nil {
 		t.Fatalf("pause: %v", err)
 	}
-	time.Sleep(200 * time.Millisecond) // let an in-flight write land
+	time.Sleep(200 * time.Millisecond)
 	frozen := h.output(sb.ID, id)
 	time.Sleep(700 * time.Millisecond)
 	if after := h.output(sb.ID, id); after != frozen {
@@ -161,16 +144,11 @@ func TestRealCounterAdvancesAcrossPause(t *testing.T) {
 	}
 }
 
-// TestRealExternalKillIsEvicted stops the container behind the daemon's back
-// with kill -9. The process exits 137, which must classify as evicted, never
-// as oom: no intent was recorded and the cgroup counter did not move.
 func TestRealExternalKillIsEvicted(t *testing.T) {
 	h := newRealHarness(t)
 	sb := h.create()
 	id := h.exec(sb.ID, "sleep", "100")
 
-	// The sandbox's container is the one carrying this test's owner label;
-	// the daemon's in-memory record is not reachable from another package.
 	list, err := h.api.ContainerList(context.Background(), true, map[string][]string{
 		"label": {daemon.OwnerLabelKey + "=" + h.owner},
 	})
@@ -178,8 +156,6 @@ func TestRealExternalKillIsEvicted(t *testing.T) {
 		t.Fatalf("find container: %v, %d containers", err, len(list))
 	}
 	container := list[0].ID
-	// Externally kill the container's init process. This is the `docker kill`
-	// an operator would type, not a daemon request, so nothing records intent.
 	if err := h.api.ContainerKill(context.Background(), container, "KILL"); err != nil {
 		t.Fatalf("external kill: %v", err)
 	}
@@ -199,7 +175,6 @@ func TestRealExternalKillIsEvicted(t *testing.T) {
 		t.Logf("exit code = %v (137 expected but not required for eviction)", ex.ExitCode)
 	}
 
-	// The eviction sweep must also kill the sandbox itself.
 	h.waitFor("sandbox to be killed", 10*time.Second, func() bool {
 		got, err := h.s.Get(sb.ID)
 		return err == nil && got.State == daemon.StateKilled
@@ -213,9 +188,6 @@ func TestRealExternalKillIsEvicted(t *testing.T) {
 	}
 }
 
-// TestRealOOMIsOOM proves the cgroup counter distinguishes the kernel OOM
-// killer from every other 137: a process that exceeds the container limit is
-// killed by the kernel, and the delta attributes it to the execution.
 func TestRealOOMIsOOM(t *testing.T) {
 	h := newRealHarness(t)
 	sb, err := h.s.Create(context.Background(), daemon.CreateRequest{
@@ -226,10 +198,6 @@ func TestRealOOMIsOOM(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	// Allocate 256 MiB of anonymous memory in a 64 MiB container. Anonymous
-	// pages cannot be reclaimed the way page cache can, so the kernel kills
-	// the process instead of dropping data. A file the page cache owns would
-	// be reclaimed and the command would exit 0.
 	id := h.exec(sb.ID, "python3", "-c", "x = bytearray(256 * 1024 * 1024)")
 
 	h.waitFor("execution to complete", 30*time.Second, func() bool {
@@ -253,7 +221,6 @@ func TestRealOOMIsOOM(t *testing.T) {
 	}
 }
 
-// waitCompleted blocks until an execution is terminal and returns it.
 func (h *realHarness) waitCompleted(sandboxID, executionID string) daemon.Execution {
 	h.t.Helper()
 	h.waitFor("execution to complete", 15*time.Second, func() bool {
@@ -267,8 +234,6 @@ func (h *realHarness) waitCompleted(sandboxID, executionID string) daemon.Execut
 	return ex
 }
 
-// derefInt reports an exit code for a failure message. A nil code means the
-// execution did not exit, which is worth seeing as such in the output.
 func derefInt(v *int) int {
 	if v == nil {
 		return -1
@@ -276,8 +241,6 @@ func derefInt(v *int) int {
 	return *v
 }
 
-// run starts an execution through the daemon, the same path a client takes,
-// and returns it once terminal.
 func (h *realHarness) run(sandboxID string, req daemon.ExecuteRequest) daemon.Execution {
 	h.t.Helper()
 	ex, _, err := h.s.StartExecution(context.Background(), sandboxID, req)
@@ -287,14 +250,6 @@ func (h *realHarness) run(sandboxID string, req daemon.ExecuteRequest) daemon.Ex
 	return h.waitCompleted(sandboxID, ex.ID)
 }
 
-// TestRealWorkingDirectoryIsPhysical proves the directory is resolved the way
-// the filesystem resolves it, not the way a shell abbreviates it.
-//
-// The wrapper chdirs, so the shell's own rules apply unless -P overrides them:
-// a logical cd simplifies ".." lexically, before it looks at the filesystem.
-// With link -> /data, a request for /work/link/.. then lands in /work, and
-// /nope/.. succeeds because ".." removes the component that does not exist.
-// Both would run the command somewhere the caller never named.
 func TestRealWorkingDirectoryIsPhysical(t *testing.T) {
 	h := newRealHarness(t)
 	sb := h.create()
@@ -306,14 +261,11 @@ func TestRealWorkingDirectoryIsPhysical(t *testing.T) {
 		t.Fatalf("fixture: exit %d, stderr %q", derefInt(fixture.ExitCode), fixture.Stderr)
 	}
 
-	// The symlink is followed first, so ".." applies to its target.
 	if ex := h.run(sb.ID, daemon.ExecuteRequest{Command: []string{"pwd"}, Cwd: "/work/link/.."}); strings.TrimSpace(ex.Stdout) != "/data" {
 		t.Errorf("pwd in /work/link/.. = %q (exit %d), want /data; the path was "+
 			"simplified lexically instead of resolved", ex.Stdout, derefInt(ex.ExitCode))
 	}
 
-	// A component that does not exist cannot be removed by "..", so this is
-	// an unusable directory rather than /tmp.
 	ex := h.run(sb.ID, daemon.ExecuteRequest{Command: []string{"pwd"}, Cwd: "/tmp/nonexistent-review-directory/.."})
 	if ex.ExitCode == nil || *ex.ExitCode != 126 {
 		t.Errorf("exit in /tmp/nonexistent-review-directory/.. = %d (stdout %q), "+
@@ -323,20 +275,11 @@ func TestRealWorkingDirectoryIsPhysical(t *testing.T) {
 		t.Errorf("stderr = %q, want the cwd marker", ex.Stderr)
 	}
 
-	// The plain path still works, so -P did not break the ordinary case.
 	if ex := h.run(sb.ID, daemon.ExecuteRequest{Command: []string{"pwd"}, Cwd: "/work"}); strings.TrimSpace(ex.Stdout) != "/work" {
 		t.Errorf("pwd in /work = %q (exit %d), want /work", ex.Stdout, derefInt(ex.ExitCode))
 	}
 }
 
-// TestRealEnvironmentSurvivesTheShell proves the requested entries reach the
-// target unchanged, including names a shell rejects.
-//
-// The exec environment passes through /bin/sh, which imports only names it
-// considers valid identifiers: dash drops MY-VAR and CONFIG.KEY outright, and
-// both shells rewrite IFS, PWD and SHLVL. The wrapper's env(1) step is what
-// makes the target's environment the one the caller asked for, on whichever
-// shell the image ships.
 func TestRealEnvironmentSurvivesTheShell(t *testing.T) {
 	h := newRealHarness(t)
 	sb := h.create()
@@ -347,9 +290,7 @@ func TestRealEnvironmentSurvivesTheShell(t *testing.T) {
 		"SHLVL":      "42",
 		"IFS":        "connector",
 		"NORMAL":     "kept",
-		// A name starting with "-" is accepted by the contract and would be
-		// read as an option by env without "--" in front of the entries.
-		"-X": "dash",
+		"-X":         "dash",
 	}
 	ex := h.run(sb.ID, daemon.ExecuteRequest{Command: []string{"env"}, Env: want})
 	if ex.ExitCode == nil || *ex.ExitCode != 0 {
@@ -370,9 +311,6 @@ func TestRealEnvironmentSurvivesTheShell(t *testing.T) {
 	}
 }
 
-// TestRealEnvironmentOverrideAppliesWithoutEnvOnPath proves the environment
-// step does not depend on PATH. A request that replaces PATH would otherwise
-// hide env(1) itself and fail every execution that sets a variable.
 func TestRealEnvironmentOverrideAppliesWithoutEnvOnPath(t *testing.T) {
 	h := newRealHarness(t)
 	sb := h.create()
@@ -384,8 +322,6 @@ func TestRealEnvironmentOverrideAppliesWithoutEnvOnPath(t *testing.T) {
 		t.Fatalf("fixture: exit %d, stderr %q", derefInt(fixture.ExitCode), fixture.Stderr)
 	}
 
-	// The command is found only through the PATH the request sets, which also
-	// means env(1) is not on it.
 	ex := h.run(sb.ID, daemon.ExecuteRequest{
 		Command: []string{"mybin"},
 		Env:     map[string]string{"PATH": "/custom"},
@@ -398,14 +334,6 @@ func TestRealEnvironmentOverrideAppliesWithoutEnvOnPath(t *testing.T) {
 	}
 }
 
-// TestRealCommandPathWithEqualsIsNotAnAssignment proves the environment step
-// cannot swallow the command.
-//
-// env(1) treats every leading NAME=VALUE as an assignment and only then starts
-// the command; "--" ends option parsing, not assignment parsing. A command
-// whose own path contains "=" would therefore become one more variable: env
-// would run nothing, exit 0, and print the environment, secrets included, as
-// if the program had produced that output.
 func TestRealCommandPathWithEqualsIsNotAnAssignment(t *testing.T) {
 	h := newRealHarness(t)
 	sb := h.create()
@@ -430,27 +358,6 @@ func TestRealCommandPathWithEqualsIsNotAnAssignment(t *testing.T) {
 	}
 }
 
-// TestRealWrapperDoesNotShadowImageVariables runs the real wrapper in a shell
-// that already exports n and e.
-//
-// A shell assignment to a name that is already exported replaces that value,
-// and the wrapper is a shell. An earlier version read its argument count into
-// "n" and probed env into "e", so an image that exports either name had it
-// silently rewritten, even for a request that set no environment at all.
-//
-// The variables come from the shell that starts the wrapper rather than from
-// the image, because a request-level entry is supposed to win and so cannot
-// express "the image already sets this". Exporting them first is exactly the
-// environment an image produces.
-//
-// The outer shell is a launcher, not part of the subject: it exports the
-// names, then execs the wrapper with the wrapper's own argument layout —
-// $0 the PID path, $1 the directory, $2 the count, $3 the separator flag
-// (0 here: these commands contain no "="), then the entries and the
-// command. Passing the wrapper text through a positional parameter and
-// forwarding the rest keeps every argument where the wrapper expects it; an
-// earlier version of this test shifted them, so the wrapper ran against the
-// wrong layout and passed for the wrong reason.
 func TestRealWrapperDoesNotShadowImageVariables(t *testing.T) {
 	h := newRealHarness(t)
 	sb := h.create()
@@ -465,8 +372,6 @@ func TestRealWrapperDoesNotShadowImageVariables(t *testing.T) {
 		{"one unrelated entry", "1", []string{"EXTRA=value"}, []string{"/usr/bin/env"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			// $0 is the launcher source, $1 the wrapper text to run, $2 the
-			// count, and "$@" after the shift the rest of the wrapper's argv.
 			launcher := `export n=image-n e=image-e
 wrapper=$1
 count=$2
@@ -497,9 +402,6 @@ exec /bin/sh -c "$wrapper" /tmp/shadow-pid "" "$count" 0 "$@"`
 					got[name] = value
 				}
 			}
-			// The probe must have produced an environment at all: an empty map
-			// would make the two checks below pass without the wrapper ever
-			// reaching env.
 			if len(got) == 0 {
 				t.Fatalf("the probe printed no environment, so it never ran (stderr %q)", stderr)
 			}
@@ -511,9 +413,6 @@ exec /bin/sh -c "$wrapper" /tmp/shadow-pid "" "$count" 0 "$@"`
 				t.Errorf("e = %q, want image-e: the wrapper overwrote a variable "+
 					"that was already exported", got["e"])
 			}
-			// Every entry must reach env. If the launcher's layout were off by
-			// one, the wrapper would consume an entry as layout metadata and
-			// the checks above would still pass.
 			for _, entry := range tc.env {
 				name, value, _ := strings.Cut(entry, "=")
 				if got[name] != value {
@@ -524,7 +423,6 @@ exec /bin/sh -c "$wrapper" /tmp/shadow-pid "" "$count" 0 "$@"`
 	}
 }
 
-// containerID returns the container behind a sandbox.
 func (h *realHarness) containerID(sandboxID string) string {
 	h.t.Helper()
 	list, err := h.api.ContainerList(context.Background(), true, map[string][]string{

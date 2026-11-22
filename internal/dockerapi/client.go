@@ -1,10 +1,3 @@
-// Package dockerapi is a minimal client for the Docker Engine API over a unix
-// socket. It covers exactly the operations internal/dockerbackend needs:
-// container create, start, remove, pause, unpause, kill and list; exec create,
-// start and inspect; and the archive API for files.
-//
-// It knows nothing about sandboxes. Parsers and request shaping live here so
-// they can be unit-tested without a daemon.
 package dockerapi
 
 import (
@@ -22,20 +15,14 @@ import (
 	"github.com/ruhuang2001/tiny-sandbox/internal/wirejson"
 )
 
-// maxErrorBody bounds how much of an error response is read into a message.
 const maxErrorBody = 64 << 10
 
-// Client sends requests to one Docker daemon. It is safe for concurrent use.
 type Client struct {
-	base string // scheme://host; the socket decides where it really goes
-	http *http.Client
-	// version is the path prefix of the negotiated API version, such as
-	// "/v1.52". Empty until Negotiate succeeds.
+	base    string
+	http    *http.Client
 	version string
 }
 
-// New returns a client for base using hc. Call Negotiate before the first
-// request; Dial does it for you.
 func New(base string, hc *http.Client) *Client {
 	if hc == nil {
 		hc = &http.Client{Timeout: 30 * time.Second}
@@ -43,10 +30,6 @@ func New(base string, hc *http.Client) *Client {
 	return &Client{base: strings.TrimRight(base, "/"), http: hc}
 }
 
-// Dial connects to the Docker socket at socketPath and negotiates the API
-// version. The returned client has no request timeout: exec streams are as
-// long-lived as the command they carry, and callers bound requests with their
-// own contexts.
 func Dial(ctx context.Context, socketPath string) (*Client, error) {
 	tr := &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
@@ -65,7 +48,6 @@ func Dial(ctx context.Context, socketPath string) (*Client, error) {
 	return c, nil
 }
 
-// Ping checks Docker's unversioned endpoint with the caller's deadline.
 func (c *Client) Ping(ctx context.Context) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/_ping", nil)
 	if err != nil {
@@ -91,13 +73,8 @@ func (c *Client) Ping(ctx context.Context) error {
 	return nil
 }
 
-// Version returns the negotiated API version, such as "1.52", or an empty
-// string before negotiation.
 func (c *Client) Version() string { return strings.TrimPrefix(c.version, "/v") }
 
-// Negotiate asks the daemon for its API version and prefixes later requests
-// with it. Using the daemon's own version means a newer client speaks the
-// dialect the server actually implements.
 func (c *Client) Negotiate(ctx context.Context) error {
 	var v struct {
 		APIVersion string `json:"ApiVersion"`
@@ -113,9 +90,6 @@ func (c *Client) Negotiate(ctx context.Context) error {
 	return nil
 }
 
-// ---------------------------------------------------------------- containers
-
-// ContainerCreate creates a container and returns its ID.
 func (c *Client) ContainerCreate(ctx context.Context, name string, cfg ContainerConfig) (string, error) {
 	q := url.Values{}
 	if name != "" {
@@ -134,18 +108,15 @@ func (c *Client) ContainerCreate(ctx context.Context, name string, cfg Container
 	return out.ID, nil
 }
 
-// ContainerStart starts a created container and returns once it is running.
 func (c *Client) ContainerStart(ctx context.Context, id string) error {
 	return c.send(ctx, http.MethodPost, "/containers/"+id+"/start", nil, nil)
 }
 
-// ContainerRemove force-removes a container and everything running in it.
 func (c *Client) ContainerRemove(ctx context.Context, id string) error {
 	q := url.Values{"force": {"1"}, "v": {"1"}}
 	return c.send(ctx, http.MethodDelete, "/containers/"+id, q, nil)
 }
 
-// ContainerInspect returns one container's state.
 func (c *Client) ContainerInspect(ctx context.Context, id string) (ContainerInspect, error) {
 	var out ContainerInspect
 	if err := c.getJSON(ctx, "/containers/"+id+"/json", &out); err != nil {
@@ -154,18 +125,14 @@ func (c *Client) ContainerInspect(ctx context.Context, id string) (ContainerInsp
 	return out, nil
 }
 
-// ContainerPause freezes every process in a container.
 func (c *Client) ContainerPause(ctx context.Context, id string) error {
 	return c.send(ctx, http.MethodPost, "/containers/"+id+"/pause", nil, nil)
 }
 
-// ContainerUnpause resumes a paused container.
 func (c *Client) ContainerUnpause(ctx context.Context, id string) error {
 	return c.send(ctx, http.MethodPost, "/containers/"+id+"/unpause", nil, nil)
 }
 
-// ContainerKill sends a signal to a container's init process. The Docker
-// daemon reports a container that is already stopped without an error.
 func (c *Client) ContainerKill(ctx context.Context, id, signal string) error {
 	q := url.Values{}
 	if signal != "" {
@@ -174,9 +141,6 @@ func (c *Client) ContainerKill(ctx context.Context, id, signal string) error {
 	return c.send(ctx, http.MethodPost, "/containers/"+id+"/kill", q, nil)
 }
 
-// ContainerList returns the containers matching filters. all selects stopped
-// containers too, which liveness needs: with all set, absence from the list
-// means the container no longer exists.
 func (c *Client) ContainerList(ctx context.Context, all bool, filters map[string][]string) ([]Container, error) {
 	q := url.Values{}
 	if all {
@@ -196,11 +160,6 @@ func (c *Client) ContainerList(ctx context.Context, all bool, filters map[string
 	return out, nil
 }
 
-// ---------------------------------------------------------------- exec
-
-// ExecCreate registers a command in a container and returns the exec ID.
-// Nothing runs until ExecStart. The caller fills Cmd and Env; the attach and
-// tty fields are fixed by the way the daemon reads the stream.
 func (c *Client) ExecCreate(ctx context.Context, containerID string, cfg ExecConfig) (string, error) {
 	body := cfg
 	body.AttachStdout = true
@@ -219,12 +178,6 @@ func (c *Client) ExecCreate(ctx context.Context, containerID string, cfg ExecCon
 	return out.ID, nil
 }
 
-// ExecStart runs a registered exec and returns its output stream. The stream
-// is multiplexed in Docker's 8-byte frame format; use Demux to read it. It
-// reaches EOF when the process exits.
-//
-// The caller must close it. The stream's lifetime is the command's, not the
-// caller's context: pass a context that stays valid while the command runs.
 func (c *Client) ExecStart(ctx context.Context, execID string) (io.ReadCloser, error) {
 	q := url.Values{"detach": {"false"}}
 	body, err := wirejson.Marshal(execStart{Detach: false, Tty: false})
@@ -243,8 +196,6 @@ func (c *Client) ExecStart(ctx context.Context, execID string) (io.ReadCloser, e
 	return resp.Body, nil
 }
 
-// ExecInspect reports an exec's current state and, once it is done, its exit
-// code. ExitCode is nil while the process runs.
 func (c *Client) ExecInspect(ctx context.Context, execID string) (ExecInspect, error) {
 	var out ExecInspect
 	if err := c.getJSON(ctx, "/exec/"+execID+"/json", &out); err != nil {
@@ -253,10 +204,6 @@ func (c *Client) ExecInspect(ctx context.Context, execID string) (ExecInspect, e
 	return out, nil
 }
 
-// ---------------------------------------------------------------- archive
-
-// ArchiveGet streams a tar archive of path from a container. The caller must
-// close it and read it with ExtractFile.
 func (c *Client) ArchiveGet(ctx context.Context, containerID, path string) (io.ReadCloser, error) {
 	q := url.Values{"path": {path}}
 	req, err := c.request(ctx, http.MethodGet, "/containers/"+containerID+"/archive", q, nil)
@@ -271,8 +218,6 @@ func (c *Client) ArchiveGet(ctx context.Context, containerID, path string) (io.R
 	return resp.Body, nil
 }
 
-// ArchivePut extracts a tar archive into path inside a container. Docker
-// creates missing parent directories for the archive's entries.
 func (c *Client) ArchivePut(ctx context.Context, containerID, path string, tarBody []byte) error {
 	q := url.Values{"path": {path}}
 	req, err := c.request(ctx, http.MethodPut, "/containers/"+containerID+"/archive", q, bytes.NewReader(tarBody))
@@ -289,8 +234,6 @@ func (c *Client) ArchivePut(ctx context.Context, containerID, path string, tarBo
 	return err
 }
 
-// ---------------------------------------------------------------- transport
-
 func (c *Client) path(p string) string { return c.version + p }
 
 func (c *Client) request(ctx context.Context, method, p string, q url.Values, body io.Reader) (*http.Request, error) {
@@ -305,7 +248,6 @@ func (c *Client) request(ctx context.Context, method, p string, q url.Values, bo
 	return req, nil
 }
 
-// do sends the request and turns a non-2xx answer into a *StatusError.
 func (c *Client) do(req *http.Request) (*http.Response, error) {
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -318,7 +260,6 @@ func (c *Client) do(req *http.Request) (*http.Response, error) {
 	return nil, statusError(resp)
 }
 
-// send performs a request whose response carries nothing of interest.
 func (c *Client) send(ctx context.Context, method, p string, q url.Values, body []byte) error {
 	var r io.Reader
 	if body != nil {

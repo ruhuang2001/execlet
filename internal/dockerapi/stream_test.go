@@ -9,8 +9,6 @@ import (
 	"testing"
 )
 
-// frame builds one multiplexed frame: type byte, three padding bytes, a
-// big-endian length, then the payload.
 func frame(stream byte, payload string) []byte {
 	var b bytes.Buffer
 	b.WriteByte(stream)
@@ -73,8 +71,6 @@ func TestDemuxTruncatedPayloadFails(t *testing.T) {
 	var out, errBuf bytes.Buffer
 	err := Demux(bytes.NewReader(cut), &out, &errBuf)
 	if err == nil {
-		// A frame cut exactly at the payload boundary would look complete;
-		// this cut is mid-payload, so the read must fail.
 		t.Fatal("err = nil, want a truncated-frame error")
 	}
 }
@@ -90,8 +86,6 @@ func TestDemuxLargeFrame(t *testing.T) {
 	}
 }
 
-// failingWriter makes the destination fail, so Demux must report it rather
-// than dropping output.
 type failingWriter struct{}
 
 func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("write failed") }

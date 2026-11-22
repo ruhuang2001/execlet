@@ -37,10 +37,8 @@ starting point when exposing a run_python tool to an agent.
 
 Run these commands from the repository root with Go 1.27 or newer:
 
-    # Print the tool name, description, and input schema.
     go run ./examples/agent-tool/cmd/demo -definition
 
-    # Unset the domain to select the simulated backend.
     env -u SANDBOX_DOMAIN go run ./examples/agent-tool/cmd/demo -code 'print(2 ** 10)'
 
 The second command returns is_error=false, outcome=exited, exit_code=0, and stdout

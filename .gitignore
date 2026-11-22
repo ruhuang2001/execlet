@@ -1,19 +1,13 @@
-# Local-only working notes and coding-agent prompt.
-# Design and contracts live in docs/ and are committed.
 /plan.md
 /progress.md
 
-# Build output
 /bin/
 
-# Test and end-to-end evidence is regenerated, not committed.
 /coverage.out
 /artifacts/
 
-# Release snapshot output.
 /dist/
 
-# Python SDK builds and local environments.
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -21,7 +15,6 @@ __pycache__/
 /sandbox-python/build/
 /sandbox-python/dist/
 
-# TypeScript SDK dependencies and generated package.
 /sandbox-ts/node_modules/
 /sandbox-ts/dist/
 /sandbox-ts/*.tgz

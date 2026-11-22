@@ -11,7 +11,6 @@ import (
 
 var errBoom = errors.New("boom")
 
-// TestExecutions covers the execution resource rules from api.md.
 func TestExecutions(t *testing.T) {
 	ctx := context.Background()
 
@@ -78,8 +77,6 @@ func TestExecutions(t *testing.T) {
 			t.Fatalf("repeated start returned %s, want %s", again.ID, first.ID)
 		}
 		h.waitCompleted(sb.ID, first.ID)
-		// A replay after completion returns the completed record, not a
-		// second process.
 		after, created, err := h.s.StartExecution(ctx, sb.ID, req)
 		wantNoError(t, err)
 		if created || after.ID != first.ID || after.State != daemon.ExecCompleted {
@@ -112,7 +109,6 @@ func TestExecutions(t *testing.T) {
 
 		h.waitCompleted(sb.ID, first.ID)
 
-		// Once the first completes the sandbox accepts another.
 		_, created, err := h.s.StartExecution(ctx, sb.ID, daemon.ExecuteRequest{Command: []string{"echo", "x"}})
 		wantNoError(t, err)
 		if !created {
@@ -121,9 +117,6 @@ func TestExecutions(t *testing.T) {
 	})
 
 	t.Run("completed execution no longer holds the sandbox", func(t *testing.T) {
-		// A client may start the next command the instant it sees the last
-		// one complete. Completion must therefore free the sandbox in the
-		// same step, or that start races the release and gets busy.
 		h := newHarness(t)
 		h.be.Programs["echo"] = memEcho
 		sb := h.create(daemon.CreateRequest{})
@@ -141,9 +134,6 @@ func TestExecutions(t *testing.T) {
 		h.be.Programs["echo"] = memEcho
 		sb := h.create(daemon.CreateRequest{})
 
-		// net/http cancels the request's context when the handler returns.
-		// The command must keep running and report its real exit status, not
-		// a 137 caused by that cancel.
 		reqCtx, cancel := context.WithCancel(ctx)
 		ex, _, err := h.s.StartExecution(reqCtx, sb.ID, daemon.ExecuteRequest{Command: []string{"echo", "ok"}})
 		wantNoError(t, err)
@@ -167,7 +157,6 @@ func TestExecutions(t *testing.T) {
 		h.be.ExecErr = errBoom
 		_, _, err := h.s.StartExecution(ctx, sb.ID, daemon.ExecuteRequest{Command: []string{"true"}})
 		wantCode(t, err, daemon.CodeBackendError)
-		// The failed start must not leave the sandbox busy.
 		h.be.Programs["echo"] = memEcho
 		_, created, err := h.s.StartExecution(ctx, sb.ID, daemon.ExecuteRequest{Command: []string{"echo", "ok"}})
 		wantNoError(t, err)

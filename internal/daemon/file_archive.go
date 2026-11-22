@@ -12,7 +12,6 @@ import (
 	"github.com/ruhuang2001/tiny-sandbox/internal/filearchive"
 )
 
-// ReadArchive returns a validated tar archive containing the selected path's contents.
 func (s *Sandboxes) ReadArchive(ctx context.Context, id, p string) ([]byte, error) {
 	if err := ValidateFilePath(p); err != nil {
 		return nil, err
@@ -37,7 +36,6 @@ func (s *Sandboxes) ReadArchive(ctx context.Context, id, p string) ([]byte, erro
 	return archive.Bytes(), nil
 }
 
-// WriteArchive validates the complete tar before preparing or mutating a sandbox.
 func (s *Sandboxes) WriteArchive(ctx context.Context, id, p string, data []byte) error {
 	if err := ValidateFilePath(p); err != nil {
 		return err

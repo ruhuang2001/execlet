@@ -1,4 +1,3 @@
-/** Open response enums let older clients preserve values from newer servers. */
 export type OpenString<T extends string> = T | (string & {});
 export type Action = 'kill' | 'pause';
 export type TerminationReason = 'exited' | 'canceled' | 'timeout' | 'oom' | 'evicted' | 'unknown';
@@ -8,7 +7,6 @@ export interface Sandbox {
   state: OpenString<'pending' | 'running' | 'paused' | 'killed'>;
   image: string;
   memory_mb: number;
-  /** Additive controls can be absent on older development servers. */
   max_concurrent_executions?: number;
   pids_limit?: number;
   nano_cpus?: number;
@@ -26,15 +24,12 @@ export interface Sandbox {
 export interface Execution {
   id: string;
   sandbox_id: string;
-  /** Confirmed guest command-leader PID, only present for managed commands. */
   pid?: number;
   command: string[];
-  /** The requested working directory; null when the request set none. Absent on servers without cwd support. */
   cwd?: string | null;
   state: OpenString<'running' | 'completed'>;
   exit_code: number | null;
   termination_reason: OpenString<TerminationReason> | null;
-  /** List responses omit output. No artificial empty-string defaults. */
   stdout?: string;
   stderr?: string;
   output_truncated: boolean;
@@ -46,12 +41,9 @@ export interface Execution {
 export type CompletedExecution = Execution & { state: 'completed' };
 
 export interface Capabilities { capabilities: string[] }
-/** One atomic identity/snapshot/event-watermark attach boundary. */
 export interface CommandAttachment { execution: Execution; last_event_id: number }
-/** True only after a signal and confirmed termination; false if already done. */
 export interface KillExecutionResponse { execution: CompletedExecution; signaled: boolean }
 
-/** New wire reasons map to unknown, keeping consumer switches exhaustive. */
 export type ExecutionOutcome = {
   [R in Exclude<TerminationReason, 'unknown'>]: {
     reason: R;
@@ -83,25 +75,19 @@ export interface ExecuteRequest {
   command: readonly string[];
   idempotency_key?: string;
   timeout_seconds?: number;
-  /** Managed command deadline; exclusive with timeout_seconds. Explicit 0 disables the deadline. */
   timeout_ms?: number;
-  /** Added to the image's environment for this execution only. Never echoed back. */
   env?: Readonly<Record<string, string>>;
-  /** Absolute working directory; omit for the image's own. */
   cwd?: string;
-  /** One-shot UTF-8 text, at most 1 MiB, followed by EOF. Never echoed. */
   stdin?: string;
 }
 
 export interface RequestOptions { signal?: AbortSignal }
 
 export interface ExecutionOptions extends RequestOptions {
-  /** Default true. False aborts only local I/O and never cancels remote work. */
   cancelRemote?: boolean;
 }
 
 export interface StreamExecutionOptions extends ExecutionOptions {
-  /** Start after this event watermark; automatic retries continue from delivered events. Default 0. */
   lastEventId?: number;
 }
 
@@ -114,19 +100,14 @@ export type Event =
 export type EventHandler = (event: Event) => void | Promise<void>;
 
 export interface ClientConfig {
-  /** Defaults to SANDBOX_DOMAIN in Node, then http://localhost:8080. */
   domain?: string;
-  /** Defaults to SANDBOX_API_KEY in Node. Never put keys in browser bundles. */
   apiKey?: string;
-  /** Zero/omitted: 3; negative: no retries. Same convention as the Go SDK. */
   maxRetries?: number;
-  /** Fetch-compatible transport; it must honor AbortSignal and stream bodies. */
   fetch?: typeof globalThis.fetch;
 }
 
 export type FileEntryType = OpenString<'file' | 'dir' | 'symlink' | 'other'>;
 
-/** Metadata of an immediate child; POSIX permission bits and UTC RFC3339 mtime. */
 export interface FileEntry {
   name: string;
   size: number;

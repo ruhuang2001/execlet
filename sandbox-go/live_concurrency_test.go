@@ -15,8 +15,6 @@ import (
 	sandbox "github.com/ruhuang2001/tiny-sandbox/sandbox-go"
 )
 
-// futureOutcomeTransport transforms a real completed Docker execution's wire
-// reason to exercise forward compatibility without adding isolated unit tests.
 type futureOutcomeTransport struct{}
 
 func (futureOutcomeTransport) RoundTrip(req *http.Request) (*http.Response, error) {

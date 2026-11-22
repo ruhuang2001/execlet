@@ -11,10 +11,6 @@ import (
 	"github.com/ruhuang2001/tiny-sandbox/internal/daemon"
 )
 
-// Drive the real Backend/Process through a modeled Engine dispatch boundary.
-// The retired supervisor's unique channel cannot signal a replacement PID.
-// Real Linux process-group controls are exercised by the installed suite;
-// this fault model is deliberately not claimed as forced kernel PID reuse.
 func TestBackgroundSignalLifetime(t *testing.T) {
 	for _, reuse := range []bool{false, true} {
 		name := "active_control"
@@ -75,7 +71,7 @@ func TestBackgroundSignalLifetime(t *testing.T) {
 				t.Fatal("dispatch watchdog expired")
 			}
 			if reuse {
-				incarnation.Store(2) // original exits; replacement now owns numeric PID/group 4242
+				incarnation.Store(2)
 			}
 			close(release)
 			err = <-finished

@@ -7,8 +7,6 @@ import (
 	sandbox "github.com/ruhuang2001/tiny-sandbox/sandbox-go"
 )
 
-// attach implements `sandboxctl attach SANDBOX EXECUTION`: stream from the
-// beginning, Ctrl+C cancels the execution through the SDK.
 func (in *invocation) attach(args []string) int {
 	positional, flags := splitArgs(args)
 	if len(flags) > 0 || len(positional) != 2 {
@@ -37,8 +35,6 @@ func (in *invocation) attach(args []string) int {
 	return 0
 }
 
-// logs implements `sandboxctl logs SANDBOX EXECUTION`: retained output and the
-// final status, without streaming.
 func (in *invocation) logs(args []string) int {
 	positional, flags := splitArgs(args)
 	if len(flags) > 0 || len(positional) != 2 {
@@ -69,7 +65,6 @@ func (in *invocation) logs(args []string) int {
 	return 0
 }
 
-// inspect implements `sandboxctl inspect SANDBOX`.
 func (in *invocation) inspect(args []string) int {
 	positional, flags := splitArgs(args)
 	if len(flags) > 0 || len(positional) != 1 {
@@ -110,8 +105,6 @@ func (in *invocation) inspect(args []string) int {
 	return 0
 }
 
-// list implements `sandboxctl list` with the fixed `ID STATE IMAGE CREATED`
-// line format.
 func (in *invocation) list(args []string) int {
 	if len(args) > 0 {
 		_, _ = fmt.Fprintln(in.stderr, "usage: sandboxctl list")
@@ -131,7 +124,6 @@ func (in *invocation) list(args []string) int {
 	return 0
 }
 
-// lifecycle implements pause, resume, and kill.
 func (in *invocation) lifecycle(command string, args []string) int {
 	positional, flags := splitArgs(args)
 	if len(flags) > 0 || len(positional) != 1 {
@@ -161,8 +153,6 @@ func (in *invocation) lifecycle(command string, args []string) int {
 	return 0
 }
 
-// writeEvent renders one stream event on the CLI's streams: command output on
-// stdout, the sandbox's own stderr on stderr, and a note when output was cut.
 func (in *invocation) writeEvent(ev sandbox.Event) error {
 	switch ev.Type {
 	case sandbox.EventStdout:

@@ -25,7 +25,6 @@ func TestRealNonRootPrivateStdin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Inspect the actual archive destination before the wrapper unlinks it.
 	const probe = `test "$(id -u)" != 0 && test "$(stat -c %u:%a "$1")" = "$(id -u):700" && cat "$1/input"`
 	out, err := h.be.capture(t.Context(), id, []string{"/bin/sh", "-c", probe, "probe", dir})
 	if err != nil || string(out) != input {

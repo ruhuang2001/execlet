@@ -16,13 +16,9 @@ import (
 	"github.com/ruhuang2001/tiny-sandbox/internal/daemon"
 )
 
-// Fixed shell probe: inspects only immediate children of $1 without recursing
-// into subdirectories or reading file contents. Exit 45 falls back to bounded
-// archive scanning on minimal images that lack stat or readlink.
 const listDirScript = `dir=$1
 command -v stat >/dev/null 2>&1 && command -v readlink >/dev/null 2>&1 || exit 45
 if [ -L "$dir" ]; then exit 40; fi
-# A non-searchable ancestor and a missing path look the same to this user.
 if [ ! -e "$dir" ]; then exit 45; fi
 if [ ! -d "$dir" ]; then exit 40; fi
 [ -r "$dir" ] && [ -x "$dir" ] || exit 45
@@ -66,8 +62,6 @@ done
 flush "$@"
 `
 
-// ListFiles probes as the image user; Docker's bounded archive reader covers
-// inaccessible directories and images without compatible guest tools.
 func (b *Backend) ListFiles(ctx context.Context, id, p, after string, limit int) ([]daemon.FileEntry, error) {
 	out, err := b.captureExec(ctx, id, "", []string{"/bin/sh", "-c", listDirScript, "list-files", p}, daemon.MaxFileScanBytes)
 	if err != nil {
@@ -235,7 +229,6 @@ func parseAccountSection(raw string) (users, groups map[int]string) {
 	return users, groups
 }
 
-// listFilesFromArchive is the fallback for minimal images without stat/readlink.
 func (b *Backend) listFilesFromArchive(ctx context.Context, id, p, after string, limit int) ([]daemon.FileEntry, error) {
 	rc, err := b.api.ArchiveGet(ctx, id, p)
 	if err != nil {

@@ -1,4 +1,3 @@
-// Package main's tests run the CLI against the real HTTP handler.
 package main
 
 import (
@@ -13,9 +12,6 @@ import (
 	"github.com/ruhuang2001/tiny-sandbox/internal/daemon/membackend"
 )
 
-// cliHarness runs the CLI against the real HTTP handler over the in-memory
-// backend, so status lines and exit codes are asserted against the actual
-// contract rather than a stub.
 type cliHarness struct {
 	t   *testing.T
 	be  *membackend.Backend
@@ -31,14 +27,12 @@ func newCLIHarness(t *testing.T) *cliHarness {
 	return &cliHarness{t: t, be: be, url: srv.URL}
 }
 
-// result is one CLI invocation's observable result.
 type result struct {
 	code   int
 	stdout string
 	stderr string
 }
 
-// invoke runs the CLI with --domain pointed at the harness.
 func (h *cliHarness) invoke(args ...string) result {
 	h.t.Helper()
 	var out, errOut bytes.Buffer
@@ -124,7 +118,6 @@ func TestRunWithExistingSandboxPrintsBareID(t *testing.T) {
 	}
 }
 
-// firstSandboxID pulls the id out of "sandbox: sbx_x (created; ...)".
 func firstSandboxID(t *testing.T, stderr string) string {
 	t.Helper()
 	for _, line := range strings.Split(stderr, "\n") {
@@ -169,12 +162,8 @@ func TestRunExitCodesAndHints(t *testing.T) {
 func TestRunOOMAndTimeoutHints(t *testing.T) {
 	h := newCLIHarness(t)
 	h.be.Streamers["oom"] = func(_ context.Context, _ func([]byte, []byte) error) int {
-		// The engine classifies oom from the cgroup delta; drive it through
-		// the backend's OOM counter instead of the exit code.
 		return 137
 	}
-	// No hint path through membackend without a real OOM delta; covered in
-	// the e2e script against Docker. Here, assert the hint table directly.
 	if hintFor(&fakeOOM{}) != "increase --memory or reduce the command's memory use" {
 		t.Error("oom hint is missing")
 	}
@@ -238,10 +227,8 @@ func TestRunRemoveKillsSandbox(t *testing.T) {
 		t.Fatalf("run = %+v", got)
 	}
 	id := firstSandboxID(t, got.stderr)
-	// The sandbox should be gone from the server's eyes.
 	list := h.invoke("list")
 	if strings.Contains(list.stdout, id) {
-		// Killed sandboxes stay listed until restart, so check the state.
 		line := ""
 		for _, l := range strings.Split(list.stdout, "\n") {
 			if strings.HasPrefix(l, id+" ") {
@@ -387,7 +374,6 @@ func TestAuthErrorPrintsHint(t *testing.T) {
 
 func TestConnectionRefusedHint(t *testing.T) {
 	var out, errOut bytes.Buffer
-	// Port 1 on loopback refuses connections immediately.
 	code := run([]string{"--domain", "http://127.0.0.1:1", "list"}, &out, &errOut)
 	if code != 1 {
 		t.Fatalf("exit = %d, want 1", code)
@@ -397,10 +383,6 @@ func TestConnectionRefusedHint(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------- fake errors
-
-// The hint table is keyed on the SDK's errors. These stand in for outcomes the
-// in-memory backend cannot produce.
 type fakeOOM struct{}
 
 func (*fakeOOM) Error() string { return "oom" }
@@ -447,9 +429,6 @@ func (e *fakeNotFound) Is(target error) bool { return target.Error() == "sandbox
 
 var _ = json.Marshal
 
-// TestRunForwardsExplicitZeroTimeouts pins the rule that --timeout 0 disables
-// the lifetime timeout. Zero used to mean "flag not given", so the sandbox
-// silently fell back to the 300-second default.
 func TestRunForwardsExplicitZeroTimeouts(t *testing.T) {
 	rf := &runFlags{given: map[string]bool{}}
 	if req := rf.createRequest(); req.TimeoutSeconds != nil || req.IdleTimeoutSeconds != nil {
@@ -469,9 +448,6 @@ func TestRunForwardsExplicitZeroTimeouts(t *testing.T) {
 	}
 }
 
-// TestRunRejectsNegativeTimeouts checks that a negative value is a usage
-// error rather than a silent default. -1 is included because it used to be
-// the "flag not given" sentinel: an explicit -1 must not pass silently.
 func TestRunRejectsNegativeTimeouts(t *testing.T) {
 	for _, value := range []string{"-1", "-5"} {
 		for _, flagName := range []string{"--timeout", "--idle-timeout", "--memory", "--nano-cpus"} {
@@ -487,10 +463,6 @@ func TestRunRejectsNegativeTimeouts(t *testing.T) {
 	}
 }
 
-// TestRunRejectsBadResourceFlags covers the two flags whose invalid values are
-// not "negative": a zero pids limit has no sane meaning, and a network mode
-// outside the two the contract offers must be a usage error rather than a
-// silent fallback to the default.
 func TestRunRejectsBadResourceFlags(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -515,8 +487,6 @@ func TestRunRejectsBadResourceFlags(t *testing.T) {
 	}
 }
 
-// TestRunWithZeroTimeoutCreatesAnUndeadlinedSandbox confirms the flag reaches
-// the server, not just the request struct.
 func TestRunWithZeroTimeoutCreatesAnUndeadlinedSandbox(t *testing.T) {
 	h := newCLIHarness(t)
 	h.be.Programs["true"] = func(context.Context, []string) (string, string, int) { return "", "", 0 }
@@ -526,7 +496,6 @@ func TestRunWithZeroTimeoutCreatesAnUndeadlinedSandbox(t *testing.T) {
 		t.Fatalf("run = %+v", got)
 	}
 
-	// The sandbox the run created is still there and reports no deadline.
 	list := h.invoke("list")
 	if list.code != 0 {
 		t.Fatalf("list = %+v", list)
@@ -536,7 +505,6 @@ func TestRunWithZeroTimeoutCreatesAnUndeadlinedSandbox(t *testing.T) {
 	if inspect.code != 0 {
 		t.Fatalf("inspect = %+v", inspect)
 	}
-	// inspect prints one "field: value" line per field, not JSON.
 	if !strings.Contains(inspect.stdout, "timeout_seconds: 0\n") {
 		t.Errorf("inspect output does not report timeout_seconds 0: %q", inspect.stdout)
 	}

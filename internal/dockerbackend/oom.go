@@ -7,8 +7,6 @@ import (
 	"github.com/ruhuang2001/tiny-sandbox/internal/dockerapi"
 )
 
-// Only two fixed kernel cgroup v2 layouts. Never walk the tree, try prefixes,
-// consult a guest PID/path, or use a parent counter shared with siblings.
 func localOOMKillCount(root, id string) (int64, bool) {
 	if root == "" || len(id) != 64 {
 		return 0, false

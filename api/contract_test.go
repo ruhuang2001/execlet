@@ -120,9 +120,6 @@ func TestSpecFieldsMatchRequestAndSandboxTypes(t *testing.T) {
 	}
 }
 
-// TestSpecMatchesAPIMD checks that api/openapi.yaml and docs/api.md describe
-// the same operations. api.md is the prose contract; the spec is its
-// machine-readable form, and neither may drift from the other.
 func TestSpecMatchesAPIMD(t *testing.T) {
 	want := operationsInAPIMD(t)
 	got, err := api.Operations()
@@ -139,12 +136,8 @@ func TestSpecMatchesAPIMD(t *testing.T) {
 	}
 }
 
-// endpointHeading matches "### `GET /healthz`" and the two-operation form
-// "### `POST /v1/.../pause`, `POST /v1/.../resume`".
 var endpointHeading = regexp.MustCompile("`(GET|POST|PUT|DELETE|PATCH) ([^`]+)`")
 
-// operationsInAPIMD extracts the endpoint set from the "Endpoints" section
-// headings of api.md.
 func operationsInAPIMD(t *testing.T) []api.Operation {
 	t.Helper()
 	data, err := os.ReadFile("../docs/api.md")
@@ -171,10 +164,6 @@ func operationsInAPIMD(t *testing.T) []api.Operation {
 	return ops
 }
 
-// TestServerRoutesMatchSpec checks the server's route table against the spec
-// in both directions: every operation in the spec is registered, and every
-// registered route is declared. A route that is declared but unreachable
-// through the server's own mux also fails.
 func TestServerRoutesMatchSpec(t *testing.T) {
 	specOps, err := api.Operations()
 	if err != nil {
@@ -205,8 +194,6 @@ func TestServerRoutesMatchSpec(t *testing.T) {
 	}
 }
 
-// concretePath substitutes placeholder segments so a route can be looked up
-// in the mux.
 func concretePath(path string) string {
 	return strings.NewReplacer(
 		"{sandbox_id}", "sbx_test",
@@ -215,9 +202,6 @@ func concretePath(path string) string {
 	).Replace(path)
 }
 
-// TestDiffReportsBothDirections pins the comparison itself: a missing
-// operation and an extra one are reported independently, so a route table that
-// only partly matches cannot pass.
 func TestDiffReportsBothDirections(t *testing.T) {
 	want := []api.Operation{
 		{Method: "GET", Path: "/a"},
@@ -237,8 +221,6 @@ func TestDiffReportsBothDirections(t *testing.T) {
 	}
 }
 
-// TestOperationsCoversEveryDocumentedEndpoint is a guard on the parser: the
-// spec has one operation per endpoint heading in api.md.
 func TestOperationsCoversEveryDocumentedEndpoint(t *testing.T) {
 	ops, err := api.Operations()
 	if err != nil {

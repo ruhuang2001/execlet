@@ -11,10 +11,8 @@ import (
 	"github.com/ruhuang2001/tiny-sandbox/internal/wirejson"
 )
 
-// FileType is the filesystem entry kind reported by directory listings.
 type FileType string
 
-// File entry types, matching the HTTP contract.
 const (
 	FileTypeFile    FileType = "file"
 	FileTypeDir     FileType = "dir"
@@ -22,7 +20,6 @@ const (
 	FileTypeOther   FileType = "other"
 )
 
-// FileEntry describes an immediate child without following child symlinks.
 type FileEntry struct {
 	Name          string    `json:"name"`
 	Size          int64     `json:"size"`
@@ -37,8 +34,6 @@ type FileEntry struct {
 	SymlinkTarget string    `json:"symlink_target,omitempty"`
 }
 
-// UnmarshalJSON distinguishes zero IDs and false/zero metadata from fields
-// the server failed to supply. Unknown file types remain useful to callers.
 func (e *FileEntry) UnmarshalJSON(data []byte) error {
 	var fields struct {
 		Name          *string    `json:"name"`
@@ -65,19 +60,16 @@ func (e *FileEntry) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// ListFilesOptions selects a page. Zero Limit uses the server default (100).
 type ListFilesOptions struct {
 	Limit  int
 	Cursor string
 }
 
-// FileList contains a page and an optional opaque continuation cursor.
 type FileList struct {
 	Entries    []FileEntry `json:"entries"`
 	NextCursor string      `json:"next_cursor,omitempty"`
 }
 
-// ListFiles returns one sorted page of immediate directory children.
 func (c *Client) ListFiles(ctx context.Context, id, path string, options ListFilesOptions) (*FileList, error) {
 	if err := c.RequireCapability(ctx, "files.list.v1"); err != nil {
 		return nil, err
@@ -103,7 +95,6 @@ func (c *Client) ListFiles(ctx context.Context, id, path string, options ListFil
 	return &out, nil
 }
 
-// ReadArchive downloads a tar archive rooted at the selected file or directory name.
 func (c *Client) ReadArchive(ctx context.Context, id, path string) ([]byte, error) {
 	if err := c.RequireCapability(ctx, "files.archive.v1"); err != nil {
 		return nil, err
@@ -115,8 +106,6 @@ func (c *Client) ReadArchive(ctx context.Context, id, path string) ([]byte, erro
 	return resp.body, nil
 }
 
-// WriteArchive validates and extracts tar bytes beneath an existing directory.
-// Upload is attempted once: filesystem changes can make an ambiguous retry unsafe.
 func (c *Client) WriteArchive(ctx context.Context, id, path string, data []byte) error {
 	if err := c.RequireCapability(ctx, "files.archive.v1"); err != nil {
 		return err

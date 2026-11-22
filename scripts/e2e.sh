@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Real Docker/daemon/CLI acceptance. Usage: bash scripts/e2e.sh [artifact-dir]
 set -uo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -9,9 +8,6 @@ OUT=$(cd "$OUT" && pwd)
 
 PORT=${E2E_PORT:-18081}
 export SANDBOX_DOMAIN="http://127.0.0.1:$PORT"
-# The server labels every container with its listen address. Scoping the leak
-# check to this exact value means it asserts what this run created, not what
-# happens to carry the label's key from anything else on the host.
 OWNER="127.0.0.1:$PORT"
 unset SANDBOX_API_KEY || true
 
@@ -25,8 +21,6 @@ server_pid=""
 stream_pid=""
 
 cleanup() {
-  # The shutdown section runs a CLI in the background; a failure before it is
-  # joined would otherwise leave that process behind the trap.
   [ -n "$stream_pid" ] && kill "$stream_pid" 2>/dev/null
   if [ -n "$server_pid" ]; then
     kill "$server_pid" 2>/dev/null
@@ -42,31 +36,25 @@ fail() {
   printf 'FAIL %s: %s (got %s, want %s)\n' "$1" "$2" "$3" "$4" | tee -a "$RESULTS"
   failures=$((failures + 1))
 }
-check() { # name, description, actual, expected
+check() {
   if [ "$3" = "$4" ]; then pass "$1"; else fail "$1" "$2" "$3" "$4"; fi
 }
-contains() { # name, description, haystack-file, needle
+contains() {
   if grep -qF -- "$4" "$3"; then pass "$1"; else fail "$1" "$2" "no '$4'" "present"; fi
 }
-lacks() { # name, description, haystack-file, needle
+lacks() {
   if grep -qF -- "$4" "$3"; then fail "$1" "$2" "found '$4'" "absent"; else pass "$1"; fi
 }
 
 note() { printf '\n== %s ==\n' "$1" | tee -a "$RESULTS"; }
 
-# ---------------------------------------------------------------- build
 
 note "build"
 if [ "${E2E_COVERAGE:-0}" = "1" ]; then
-  # Instrument the binaries so the end-to-end run contributes coverage for
-  # the packages only it reaches: the Docker backend's real paths and the
-  # CLI's process-level behaviour.
   mkdir -p "$COVER_DIR"
   BIN=$OUT/bin
   mkdir -p "$BIN"
   {
-    # -covermode=atomic matches the unit run, so both profiles merge into
-    # one covdata set; a mode clash is a merge error, not a warning.
     (cd "$ROOT" && go build -cover -covermode=atomic -coverpkg=./... -o "$BIN/sandboxd" ./cmd/sandboxd) &&
     (cd "$ROOT" && go build -cover -covermode=atomic -coverpkg=./... -o "$BIN/sandboxctl" ./cmd/sandboxctl)
   } >"$OUT/build.txt" 2>&1 || {
@@ -83,7 +71,6 @@ else
   pass "binaries built"
 fi
 
-# ---------------------------------------------------------------- server
 
 note "server startup"
 "$BIN/sandboxd" -addr "127.0.0.1:$PORT" >"$SERVER_LOG" 2>&1 &
@@ -95,7 +82,6 @@ done
 curl -fsS "$SANDBOX_DOMAIN/healthz" >"$OUT/healthz.json" 2>&1
 check "healthz" "health endpoint answers" "$(grep -c '"status":"ok"' "$OUT/healthz.json")" "1"
 
-# Real Docker environment boundaries and identity; included in CI artifacts.
 python3 "$ROOT/scripts/e2e-env/run.py" "$SANDBOX_DOMAIN" "$OUT/env-contract.json" >"$OUT/env-contract.log" 2>&1
 check "env-contract" "bounds, replay identity, secrecy and isolation; see $OUT/env-contract.log" "$?" "0"
 
@@ -120,7 +106,6 @@ concurrency_sb=$(sed -n 's/^sandbox: \(sbx_[a-z0-9]*\).*/\1/p' "$OUT/concurrency
 contains "concurrency-cli-inspect" "CLI reports concurrency limit" "$OUT/concurrency-cli-inspect.txt" "max_concurrent_executions: 2"
 "$BIN/sandboxctl" kill "$concurrency_sb" >/dev/null 2>&1
 
-# ---------------------------------------------------------------- doctor
 
 note "doctor"
 "$BIN/sandboxctl" doctor >"$OUT/doctor.txt" 2>"$OUT/doctor.err"
@@ -133,7 +118,6 @@ contains "doctor docker" "docker line printed" "$OUT/doctor.txt" "docker: ok"
 contains "doctor sandbox" "sandbox line printed" "$OUT/doctor.txt" "sandbox: ok"
 contains "doctor ready" "prints Ready" "$OUT/doctor.txt" "Ready"
 
-# ---------------------------------------------------------------- run
 
 note "run: success"
 "$BIN/sandboxctl" run -- sh -c 'echo out; echo err >&2' >"$OUT/run.out" 2>"$OUT/run.err"
@@ -158,7 +142,6 @@ done
 note "run: nonzero status line"
 contains "run nonzero status" "nonzero exit is reported" "$OUT/exit-42.err" "exit 42"
 
-# ---------------------------------------------------------------- pause/resume
 
 note "pause and resume"
 "$BIN/sandboxctl" pause "$sandbox_id" >"$OUT/pause.txt" 2>&1
@@ -168,7 +151,6 @@ contains "pause state" "sandbox is paused" "$OUT/pause.txt" "paused"
 check "resume exit" "resume succeeds" "$?" "0"
 contains "resume state" "sandbox is running" "$OUT/resume.txt" "running"
 
-# ---------------------------------------------------------------- logs/inspect/list
 
 note "logs, inspect, list"
 "$BIN/sandboxctl" run --sandbox "$sandbox_id" -- echo second >"$OUT/second.out" 2>"$OUT/second.err"
@@ -189,19 +171,14 @@ contains "inspect id" "inspect prints the id" "$OUT/inspect.txt" "id: $sandbox_i
 check "list exit" "list succeeds" "$?" "0"
 contains "list line" "list prints ID STATE IMAGE CREATED" "$OUT/list.txt" "$sandbox_id running"
 
-# ---------------------------------------------------------------- attach
 
 note "attach"
 "$BIN/sandboxctl" attach "$sandbox_id" "$exec_id" >"$OUT/attach.out" 2>"$OUT/attach.err"
 check "attach exit" "attach to a finished execution" "$?" "0"
 check "attach stdout" "attach replays retained output" "$(cat "$OUT/attach.out")" "second"
 
-# ---------------------------------------------------------------- Ctrl+C
 
 note "ctrl+c"
-# SIGINT is what Ctrl+C delivers; the CLI traps it and cancels the execution
-# through the SDK. The CLI is the only local process here, so signalling its
-# PID is equivalent to the terminal signalling the foreground group.
 "$BIN/sandboxctl" run -- sleep 60 >"$OUT/cancel.out" 2>"$OUT/cancel.err" &
 cli_pid=$!
 sleep 2
@@ -211,7 +188,6 @@ code=$?
 check "ctrl+c exit" "Ctrl+C returns 130" "$code" "130"
 contains "ctrl+c status" "final status line is printed after Ctrl+C" "$OUT/cancel.err" "(canceled)"
 
-# ---------------------------------------------------------------- OOM
 
 note "oom"
 "$BIN/sandboxctl" run --image python:3.12-alpine --memory 64 -- \
@@ -221,7 +197,6 @@ check "oom exit" "OOM exits 1" "$code" "1"
 contains "oom status" "OOM status line" "$OUT/oom.err" "(oom)"
 contains "oom hint" "OOM hint" "$OUT/oom.err" "hint: increase --memory"
 
-# ---------------------------------------------------------------- timeout
 
 note "timeout"
 "$BIN/sandboxctl" run --timeout 5 -- sleep 30 >"$OUT/timeout.out" 2>"$OUT/timeout.err"
@@ -230,9 +205,6 @@ check "timeout exit" "timeout exits 1" "$code" "1"
 contains "timeout reason" "timeout status line" "$OUT/timeout.err" "(timeout)"
 contains "timeout hint" "timeout hint" "$OUT/timeout.err" "hint: increase --timeout"
 
-# An execution deadline ends the command but keeps the sandbox, so the same
-# number of seconds has to be told apart from a lifetime deadline by the state
-# of the sandbox afterwards, not by the exit status.
 "$BIN/sandboxctl" run --timeout 0 --exec-timeout 3 -- sleep 30 >"$OUT/exec-timeout.out" 2>"$OUT/exec-timeout.err"
 code=$?
 check "exec-timeout exit" "an execution timeout exits 1" "$code" "1"
@@ -258,10 +230,6 @@ check "env-second isolated" "a later execution does not inherit the environment"
   "$(cat "$OUT/env-second.out")" "<unset>"
 "$BIN/sandboxctl" kill "$env_sandbox" >/dev/null 2>&1
 
-# Names a shell would reject still reach the process. The wrapper starts a
-# shell, which imports only the names it accepts: dash drops a hyphen or a dot
-# and every shell rewrites IFS, PWD and SHLVL. The evidence has to be a
-# non-shell reader, because an inner shell would filter the same names again.
 "$BIN/sandboxctl" run --rm --env 'MY-VAR=hyphen' --env 'CONFIG.KEY=dot' \
   --env 'SHLVL=42' -- env >"$OUT/env-names.out" 2>"$OUT/env-names.err"
 check "env-names exit" "the probe command succeeds" "$?" "0"
@@ -269,10 +237,6 @@ contains "env-names hyphen" "a name with a hyphen reaches the process" "$OUT/env
 contains "env-names dot" "a name with a dot reaches the process" "$OUT/env-names.out" "CONFIG.KEY=dot"
 contains "env-names shlvl" "a shell-managed name keeps the requested value" "$OUT/env-names.out" "SHLVL=42"
 
-# The directory is resolved the way the filesystem resolves it. A logical cd
-# simplifies ".." before it looks, so with link -> /data this would print
-# /work, and a missing component followed by ".." would succeed instead of
-# failing.
 "$BIN/sandboxctl" run -- sh -c 'mkdir -p /work /data/project && ln -s /data/project /work/link' \
   >"$OUT/cwd-phys-fixture.out" 2>"$OUT/cwd-phys-fixture.err"
 check "cwd-phys fixture" "the fixture command succeeds" "$?" "0"
@@ -290,10 +254,6 @@ contains "cwd-missing-upto marker" "the failure names the unusable directory" \
 check "cwd-missing-upto stdout" "nothing ran" "$(cat "$OUT/cwd-missing-upto.out")" ""
 "$BIN/sandboxctl" kill "$cwd_phys_sandbox" >/dev/null 2>&1
 
-# A cwd that does not exist must not read as a missing command: the marker is
-# on stderr and the recorded status is 126, the wrapper's own "cannot start".
-# The CLI collapses that status to 1, because it is not a command exit; the
-# `execution:` line carries the recorded one.
 "$BIN/sandboxctl" run --rm --timeout 0 --cwd /definitely/not/here -- true \
   >"$OUT/bad-cwd.out" 2>"$OUT/bad-cwd.err"
 code=$?
@@ -311,16 +271,8 @@ check "relative-cwd exit" "a relative directory is rejected" "$?" "1"
 contains "relative-cwd message" "the rejection names the requirement" \
   "$OUT/relative-cwd.err" "must be an absolute path"
 
-# ---------------------------------------------------------------- hardening
 
 note "hardening"
-# These limits are not in the HTTP contract: the backend fixes them. The check
-# therefore reads the container's own cgroup, which is the only evidence that
-# the limit reached the runtime and not just the request struct.
-#
-# The pids controller lives at a different path on cgroup v1 hosts, and a
-# missing file must not look like a successful probe: `cat` is the last command
-# that could fail, so a missing limit has to be reported as such.
 "$BIN/sandboxctl" run --image python:3.12-alpine -- \
   sh -c 'if [ -r /sys/fs/cgroup/pids.max ]; then cat /sys/fs/cgroup/pids.max;
          elif [ -r /sys/fs/cgroup/pids/pids.max ]; then cat /sys/fs/cgroup/pids/pids.max;
@@ -337,10 +289,6 @@ check "pids-request exit" "the probe command succeeds" "$?" "0"
 check "pids-request applied" "a requested pids limit reaches the cgroup" \
   "$(cat "$OUT/pids-request.out")" "128"
 
-# Network access is the default, so it is the absence that has to be proven.
-# The evidence is the interface list, not a reachability probe: a connect to
-# the internet would make this suite depend on CI egress, and what the mode
-# controls is whether a non-loopback interface exists at all.
 "$BIN/sandboxctl" run --image python:3.12-alpine --network none -- \
   sh -c 'awk -F: "NR>2 {gsub(/ /,\"\",\$1); print \$1}" /proc/net/dev' \
   >"$OUT/network-none.out" 2>"$OUT/network-none.err"
@@ -348,8 +296,6 @@ check "network-none exit" "the network probe succeeds" "$?" "0"
 check "network-none blocked" "--network none leaves only loopback" \
   "$(tr '\n' ' ' <"$OUT/network-none.out" | tr -s ' ' | sed 's/ $//')" "lo"
 
-# The default must be the opposite, or the isolation check above proves nothing
-# about the mode it was asked for.
 "$BIN/sandboxctl" run --image python:3.12-alpine -- \
   sh -c 'awk -F: "NR>2 {gsub(/ /,\"\",\$1); print \$1}" /proc/net/dev' \
   >"$OUT/network-bridge.out" 2>"$OUT/network-bridge.err"
@@ -361,13 +307,6 @@ else
     "$(tr '\n' ' ' <"$OUT/network-bridge.out")" "eth0 or similar"
 fi
 
-# The fork bomb is what the pids limit exists for. Memory alone does not stop
-# it: a sleeping child costs a task slot, not a page.
-#
-# It runs only when the effective limit was just verified. On a host where
-# Docker ignored the limit (rootless Docker is documented to do this when its
-# cgroup requirements are unmet) the probe would otherwise fork thousands of
-# children on the host before reporting the failure it already knows about.
 if grep -qx '1024' "$OUT/hardening.out"; then
   "$BIN/sandboxctl" run --image python:3.12-alpine -- python3 -c '
 import os, time
@@ -392,10 +331,6 @@ print(len(kids))
     fail "fork bounded" "fork bomb was not bounded by the pids limit" "${forks:-none}" "<2000"
   fi
 
-  # The fork probe leaves up to a thousand children behind. With a reaping PID
-  # 1 they are collected, so the slots come back; without one they stay as
-  # zombies and this next command cannot fork at all. Asserting a fresh
-  # multi-process command after the bomb is what tests the reaper.
   "$BIN/sandboxctl" run --image python:3.12-alpine -- \
     sh -c 'for i in $(seq 1 20); do (true) & done; wait; echo slots-ok' \
     >"$OUT/after-fork.out" 2>"$OUT/after-fork.err"
@@ -407,8 +342,6 @@ else
     "$(head -1 "$OUT/hardening.out")" "1024"
 fi
 
-# Raw sockets need CAP_NET_RAW. Without it Python raises PermissionError; if
-# the capability were present the probe would print raw-ok and pass silently.
 "$BIN/sandboxctl" run --image python:3.12-alpine -- python3 -c '
 import socket
 try:
@@ -420,7 +353,6 @@ except PermissionError:
 check "cap_net_raw exit" "the capability probe succeeds" "$?" "0"
 check "cap_net_raw dropped" "CAP_NET_RAW is dropped" "$(cat "$OUT/capraw.out")" "raw-denied"
 
-# ---------------------------------------------------------------- 404 and busy hints
 
 note "404 hint"
 "$BIN/sandboxctl" inspect sbx_does_not_exist >"$OUT/notfound.out" 2>"$OUT/notfound.err"
@@ -441,16 +373,11 @@ wait "$holder_pid" 2>/dev/null
 note "evicted hint"
 "$BIN/sandboxctl" run -- sleep 30 >"$OUT/evict.out" 2>"$OUT/evict.err" &
 evict_pid=$!
-# Wait for the CLI to report its sandbox and execution rather than guessing a
-# fixed delay: the container must exist before it can be killed.
 for _ in $(seq 1 100); do
   grep -q '^execution: exe_' "$OUT/evict.err" 2>/dev/null && break
   sleep 0.1
 done
 evict_sandbox=$(sed -n 's/^sandbox: \(sbx_[a-z0-9]*\).*/\1/p' "$OUT/evict.err" | head -1)
-# Select the exact container by the name the server gives it. A bare
-# `docker ps | head -1` would pick any running sandbox, including ones earlier
-# checks left behind, and kill the wrong one.
 evict_container=$(docker ps -q --filter "name=^tiny-sandbox-${evict_sandbox}$" | head -1)
 if [ -n "$evict_container" ]; then
   docker kill "$evict_container" >/dev/null 2>&1
@@ -464,16 +391,8 @@ else
   kill "$evict_pid" 2>/dev/null
 fi
 
-# ---------------------------------------------------------------- auth
 
 note "auth"
-# Stop the first server and check its shutdown right here, before a restart on
-# the same owner label could clean up after it. Without this the final leak
-# check would pass even when shutdown leaves every container behind. A sandbox
-# is left behind deliberately, so the sweep has something to remove, and one
-# event stream stays open across the signal. The open stream is what makes the
-# promptness check real: http.Server.Shutdown does not cancel request contexts,
-# so without the handler's shutdown arm the drain waits out its whole deadline.
 "$BIN/sandboxctl" run --timeout 0 -- sh -c 'true' >"$OUT/sweep.out" 2>"$OUT/sweep.err"
 sweep_sandbox=$(sed -n 's/^sandbox: \(sbx_[a-z0-9]*\).*/\1/p' "$OUT/sweep.err" | head -1)
 "$BIN/sandboxctl" run --sandbox "$sweep_sandbox" -- sleep 120 >"$OUT/sweep-stream.out" 2>"$OUT/sweep-stream.err" &
@@ -495,9 +414,6 @@ else
 fi
 leftover=$(docker ps -aq --filter "label=tiny-sandbox.owner=$OWNER" | wc -l | tr -d ' ')
 check "shutdown sweep" "SIGTERM removes this process's containers" "$leftover" "0"
-# A drain that waits out its 10-second deadline is a shutdown that did not
-# finish, even when the containers end up removed. SECONDS is whole-second
-# resolution; a clean drain takes well under one.
 if [ "$elapsed" -lt 5 ]; then
   pass "shutdown prompt"
 else
@@ -515,7 +431,6 @@ contains "auth hint" "auth hint" "$OUT/auth.err" "hint: set a valid SANDBOX_API_
 SANDBOX_API_KEY=e2e-secret "$BIN/sandboxctl" list >"$OUT/auth-ok.out" 2>&1
 check "auth ok" "a valid key works" "$?" "0"
 
-# ---------------------------------------------------------------- leak check
 
 note "cleanup"
 kill "$server_pid" 2>/dev/null
@@ -524,12 +439,7 @@ server_pid=""
 docker ps -a --filter "label=tiny-sandbox.owner=$OWNER" --format '{{.ID}} {{.Names}}' >"$OUT/containers.txt"
 check "containers" "no sandbox containers remain" "$(wc -l <"$OUT/containers.txt" | tr -d ' ')" "0"
 
-# ---------------------------------------------------------------- crash recovery
 
-# A SIGKILL cannot run the shutdown sweep, so the container survives. The next
-# process is the only thing that can reclaim it, and it finds it by owner
-# label: this is what keeps a restart from leaking sandboxes, and what `-owner`
-# exists for when the listen address changes.
 note "crash recovery"
 "$BIN/sandboxd" -addr "127.0.0.1:$PORT" >"$SERVER_LOG.crash" 2>&1 &
 server_pid=$!
@@ -539,9 +449,6 @@ for _ in $(seq 1 50); do
 done
 "$BIN/sandboxctl" run --timeout 0 -- sh -c 'true' >"$OUT/crash.out" 2>"$OUT/crash.err"
 check "crash sandbox exits" "a sandbox ran before the crash" "$?" "0"
-# Name the container exactly, so this check does not depend on the label that
-# the startup sweep itself relies on: a broken label must fail the sweep check,
-# not silently turn "the orphan exists" into a pass.
 crash_sandbox=$(sed -n 's/^sandbox: \(sbx_[a-z0-9]*\).*/\1/p' "$OUT/crash.err" | head -1)
 crash_container="tiny-sandbox-$crash_sandbox"
 docker ps -a --filter "name=^${crash_container}$" --format '{{.ID}}' >"$OUT/crash-container.txt"
@@ -562,8 +469,6 @@ reclaimed=$(docker ps -a --filter "name=^${crash_container}$" --format '{{.ID}}'
 check "startup sweep" "the next start reclaims the orphan by owner label" "$reclaimed" "0"
 contains "startup sweep log" "startup cleanup is reported" "$SERVER_LOG.restart" '"msg":"startup cleanup completed","removed":1'
 
-# File routes have their own three-SDK/CLI scenarios; include their real
-# runtime counters in this same coverage directory before enforcing the gate.
 if [ "${E2E_COVERAGE:-0}" = "1" ]; then
   note "file API coverage scenarios"
   if FILES_COVER_DIR="$COVER_DIR" bash "$ROOT/scripts/e2e-files.sh" "$OUT/files"; then
@@ -573,7 +478,6 @@ if [ "${E2E_COVERAGE:-0}" = "1" ]; then
   fi
 fi
 
-# ---------------------------------------------------------------- summary
 
 echo | tee -a "$RESULTS"
 if [ "$failures" -eq 0 ]; then

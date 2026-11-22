@@ -12,19 +12,10 @@ import (
 	"time"
 )
 
-// StartExecution starts a command and returns the new execution. A start is
-// retried only with an idempotency key: without one, a retry could run the
-// command twice.
-//
-// See docs/sdk.md "Starting an execution" for the cancellation recovery: if
-// the caller's context ends while the start is in flight, the SDK cannot know
-// whether the server accepted it, so it repeats the start with the same key
-// and then cancels whatever it finds.
 func (c *Client) StartExecution(ctx context.Context, sandboxID string, req ExecuteRequest) (*Execution, error) {
 	if len(req.Command) == 0 {
 		return nil, &Error{Code: "invalid_request", Message: "sandbox: command must not be empty"}
 	}
-	// Own the invocation across dispatch and cancellation recovery.
 	req.Command = slices.Clone(req.Command)
 	req.Env = maps.Clone(req.Env)
 	if req.TimeoutSeconds != nil {
@@ -64,8 +55,6 @@ func (c *Client) StartExecution(ctx context.Context, sandboxID string, req Execu
 	return c.recoverStart(sandboxID, req)
 }
 
-// startExecution is the plain request. It is safe to repeat because the key is
-// always set by the caller.
 func (c *Client) startExecution(ctx context.Context, sandboxID string, req ExecuteRequest) (*Execution, error) {
 	resp, err := c.do(ctx, request{
 		method:     http.MethodPost,
@@ -83,9 +72,6 @@ func (c *Client) startExecution(ctx context.Context, sandboxID string, req Execu
 	return &ex, nil
 }
 
-// recoverStart learns whether the canceled start ran anything, and cancels it
-// if it did. A failed recovery is ErrCancelUnconfirmed carrying the key, so
-// the caller can clean up rather than guess.
 func (c *Client) recoverStart(sandboxID string, req ExecuteRequest) (*Execution, error) {
 	recoverCtx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()), 5e9)
 	defer cancel()
@@ -124,7 +110,6 @@ func (c *Client) recoverStart(sandboxID string, req ExecuteRequest) (*Execution,
 	}
 }
 
-// GetExecution returns one execution with its retained output.
 func (c *Client) GetExecution(ctx context.Context, sandboxID, executionID string) (*Execution, error) {
 	resp, err := c.do(ctx, request{
 		method:     http.MethodGet,
@@ -141,8 +126,6 @@ func (c *Client) GetExecution(ctx context.Context, sandboxID, executionID string
 	return &ex, nil
 }
 
-// ListExecutions returns the sandbox's executions, newest first. The contract
-// omits output from list responses.
 func (c *Client) ListExecutions(ctx context.Context, sandboxID string) ([]*Execution, error) {
 	resp, err := c.do(ctx, request{
 		method:     http.MethodGet,
@@ -159,9 +142,6 @@ func (c *Client) ListExecutions(ctx context.Context, sandboxID string) ([]*Execu
 	return list.Executions, nil
 }
 
-// CancelExecution requests termination of the execution's process group. The
-// bounded server fallback can return a running snapshot; inspect State before
-// treating it as confirmed termination. Idempotent on a completed execution.
 func (c *Client) CancelExecution(ctx context.Context, sandboxID, executionID string) (*Execution, error) {
 	return c.cancelExecution(ctx, sandboxID, executionID, true)
 }
@@ -182,13 +162,12 @@ func (c *Client) cancelExecution(ctx context.Context, sandboxID, executionID str
 	return &ex, nil
 }
 
-// Unknown outcomes (including failed persistence) do not prove termination.
 func (c *Client) cancelConfirmed(ctx context.Context, sandboxID, executionID string) (*Execution, error) {
 	ex, err := c.cancelExecution(ctx, sandboxID, executionID, false)
 	for {
 		if err != nil {
 			if ctx.Err() != nil {
-				return nil, ctx.Err() // cleanup deadline, not confirmed ErrCanceled
+				return nil, ctx.Err()
 			}
 			return nil, err
 		}

@@ -9,7 +9,6 @@ import (
 	"github.com/ruhuang2001/tiny-sandbox/internal/filearchive"
 )
 
-// ReadArchive buffers a bounded archive; the daemon validates before serving it.
 func (b *Backend) ReadArchive(ctx context.Context, id, p string) ([]byte, error) {
 	rc, err := b.api.ArchiveGet(ctx, id, p)
 	if err != nil {
@@ -26,7 +25,6 @@ func (b *Backend) ReadArchive(ctx context.Context, id, p string) ([]byte, error)
 	return data, nil
 }
 
-// WriteArchive preflights destination components before Docker extracts validated bytes.
 func (b *Backend) WriteArchive(ctx context.Context, id, p string, archive *filearchive.Archive) error {
 	if archive == nil || archive.Len() == 0 {
 		return &daemon.Error{Code: daemon.CodeInvalidRequest, Message: "archive must be constructed by filearchive.Parse"}
@@ -88,7 +86,6 @@ func (b *Backend) checkArchivePaths(ctx context.Context, id, base string, paths 
 	return nil
 }
 
-// Fixed shell program; names are positional arguments, never evaluated as code.
 const archivePathCheck = `for file do
  case "$file" in /*) current=$file;; *) current=$0/$file;; esac
  first=1

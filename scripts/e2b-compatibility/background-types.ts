@@ -1,4 +1,3 @@
-// Compiled twice: pinned E2B declarations, then the installed tiny tarball. Never executed.
 import { Sandbox, type CommandHandle, type CommandResult } from 'e2b';
 
 async function migration(sandbox: Sandbox, background: boolean) {
@@ -20,7 +19,6 @@ async function migration(sandbox: Sandbox, background: boolean) {
   const disconnected: void = await attached.disconnect();
   const killed: boolean = await handle.kill();
   const killedByPid: boolean = await sandbox.commands.kill(handle.pid);
-  // Wrong literal overloads must not be accepted through `any` or a broad union.
   // @ts-expect-error background true does not return a CommandResult
   const wrongResult: CommandResult = await sandbox.commands.run('true', {background: true});
   // @ts-expect-error foreground does not return a CommandHandle

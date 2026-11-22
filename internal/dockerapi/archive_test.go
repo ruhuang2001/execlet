@@ -35,7 +35,6 @@ func TestBuildFileTarCleansName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	// ExtractFile does not expose the name; re-read the header instead.
 	tr := tar.NewReader(bytes.NewReader(body))
 	hdr, err := tr.Next()
 	if err != nil {

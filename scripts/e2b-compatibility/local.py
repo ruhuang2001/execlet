@@ -62,8 +62,6 @@ class DockerFault:
                         return
                     data += part
                 line = data.split(b'\r\n', 1)[0].decode('latin-1')
-                # Docker is addressed with a negotiated version prefix such
-                # as /v1.52, so never match the path from the first byte.
                 path = line.split(' ')[1].partition('?')[0] if ' ' in line else ''
                 head, body = data.split(b'\r\n\r\n', 1)
                 if line.startswith('POST ') and path.endswith('/exec'):
@@ -103,8 +101,6 @@ class DockerFault:
                 with socket.socket(socket.AF_UNIX) as upstream:
                     upstream.connect(outer.upstream)
                     head, body = data.split(b'\r\n\r\n', 1)
-                    # A large upload arrives after its headers: forward the rest
-                    # as it comes, in both directions, until both sides close.
                     length = None
                     for line in head.split(b'\r\n'):
                         name, _, value = line.partition(b':')
@@ -143,9 +139,6 @@ class DockerFault:
                         reads = [upstream] if length is None or len(body) >= length else [upstream, self.request]
                         ready, _, _ = select.select(reads, [], [], 1)
                         if not ready:
-                            # A silent Docker exec is still running. The case
-                            # watchdog and owned-container cleanup bound it; an
-                            # idle proxy timeout must not fabricate process EOF.
                             continue
                         for peer in ready:
                             try:
@@ -156,8 +149,6 @@ class DockerFault:
                                     body += chunk
                                 (upstream if peer is self.request else self.request).sendall(chunk)
                             except (BrokenPipeError, ConnectionResetError):
-                                # Deadlines and container removal deliberately
-                                # close connections while a reply is in flight.
                                 return
 
         self.server = Server(self.path, Handler)
@@ -168,8 +159,6 @@ class DockerFault:
             self.fail_remove = fail
 
     def deny_exec(self, fail):
-        # Arm only after READY. Independent CLI observers bypass this private
-        # socket, while all daemon signal helpers fail at the real Docker API.
         with self.lock:
             self.fail_exec = fail
 
@@ -212,11 +201,8 @@ class Local:
         if not self._started:
             self._started = True
             self.docker = DockerFault(self.out / 'docker.sock')
-            # Adapters talk to the fault proxy, so every guard sees real traffic.
             self.faults = PROXY.FaultProxy(self.port, self.out / 'proxy.jsonl')
         log = (self.out / 'sandboxd.log').open('w')
-        # sandboxd has no image flag: the adapter selects the compatibility
-        # image per create, from CONTRACT_OPTIONS below.
         self.process = subprocess.Popen(
             [self.server_path, '-addr', f'127.0.0.1:{self.port}', '-docker', self.docker.path,
              '-owner', self.owner],

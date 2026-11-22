@@ -48,7 +48,6 @@ func TestParsePullStreamReportsError(t *testing.T) {
 }
 
 func TestParsePullStreamIgnoresNonJSON(t *testing.T) {
-	// A daemon that writes plain progress text must not be read as an error.
 	if err := parsePullStream(strings.NewReader("Downloading layer abc123\n")); err != nil {
 		t.Fatalf("parse: %v", err)
 	}

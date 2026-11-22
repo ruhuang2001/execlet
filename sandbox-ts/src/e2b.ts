@@ -1,4 +1,3 @@
-/** E2B 2.64.0 application-source subset. No E2B package or cloud transport. */
 import { Client } from './client.js';
 import { SandboxError as NativeError } from './errors.js';
 import type { Event, Execution, FileEntry, Sandbox as NativeSandbox } from './types.js';
@@ -21,10 +20,8 @@ export interface CommandOptions extends CommandConnectOptions {
   background?: boolean; stdin?: false; retainOutput?: true;
 }
 export interface CommandResult { stdout: string; stderr: string; exitCode: number; error?: string }
-/** An observation session, not ownership of the remote process. */
 export interface CommandHandle {
   readonly pid: number;
-  /** tiny-sandbox extension: immutable execution identity for diagnostics/native recovery. */
   readonly executionId: string;
   readonly stdout: string;
   readonly stderr: string;
@@ -74,7 +71,6 @@ export class FileNotFoundError extends NotFoundError {}
 export class AuthenticationError extends SandboxError {}
 export class InvalidArgumentError extends SandboxError {}
 export class TimeoutError extends SandboxError {}
-/** Diagnostic extension for native limits and uncertain outcomes, not an exit. */
 export class AdapterError extends SandboxError {}
 export class CommandExitError extends SandboxError {
   readonly exitCode: number;
@@ -151,7 +147,6 @@ function client(options: ConnectionOptions): { native: Client; requestTimeout: n
   } catch (error) { throw translate(error); }
 }
 
-/** One total monotonic deadline; long delays must not overflow setTimeout. */
 function deadline(milliseconds: number): { signal: AbortSignal; close: () => void } {
   const controller = new AbortController();
   const until = performance.now() + milliseconds;
@@ -246,7 +241,6 @@ export class Sandbox {
     try {
       return await request(this.requestTimeout, async signal => {
         const current = await this.native.getSandbox(this.sandboxId, { signal });
-        // Repeat DELETE must still confirm removal of a stored killed record.
         await this.native.killSandbox(this.sandboxId, { signal });
         return current.state !== 'killed';
       });
@@ -257,8 +251,6 @@ export class Sandbox {
   }
 }
 
-// A Client owns one immutable endpoint and credential. Never share a gate globally
-// or let one observer's abort cancel another observer's capability request.
 async function requireBackground(native: Client, signal: AbortSignal): Promise<void> {
   await native.requireCapabilities(['e2b.background.v1'], { signal });
 }
@@ -344,8 +336,6 @@ class Commands {
       if (!options.cwd.startsWith('/')) throw new InvalidArgumentError('cwd must be absolute');
     }
     callbacks(options);
-    // Copy all options before the first await so retries and callbacks cannot
-    // observe caller mutations. This clock includes discovery and accepted-start retries.
     const selected = { ...options };
     const wait = deadline(milliseconds);
     let started: Execution;
@@ -426,8 +416,6 @@ class ObservedCommand implements CommandHandle {
     private readonly requestTimeout: number, attachCursor?: number) {
     this.identity = { id: execution.id, sandbox_id: sandboxId, pid: execution.pid! };
     this.result = new Promise((resolve, reject) => { this.resolve = resolve; this.reject = reject; });
-    // Observation starts without wait(). A rejected callback can even be
-    // `undefined`; preserve that value, without an unhandled-rejection window.
     void this.result.catch(() => {});
     clock.signal.addEventListener('abort', this.timeout, { once: true });
     if (clock.signal.aborted) this.timeout();
@@ -462,7 +450,6 @@ class ObservedCommand implements CommandHandle {
   }
 
   private partial(execution: Partial<Execution> = {}): Partial<Execution> {
-    // A terminal native snapshot contains retained history, not this session's suffix.
     return { ...execution, ...this.identity, ...this.output };
   }
   private truncated(execution: Partial<Execution> = {}): AdapterError {
@@ -474,8 +461,6 @@ class ObservedCommand implements CommandHandle {
     this.clock.close();
     this.clock.signal.removeEventListener('abort', this.timeout);
     this.controller.abort();
-    // Never await user callbacks or the consumer task (a callback may itself
-    // await disconnect). Iterator return closes an idle/suspended SSE reader.
     if (this.events?.return) void this.events.return().catch(() => {});
   }
   private fail(error: unknown): void {

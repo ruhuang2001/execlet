@@ -3,7 +3,6 @@ import { StringDecoder } from 'node:string_decoder';
 import { appendFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 
-// Every fault wraps a request to the real daemon, never a fake API server.
 export class FaultProxy {
   constructor(upstream, artifactDir) {
     this.upstream = new URL(upstream);
@@ -46,7 +45,7 @@ export class FaultProxy {
       const body = Buffer.concat(chunks);
       let json;
       if (body.length && req.headers['content-type']?.includes('application/json')) {
-        try { json = JSON.parse(body); } catch { /* Preserve malformed bytes. */ }
+        try { json = JSON.parse(body); } catch {}
       }
       const record = {
         index: this.records.length + 1, scenario: this.scenario,
@@ -95,7 +94,6 @@ export class FaultProxy {
             if (!raw || dropped || res.destroyed) return;
             const wire = Buffer.from(rule.sse.crlf ? raw.replace(/\r?\n/g, '\r\n') : raw);
             if (rule.sse.fragmented) {
-              // Split inside UTF-8 code points, not merely JS strings.
               for (let i = 0; i < wire.length; i += 7) res.write(wire.subarray(i, i + 7));
             } else res.write(wire);
           };
@@ -115,7 +113,6 @@ export class FaultProxy {
                 record.partialFrameId = id;
                 record.partialFrameBytes = cutoff;
                 dropped = true;
-                // A graceful EOF mid-frame must retry from the delivered cursor.
                 res.end();
                 upstream.destroy();
                 continue;
@@ -127,7 +124,6 @@ export class FaultProxy {
               if (rule.sse.dropAfter && outputFrames >= rule.sse.dropAfter) {
                 dropped = true;
                 record.droppedAfterId = id;
-                // End after a full frame: missing complete still requires retry.
                 res.end();
                 upstream.destroy();
               }
@@ -145,14 +141,13 @@ export class FaultProxy {
           upstream.on('end', () => {
             const responseBody = Buffer.concat(responseChunks);
             let value;
-            try { value = JSON.parse(responseBody.toString('utf8')); } catch { /* binary */ }
+            try { value = JSON.parse(responseBody.toString('utf8')); } catch {}
             rule.onResponse?.(value, record);
             if (rule.disconnect) { res.destroy(); return; }
             if (rule.hold) return;
             if (rule.truncate) {
               res.writeHead(upstream.statusCode, { ...headers, 'content-length': responseBody.length });
               res.write(responseBody.subarray(0, Math.floor(responseBody.length / 2)));
-              // Let headers and the partial body reach fetch before cutting TCP.
               setTimeout(() => res.destroy(), 30);
               return;
             }

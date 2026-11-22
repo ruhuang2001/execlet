@@ -8,13 +8,9 @@ import (
 	"github.com/ruhuang2001/tiny-sandbox/internal/daemon"
 )
 
-// TestTransitionTable walks every cell of the operation-by-state table in
-// docs/api.md. Each cell asserts the documented result: a 409 invalid_state, a
-// 200 no-op, or an actual transition.
 func TestTransitionTable(t *testing.T) {
 	ctx := context.Background()
 
-	// stateFor returns a sandbox in the given state.
 	stateFor := func(t *testing.T, h *harness, state daemon.State) daemon.Sandbox {
 		t.Helper()
 		sb := h.create(daemon.CreateRequest{})
@@ -133,7 +129,6 @@ func TestTransitionTable(t *testing.T) {
 				if ex.State != tc.want {
 					t.Fatalf("execution state = %s, want %s", ex.State, tc.want)
 				}
-				// Starting in a paused sandbox resumes it first.
 				after, err := h.s.Get(sb.ID)
 				wantNoError(t, err)
 				if after.State != daemon.StateRunning {
@@ -222,9 +217,6 @@ func TestTransitionTable(t *testing.T) {
 	})
 }
 
-// TestPendingState exercises the fourth state of the transition table. Pending
-// is only observable by a concurrent reader, so the backend is held inside
-// Create while another goroutine inspects the sandbox.
 func TestPendingState(t *testing.T) {
 	ctx := context.Background()
 	h := newHarness(t)
@@ -255,7 +247,6 @@ func TestPendingState(t *testing.T) {
 		t.Fatal("sandbox did not appear in pending state")
 	}
 
-	// Every operation the table marks invalid while pending.
 	_, err := h.s.Pause(ctx, id)
 	wantCode(t, err, daemon.CodeInvalidState)
 	_, err = h.s.Resume(ctx, id)
@@ -263,12 +254,10 @@ func TestPendingState(t *testing.T) {
 	_, _, err = h.s.StartExecution(ctx, id, daemon.ExecuteRequest{Command: []string{"true"}})
 	wantCode(t, err, daemon.CodeInvalidState)
 	wantCode(t, h.s.WriteFile(ctx, id, "/a", nil), daemon.CodeInvalidState)
-	// Reads are allowed.
 	if _, err := h.s.Get(id); err != nil {
 		t.Fatalf("get pending: %v", err)
 	}
 
-	// Delete from pending is allowed and is not undone by the create finishing.
 	got, err := h.s.Delete(ctx, id)
 	wantNoError(t, err)
 	if got.State != daemon.StateKilled || got.KillReason == nil || *got.KillReason != daemon.KillRequested {
@@ -285,7 +274,6 @@ func TestPendingState(t *testing.T) {
 	}
 }
 
-// TestCreateDefaults checks the defaults and validation from api.md.
 func TestCreateDefaults(t *testing.T) {
 	ctx := context.Background()
 
@@ -304,8 +292,6 @@ func TestCreateDefaults(t *testing.T) {
 		if sb.NanoCPUs != 0 {
 			t.Errorf("nano_cpus = %d, want 0 (no limit)", sb.NanoCPUs)
 		}
-		// Networking defaults to bridge: a sandbox that cannot reach the
-		// network cannot install a package, and that is the common case.
 		if sb.Network != daemon.NetworkBridge {
 			t.Errorf("network = %s, want %s", sb.Network, daemon.NetworkBridge)
 		}

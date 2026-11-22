@@ -12,7 +12,6 @@ import (
 	sandbox "github.com/ruhuang2001/tiny-sandbox/sandbox-go"
 )
 
-// These scenarios exercise the installed daemon and real Docker, not a fake.
 func TestLiveStdin(t *testing.T) {
 	c := liveClient(t)
 	sb := liveSandbox(t, c, "alpine:3.20", 64)

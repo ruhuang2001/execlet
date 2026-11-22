@@ -12,10 +12,6 @@ import (
 	"github.com/ruhuang2001/tiny-sandbox/internal/dockerapi"
 )
 
-// TestExecPassesEnvironmentAlong proves the environment reaches the runtime
-// twice: as the exec environment, and as arguments the wrapper re-applies at
-// the last step. Only the second survives a shell that filters names it
-// considers invalid, which is what dash does to MY-VAR and CONFIG.KEY.
 func TestExecPassesEnvironmentAlong(t *testing.T) {
 	f := newFakeDaemon(t)
 	b := f.backend(t)
@@ -47,13 +43,6 @@ func TestExecPassesEnvironmentAlong(t *testing.T) {
 	}
 }
 
-// TestExecUsesTheWrapperForCwd pins how the directory reaches the process.
-//
-// Docker's own exec WorkingDir is applied before the command runs, so an
-// unusable directory becomes a runtime startup failure: exit 127, the message
-// on stdout, which is indistinguishable from a missing command. The directory
-// must therefore be handled inside the wrapper, after the PID write, and must
-// never appear as ExecConfig.WorkingDir.
 func TestExecUsesTheWrapperForCwd(t *testing.T) {
 	f := newFakeDaemon(t)
 	b := f.backend(t)
@@ -79,8 +68,6 @@ func TestExecUsesTheWrapperForCwd(t *testing.T) {
 	if cmd[4] != "/work" {
 		t.Errorf("wrapper directory argument = %q, want /work", cmd[4])
 	}
-	// The wrapper must write the PID before it can fail on the directory, so
-	// the write has to come first in the script.
 	pidWrite := strings.Index(cmd[2], "printf %s $$ >")
 	chdir := strings.Index(cmd[2], "cd -P --")
 	if pidWrite < 0 || chdir < 0 {
@@ -92,28 +79,16 @@ func TestExecUsesTheWrapperForCwd(t *testing.T) {
 	}
 }
 
-// TestWrapperResolvesTheDirectoryPhysically pins -P. A logical chdir
-// simplifies ".." before looking at the filesystem, so with link -> /data a
-// request for /work/link/.. would run in /work, and /nope/.. would succeed
-// instead of failing. TestRealWorkingDirectoryIsPhysical covers the same
-// property against a real shell.
 func TestWrapperResolvesTheDirectoryPhysically(t *testing.T) {
 	if !strings.Contains(execWrapper, "cd -P -- ") {
 		t.Fatalf("wrapper does not chdir physically:\n%s", execWrapper)
 	}
 }
 
-// TestWrapperAppliesTheEnvironmentWithoutAShell pins the mechanism. The shell
-// that starts the wrapper imports only names it accepts, so the environment is
-// re-applied by env(1) at the last step; leaving it to the shell silently drops
-// MY-VAR and CONFIG.KEY under dash. TestRealEnvironmentSurvivesTheShell covers
-// the property end to end.
 func TestWrapperAppliesTheEnvironmentWithoutAShell(t *testing.T) {
 	for _, want := range []string{
 		"exec /usr/bin/env --",
 		"exec /bin/env --",
-		// Absolutely addressed: the request may replace PATH, which would
-		// otherwise hide env and fail every execution that sets a variable.
 		`[ -x /usr/bin/env ]`,
 	} {
 		if !strings.Contains(execWrapper, want) {
@@ -125,12 +100,6 @@ func TestWrapperAppliesTheEnvironmentWithoutAShell(t *testing.T) {
 	}
 }
 
-// TestWrapperAssignsNoShellVariables pins the names the wrapper must not use.
-//
-// Assigning to a name the image already exports replaces it, and the wrapper
-// runs in the container's environment. An earlier version read its argument
-// count into "n" and probed env into "e", which rewrote an image's own n and e
-// even for a request that set no environment.
 func TestWrapperAssignsNoShellVariables(t *testing.T) {
 	assignment := regexp.MustCompile(`^\s*([A-Za-z_][A-Za-z0-9_]*)=`)
 	for _, line := range strings.Split(execWrapper, "\n") {
@@ -141,9 +110,6 @@ func TestWrapperAssignsNoShellVariables(t *testing.T) {
 	}
 }
 
-// TestExecConfigHasNoWorkingDir pins the absence of the field. Adding it back
-// would reintroduce the failure above without any behavioural test noticing,
-// because the wrapper argument alone still looks correct.
 func TestExecConfigHasNoWorkingDir(t *testing.T) {
 	typ := reflect.TypeFor[dockerapi.ExecConfig]()
 	for i := range typ.NumField() {
@@ -157,10 +123,6 @@ func TestExecConfigHasNoWorkingDir(t *testing.T) {
 	}
 }
 
-// TestExecWithNoCwdKeepsTheArgumentShape keeps the no-cwd path explicit: the
-// wrapper always receives a directory argument and an environment count, both
-// empty and zero when the request sets nothing, so the shift in the script
-// always lines up.
 func TestExecWithNoCwdKeepsTheArgumentShape(t *testing.T) {
 	f := newFakeDaemon(t)
 	b := f.backend(t)
@@ -195,17 +157,8 @@ func TestExecWithNoCwdKeepsTheArgumentShape(t *testing.T) {
 	}
 }
 
-// TestUnwrapDoesNotMisreadALegitimateCommand pins how the fake daemon splits a
-// wrapped argv.
-//
-// The separator appears only when the command's own path contains "=". Sniffing
-// for its four arguments instead of applying that rule would strip them off a
-// legitimate command that happens to start with the same words, and every
-// assertion built on the fake would then be about a command nobody ran.
 func TestUnwrapDoesNotMisreadALegitimateCommand(t *testing.T) {
 	command := append(slices.Clone(commandSeparator), "echo", "hi")
-	// The flag says no separator follows, so the command's own leading words
-	// must be left alone.
 	cmd := append([]string{"/bin/sh", "-c", execWrapper, "/run/pid", "/work", "1", "0", "A=1"}, command...)
 
 	_, dir, env, actual, ok := unwrap(cmd)
@@ -221,9 +174,6 @@ func TestUnwrapDoesNotMisreadALegitimateCommand(t *testing.T) {
 	}
 }
 
-// TestWrapCommandAddsTheSeparatorOnlyWhenNeeded pins the condition. A separator
-// on every call would put a second shell in the path of every execution, and
-// that shell resets IFS and SHLVL, so the requested values would stop arriving.
 func TestWrapCommandAddsTheSeparatorOnlyWhenNeeded(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

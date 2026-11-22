@@ -12,7 +12,6 @@ function retryAfter(header: string | null): number {
   return Number.isSafeInteger(seconds) && seconds > 0 ? seconds * 1000 : 0;
 }
 
-/** Chunk long Retry-After delays to avoid setTimeout's signed-32-bit overflow. */
 export async function sleep(delay: number, signal?: AbortSignal): Promise<void> {
   checkSignal(signal);
   while (delay > 0) {
@@ -39,7 +38,6 @@ export class Transport {
   private readonly fetcher: typeof globalThis.fetch;
 
   constructor(config: ClientConfig) {
-    // Optional property access, no Node imports or Node type dependency.
     const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env;
     let domain = config.domain || env?.SANDBOX_DOMAIN || 'http://localhost:8080';
     if (!domain.includes('://')) domain = 'http://' + domain;
@@ -68,7 +66,6 @@ export class Transport {
   async open(path: string, init: RequestInit): Promise<Response> {
     const headers = new Headers(init.headers);
     if (this.apiKey) headers.set('Authorization', 'Bearer ' + this.apiKey);
-    // Redirects must not turn a retry-safe request into a different operation.
     return this.fetcher(this.domain + path, { ...init, headers, redirect: 'error' });
   }
 
@@ -82,13 +79,11 @@ export class Transport {
         const init: RequestInit = { method };
         if (signal) init.signal = signal;
         if (body !== undefined) {
-          // Copy raw bytes: a retry must not observe caller mutations.
           init.body = typeof body === 'string' ? body : new Uint8Array(body);
           init.headers = { 'Content-Type': typeof body === 'string' ? 'application/json' : 'application/octet-stream' };
         }
         const response = await this.open(path, init);
         after = retryAfter(response.headers.get('Retry-After'));
-        // Consume fully before accepting the response, including empty PUTs.
         const bytes = new Uint8Array(await response.arrayBuffer());
         if (response.ok) return bytes;
         error = statusError(response.status, new TextDecoder().decode(bytes));

@@ -1,4 +1,3 @@
-/** Real SDK bridge. All scenario assertions live in scenarios.py for both providers. */
 import assert from 'node:assert/strict';
 import { appendFileSync, closeSync, fsyncSync, openSync, readFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
@@ -14,19 +13,14 @@ type Query = { op: string; id: string; duration?: number; options?: Record<strin
   nonfinite?: 'nan' | 'infinity' | '-infinity' };
 const emit = (value: unknown) => process.stdout.write(JSON.stringify(value) + '\n');
 const options = JSON.parse(process.env.CONTRACT_OPTIONS || '{}');
-// Template/image selection is create-only, so connect never receives it.
 const connectOptions = Object.fromEntries(Object.entries(options).filter(([k]) => k !== 'image' && k !== 'template'));
 const provider = process.env.CONTRACT_PROVIDER;
 let sdk: SDK;
 try {
-  // A variable import keeps the future adapter optional, but calls below are
-  // statically checked against the frozen official declarations.
   const name = provider === 'e2b' ? 'e2b'
     : (process.env.CONTRACT_TS_MODULE || process.env.CONTRACT_MODULE || '@tiny-sandbox/sdk/e2b');
   sdk = await import(name) as SDK;
   const require = createRequire(import.meta.url);
-  // The E2B reference is pinned; the future adapter has no published version
-  // to pin yet, so its version is reported when resolvable and otherwise null.
   const version = provider === 'e2b' ? JSON.parse(readFileSync(require.resolve('e2b/package.json'), 'utf8')).version : null;
   if (provider === 'e2b') assert.equal(version, '2.64.0');
   emit({ready: true, version, module: name, runtime: process.version, pid:process.pid});
@@ -72,8 +66,6 @@ function entry(r: Reference.WriteInfo, full = false) {
   return data;
 }
 function failure(e: unknown) {
-  // A future adapter need not export every reference error class, so map by
-  // name through a tolerant instanceof and never assume the export exists.
   const is = (name: string) => {
     const cls = (sdk as unknown as Record<string, unknown>)[name];
     return typeof cls === 'function' && e instanceof (cls as new (...a: never[]) => object);
@@ -95,8 +87,6 @@ function failure(e: unknown) {
 type Callbacks = {stdout: string[]; stderr: string[]; times: number[]};
 async function dispatch(q: Query, callbacks: Callbacks) {
   const opts: Record<string, unknown> = {...q.options};
-  // This is spelling/unit translation only. The application scenarios never
-  // branch by provider and do not emulate missing SDK behavior.
   const names: Record<string, string> = {retain_output:'retainOutput', request_timeout:'requestTimeoutMs'};
   for (const [python, ts] of Object.entries(names)) if (python in opts) { opts[ts] = opts[python]; delete opts[python]; }
   if (q.duration !== undefined) opts.timeoutMs = q.duration * 1000;
@@ -122,7 +112,6 @@ async function dispatch(q: Query, callbacks: Callbacks) {
     assert.equal(s.sandboxId, q.id); sandboxes.set(q.id, s); return {id:s.sandboxId};
   }
   if (q.op === 'handle_exports') {
-    // Type-only exports are checked against the installed declarations, not fabricated here.
     return {unhandled:[...unhandled]};
   }
   const s = sandboxes.get(q.id)!;

@@ -14,8 +14,6 @@ import (
 	sandbox "github.com/ruhuang2001/tiny-sandbox/sandbox-go"
 )
 
-// doctor implements `sandboxctl doctor`: one line per check on stdout, then
-// Ready or the hints for whatever failed.
 func (in *invocation) doctor(args []string) int {
 	if len(args) > 0 {
 		_, _ = fmt.Fprintln(in.stderr, "usage: sandboxctl doctor")
@@ -39,7 +37,6 @@ func (in *invocation) doctor(args []string) int {
 		failed = append(failed, err)
 	}
 
-	// 1. config
 	if clientErr != nil {
 		report("config", clientErr, "")
 		checksFailed(in.stdout, in.stderr, failed)
@@ -51,13 +48,11 @@ func (in *invocation) doctor(args []string) int {
 	}
 	report("config", nil, domain+", "+keyState)
 
-	// 2. health: the one direct HTTP call the CLI makes.
 	healthCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	err := healthProbe(healthCtx, domain)
 	cancel()
 	report("health", err, "")
 
-	// 3. auth: a random sandbox that cannot exist answers 404 when authorized.
 	authCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	_, err = client.GetSandbox(authCtx, "sbx_doctor_probe")
 	cancel()
@@ -72,20 +67,17 @@ func (in *invocation) doctor(args []string) int {
 		report("auth", err, "")
 	}
 
-	// 4. docker: only meaningful when the server is local.
 	if isLocalDomain(domain) {
 		report("docker", checkDocker(), "")
 	} else {
 		_, _ = fmt.Fprintf(in.stdout, "docker: skipped (remote domain)\n")
 	}
 
-	// 5. sandbox: create, run, verify, kill.
 	report("sandbox", in.checkSandbox(client), "")
 
 	return checksFailed(in.stdout, in.stderr, failed)
 }
 
-// checksFailed prints Ready or the hints and returns the exit code.
 func checksFailed(stdout, stderr io.Writer, failed []error) int {
 	if len(failed) == 0 {
 		_, _ = fmt.Fprintln(stdout, "Ready")
@@ -104,7 +96,6 @@ func checksFailed(stdout, stderr io.Writer, failed []error) int {
 	return 1
 }
 
-// effectiveDomain is the URL the client will use.
 func (in *invocation) effectiveDomain() string {
 	if in.globals.domain != "" {
 		return in.globals.domain
@@ -115,32 +106,15 @@ func (in *invocation) effectiveDomain() string {
 	return "http://localhost:8080"
 }
 
-// dockerInfoTimeout bounds the Docker CLI probe. It is generous because the
-// failure this catches is "no daemon", not "slow daemon": a shared CI runner
-// can take seconds to answer the first call, and a short bound turns that into
-// a false failure while every real Docker check in the suite still passes.
 const dockerInfoTimeout = 30 * time.Second
 
-// checkDocker asks the Docker CLI whether a daemon is reachable. Docker is a
-// host dependency of a local server, not of the CLI, so this is a check rather
-// than a requirement.
-//
-// The error carries why the probe failed. "docker info failed" alone cannot
-// distinguish a missing CLI from an unreachable daemon or a timeout, which is
-// the difference between a broken machine and a slow one.
 func checkDocker() error {
 	ctx, cancel := context.WithTimeout(context.Background(), dockerInfoTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "docker", "info")
 	cmd.Stdout = io.Discard
-	// The CLI writes the reason to stderr: a permission error on the socket, or
-	// a connection refusal. It is a few short lines, so the message can carry
-	// it as-is.
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	// A probe that succeeded is never a timeout, even if the deadline expired
-	// in the instant between the process exiting and the context check: the
-	// question is why it exited, and a nil error answers that.
 	switch err := cmd.Run(); {
 	case err != nil && ctx.Err() != nil:
 		return fmt.Errorf("docker info timed out after %s", dockerInfoTimeout)
@@ -155,14 +129,11 @@ func checkDocker() error {
 	return nil
 }
 
-// firstLine keeps a multi-line command error to the line that names the cause,
-// so the doctor table stays one line per check.
 func firstLine(s string) string {
 	line, _, _ := strings.Cut(s, "\n")
 	return line
 }
 
-// checkSandbox creates a sandbox, runs echo, verifies the output, and kills it.
 func (in *invocation) checkSandbox(client *sandbox.Client) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -187,11 +158,7 @@ func (in *invocation) checkSandbox(client *sandbox.Client) error {
 	return nil
 }
 
-// isNotFound and isUnauthorized keep the doctor switch readable.
 func isNotFound(err error) bool     { return errors.Is(err, sandbox.ErrNotFound) }
 func isUnauthorized(err error) bool { return errors.Is(err, sandbox.ErrUnauthorized) }
 
-// contextWithoutSignals is the context for commands that finish quickly.
-// Ctrl+C still terminates the process; these calls are short enough that a
-// graceful cancel adds nothing.
 func contextWithoutSignals() context.Context { return context.Background() }

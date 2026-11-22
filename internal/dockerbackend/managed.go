@@ -16,9 +16,6 @@ import (
 //go:embed supervisor.py
 var supervisor string
 
-// BackgroundCommands declares support for the managed-execution protocol.
-// Its images must include Linux Python 3; a missing helper fails before an
-// accepted command, never falls back to numeric PID signaling.
 func (*Backend) BackgroundCommands() bool { return true }
 
 func (b *Backend) managedCommand(ctx context.Context, containerID, path, token string, spec daemon.ExecSpec) ([]string, string, error) {
@@ -36,8 +33,6 @@ func (b *Backend) managedCommand(ctx context.Context, containerID, path, token s
 	if err != nil {
 		return nil, "", err
 	}
-	// The archive staging path keeps large command/environment payloads out of
-	// Linux's per-argument limit. The supervisor unlinks it before spawning.
 	dir, err := b.stageStdin(ctx, containerID, string(payload))
 	if err != nil {
 		return nil, "", err
@@ -94,16 +89,12 @@ func (p *process) readManagedPID(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-p.done:
-			// The first cat may precede publication while the process exits
-			// before its response arrives. Read again after this barrier.
 			ended = true
 		case <-time.After(pollDelay(step)):
 		}
 	}
 }
 
-// KillManaged never reconstructs a target from a numeric PID. The supervisor
-// owns the child until it closes its unique control channel, before reaping.
 func (p *process) KillManaged() (bool, error) { return p.signalManaged(daemon.SignalKill) }
 
 func (p *process) signalManaged(sig daemon.Signal) (bool, error) {

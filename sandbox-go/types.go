@@ -1,13 +1,7 @@
 package sandbox
 
-// Types mirroring the HTTP contract in docs/api.md. Optional response fields
-// use pointers so "unset" and "zero" stay distinct; request fields that are
-// optional use pointers for the same reason.
-
-// State is a sandbox lifecycle state.
 type State string
 
-// States, as api.md defines them.
 const (
 	StatePending State = "pending"
 	StateRunning State = "running"
@@ -15,10 +9,8 @@ const (
 	StateKilled  State = "killed"
 )
 
-// KillReason explains why a sandbox was killed.
 type KillReason string
 
-// Kill reasons, as api.md defines them.
 const (
 	KillRequested   KillReason = "requested"
 	KillTimeout     KillReason = "timeout"
@@ -26,19 +18,15 @@ const (
 	KillEvicted     KillReason = "evicted"
 )
 
-// Action is what a timeout does when it fires.
 type Action string
 
-// Actions a timeout can take.
 const (
 	ActionKill  Action = "kill"
 	ActionPause Action = "pause"
 )
 
-// Reason is an execution termination reason.
 type Reason string
 
-// Termination reasons, as api.md defines them.
 const (
 	ReasonCanceled Reason = "canceled"
 	ReasonTimeout  Reason = "timeout"
@@ -48,7 +36,6 @@ const (
 	ReasonUnknown  Reason = "unknown"
 )
 
-// Sandbox is the contract view of a sandbox.
 type Sandbox struct {
 	MaxConcurrentExecutions int         `json:"max_concurrent_executions"`
 	ID                      string      `json:"id"`
@@ -67,7 +54,6 @@ type Sandbox struct {
 	KillReason              *KillReason `json:"kill_reason"`
 }
 
-// Execution is one command run in a sandbox.
 type Execution struct {
 	ID                string   `json:"id"`
 	PID               *int     `json:"pid,omitempty"`
@@ -84,55 +70,30 @@ type Execution struct {
 	FinishedAt        *Time    `json:"finished_at"`
 }
 
-// Network modes a sandbox can be created with.
 const (
-	// NetworkBridge gives the sandbox outbound network access through Docker's
-	// bridge. This is the default: package installs and HTTP calls work.
 	NetworkBridge = "bridge"
-	// NetworkNone removes networking entirely.
-	NetworkNone = "none"
+	NetworkNone   = "none"
 )
 
-// CreateSandboxRequest is the body of POST /v1/sandboxes. Every field is
-// optional; a nil pointer takes the server default.
 type CreateSandboxRequest struct {
-	MaxConcurrentExecutions *int    `json:"max_concurrent_executions,omitempty"`
-	Image                   *string `json:"image,omitempty"`
-	MemoryMB                *int    `json:"memory_mb,omitempty"`
-	PidsLimit               *int    `json:"pids_limit,omitempty"`
-	NanoCPUs                *int64  `json:"nano_cpus,omitempty"`
-	Network                 *string `json:"network,omitempty"`
-	TimeoutSeconds          *int    `json:"timeout_seconds,omitempty"`
-	TimeoutAction           *Action `json:"timeout_action,omitempty"`
-	IdleTimeoutSeconds      *int    `json:"idle_timeout_seconds,omitempty"`
-	IdleTimeoutAction       *Action `json:"idle_timeout_action,omitempty"`
-	// Env is the sandbox's own environment. Every execution sees it and it
-	// survives a client reconnecting; a per-execution Env entry overrides it
-	// for that execution only.
-	Env map[string]string `json:"env,omitempty"`
+	MaxConcurrentExecutions *int              `json:"max_concurrent_executions,omitempty"`
+	Image                   *string           `json:"image,omitempty"`
+	MemoryMB                *int              `json:"memory_mb,omitempty"`
+	PidsLimit               *int              `json:"pids_limit,omitempty"`
+	NanoCPUs                *int64            `json:"nano_cpus,omitempty"`
+	Network                 *string           `json:"network,omitempty"`
+	TimeoutSeconds          *int              `json:"timeout_seconds,omitempty"`
+	TimeoutAction           *Action           `json:"timeout_action,omitempty"`
+	IdleTimeoutSeconds      *int              `json:"idle_timeout_seconds,omitempty"`
+	IdleTimeoutAction       *Action           `json:"idle_timeout_action,omitempty"`
+	Env                     map[string]string `json:"env,omitempty"`
 }
 
-// UpdateSandboxRequest is the body of PATCH /v1/sandboxes/{id}. Exactly one
-// field is set, and lifetime is the only mutable property.
 type UpdateSandboxRequest struct {
-	// TimeoutSeconds replaces the deadline with now plus the value; it may
-	// shorten it. Zero removes the deadline.
 	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
-	// ExtendSeconds keeps the later of the current deadline and now plus the
-	// value, so it can only extend. Zero is a no-op.
-	ExtendSeconds *int `json:"extend_seconds,omitempty"`
+	ExtendSeconds  *int `json:"extend_seconds,omitempty"`
 }
 
-// ExecuteRequest is the body of POST .../executions.
-//
-// TimeoutSeconds bounds one execution: nil or 0 means no deadline of its own.
-// The sandbox lifetime policy still applies: it can kill or pause the sandbox.
-//
-// Env is this execution's environment. It is additive: a name here overrides
-// the container's value and every other container variable stays visible. Cwd
-// is the directory the command runs in; empty means the image's working
-// directory. A directory that does not exist does not fail the start: the
-// execution completes with exit code 126 and the reason on stderr.
 type ExecuteRequest struct {
 	Command        []string          `json:"command"`
 	IdempotencyKey string            `json:"idempotency_key,omitempty"`
@@ -140,14 +101,11 @@ type ExecuteRequest struct {
 	TimeoutMS      *int64            `json:"timeout_ms,omitempty"`
 	Env            map[string]string `json:"env,omitempty"`
 	Cwd            string            `json:"cwd,omitempty"`
-	// Stdin is one-shot UTF-8 text (maximum 1 MiB), followed by EOF.
-	Stdin string `json:"stdin,omitempty"`
+	Stdin          string            `json:"stdin,omitempty"`
 }
 
-// EventType is an SSE event type.
 type EventType string
 
-// Event types carried by an execution stream.
 const (
 	EventStdout    EventType = "stdout"
 	EventStderr    EventType = "stderr"
@@ -155,8 +113,6 @@ const (
 	EventComplete  EventType = "complete"
 )
 
-// Event is one event from an execution stream. Exactly one of Data, LimitBytes
-// and Execution is meaningful, depending on Type.
 type Event struct {
 	ID         uint64
 	Type       EventType
@@ -165,7 +121,6 @@ type Event struct {
 	Execution  *Execution
 }
 
-// sandboxList and executionList are the list envelopes.
 type sandboxList struct {
 	Sandboxes []*Sandbox `json:"sandboxes"`
 }

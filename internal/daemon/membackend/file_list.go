@@ -10,7 +10,6 @@ import (
 	"github.com/ruhuang2001/tiny-sandbox/internal/daemon"
 )
 
-// ListFiles derives directories from stored file paths.
 func (b *Backend) ListFiles(_ context.Context, id, p, after string, limit int) ([]daemon.FileEntry, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

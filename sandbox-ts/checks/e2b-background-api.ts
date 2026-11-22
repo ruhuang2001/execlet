@@ -1,4 +1,3 @@
-// Also exercise generated declarations, not just the implementation's source types.
 import { Sandbox, type CommandHandle, type CommandResult } from '../dist/e2b.js';
 
 async function migration(sandbox: Sandbox, background: boolean) {

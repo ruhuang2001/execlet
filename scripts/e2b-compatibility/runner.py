@@ -19,9 +19,6 @@ ROOT = HERE.parent.parent
 MANIFEST = json.loads((HERE / 'cases.json').read_text())
 CASES = {c['id']: c for c in MANIFEST['cases']}
 CASE_NAMES = list(CASES)
-# The reference is the pinned E2B 2.64.0 implementation, recorded as a
-# source-derived contract. A cloud capture is an optional drift check, not
-# the basis for compatibility, so it never appears in this file's inputs.
 REFERENCE = json.loads((HERE / 'reference.json').read_text())
 LANGUAGES = ['python', 'typescript']
 PROFILE = 'baseline'
@@ -142,7 +139,6 @@ class Worker:
         request = self.pending
         reply = self.receive()
         self.pending = None
-        # Payloads are deterministic fixtures, but avoid 10 MiB data dumps.
         def compact(v):
             if isinstance(v, str) and len(v) > 2048:
                 return {'characters':len(v), 'sha256':hashlib.sha256(v.encode()).hexdigest()}
@@ -298,7 +294,6 @@ def run(args):
                 raise RuntimeError(f'Node >=22.19 required by pinned E2B dependencies; got '
                                    f'{out_version.stdout.strip() or "nothing"} (set NODE=...)')
             report['node'] = out_version.stdout.strip()
-        # Import-only preflight; no create or other network operation.
         for language in languages:
             worker = Worker(language, dict(env, CONTRACT_OWNED=str(out / 'preflight-owned.jsonl')), out / f'preflight-{language}.jsonl', 60)
             report.setdefault('workers', {})[language] = worker.identity
@@ -353,8 +348,6 @@ def run(args):
                             row.pop('reason', None)
                     else:
                         row.update(status='failed', reason='missing worker result')
-                    # The child's own report is authoritative; the exit code only
-                    # has to agree that the result was persisted at all.
                     if child.returncode not in (0, 1, 2):
                         row.update(status='failed', reason=f'case process crashed: {child.returncode}')
                 except subprocess.TimeoutExpired:

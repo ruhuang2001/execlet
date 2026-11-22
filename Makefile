@@ -1,9 +1,11 @@
 BIN := bin
 PYTHON ?= python3
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+COMMENT_PYTHON := .venv/comment-lint/bin/python
+COMMENT_DEPS := .venv/comment-lint/requirements.stamp
 LDFLAGS := -X main.version=$(VERSION)
 
-.PHONY: build test vet lint race fmt check-commit install-hooks python-build python-e2e typescript typescript-e2e clean
+.PHONY: build test vet lint comment-lint-env comment-lint comment-lint-e2e race fmt check-commit install-hooks python-build python-e2e typescript typescript-e2e clean
 
 build:
 	go build -ldflags '$(LDFLAGS)' -o $(BIN)/sandboxd ./cmd/sandboxd
@@ -18,25 +20,34 @@ race:
 vet:
 	go vet ./...
 
-lint:
+lint: comment-lint
 	golangci-lint run ./...
+
+$(COMMENT_DEPS): scripts/comment-lint/requirements.txt
+	$(PYTHON) -m venv .venv/comment-lint
+	$(COMMENT_PYTHON) -m pip install -r $<
+	@touch $@
+
+comment-lint-env: $(COMMENT_DEPS)
+
+comment-lint: comment-lint-env
+	$(COMMENT_PYTHON) scripts/comment-lint/check.py $(if $(COMMENT_BASE),--base "$(COMMENT_BASE)")
+
+comment-lint-e2e: comment-lint-env
+	$(COMMENT_PYTHON) scripts/comment-lint/e2e.py artifacts/comment-lint/e2e.json
 
 fmt:
 	gofmt -l -w .
 
-# Validates the last commit's message against type(scope): summary.
 check-commit:
 	./scripts/check-commit-msg.sh "HEAD~1..HEAD"
 
-# Points git at the tracked hooks once per clone.
 install-hooks:
 	git config core.hooksPath .githooks
 
-# Requires the build frontend; produces local verification artifacts only.
 python-build:
 	$(PYTHON) -m build --outdir artifacts/python-dist sandbox-python
 
-# Requires Docker; creates a virtual environment unless SDK_INSTALLED=1.
 python-e2e:
 	PYTHON=$(PYTHON) bash scripts/e2e-python.sh artifacts/python-e2e
 

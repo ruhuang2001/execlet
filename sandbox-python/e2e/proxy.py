@@ -60,8 +60,6 @@ class FaultProxy:
                     pass
 
             def forward(self):
-                # Completion records lag behind responses, especially for SSE.
-                # Count arrivals separately when proving a cached call sends nothing.
                 with owner.lock:
                     owner._request_count += 1
                 body = self.rfile.read(int(self.headers.get("Content-Length", "0")))

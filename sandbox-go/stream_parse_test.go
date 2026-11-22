@@ -7,10 +7,6 @@ import (
 	"testing"
 )
 
-// TestSSEReaderRejectsDataWithoutEvent pins the parser fix found by fuzzing:
-// a block that carries data but no event name used to reach onEvent as an
-// Event with an empty type, which a callback can neither render nor treat as
-// terminal. It must be a stream error instead.
 func TestSSEReaderRejectsDataWithoutEvent(t *testing.T) {
 	for _, stream := range []string{
 		"data:",
@@ -29,9 +25,6 @@ func TestSSEReaderRejectsDataWithoutEvent(t *testing.T) {
 	}
 }
 
-// TestSSEReaderHandlesFieldOrderAndCRLF pins two things the fuzz corpus
-// relies on: the event name may follow the data lines, and CRLF line endings
-// parse exactly like LF.
 func TestSSEReaderHandlesFieldOrderAndCRLF(t *testing.T) {
 	for name, stream := range map[string]string{
 		"lf":   "id: 1\ndata: {\"data\":\"hello\"}\nevent: stdout\n\n",

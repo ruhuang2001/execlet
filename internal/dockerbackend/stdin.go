@@ -9,16 +9,11 @@ import (
 	"github.com/ruhuang2001/tiny-sandbox/internal/dockerapi"
 )
 
-// stageStdin keeps input out of exec argv and the retained execution. The
-// private directory is created by the image's user; archive bytes are readable
-// only through that directory. The wrapper unlinks them as soon as it opens fd0.
 func (b *Backend) stageStdin(ctx context.Context, containerID, input string) (string, error) {
 	if input == "" {
 		return "", nil
 	}
 	dir := "/tmp/tiny-sandbox-stdin." + rand.Text()
-	// Keep a cleanup target even when the directory was created but the
-	// creation response is lost. mkdir never reuses an existing directory.
 	_, err := b.captureControl(ctx, containerID, []string{"/bin/sh", "-c",
 		`test -x /bin/mkdir && test -x /bin/rm && test -x /bin/rmdir || exit 125; umask 077; /bin/mkdir -m 700 -- "$1"`, "stdin-stage", dir})
 	if err != nil {
@@ -49,8 +44,6 @@ func validStdinDir(dir string) bool {
 	return true
 }
 
-// withStdin changes only the wrapper's positional argument layout. All input
-// stays in the archive; none is evaluated by the shell or placed in argv.
 func withStdin(argv []string, dir string) []string {
 	argv[2] = `printf %s $$ > "$0" || exit 125
 exec 0<"$1/input" || exit 125
@@ -64,7 +57,6 @@ shift
 	return append(out, argv[4:]...)
 }
 
-// No command can be using fd0 yet on a staging or ExecCreate failure.
 func (b *Backend) cleanupStdin(containerID, dir string) {
 	if dir == "" || !validStdinDir(dir) {
 		return

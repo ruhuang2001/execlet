@@ -7,93 +7,40 @@ import (
 	"time"
 )
 
-// Defaults and limits fixed by docs/api.md.
 const (
 	DefaultImage          = "alpine:3.20"
 	DefaultMemoryMB       = 512
 	MinMemoryMB           = 16
 	DefaultTimeoutSeconds = 300
 
-	// DefaultPidsLimit bounds tasks per sandbox when the request does not set
-	// one. The pids cgroup counts tasks, not processes, so this leaves room for
-	// a JVM or a Go build while still stopping a fork bomb at the container
-	// boundary instead of at the host's PID table.
 	DefaultPidsLimit = 1024
-	// MinPidsLimit is the smallest accepted pids limit. Below it the sandbox
-	// cannot reliably run its own scaffolding: an exec plus the shell wrapper
-	// and the in-container signal helper need several tasks between them.
-	MinPidsLimit = 64
-	// DefaultNetwork is the sandbox network mode when the request does not set
-	// one. bridge keeps the behavior every existing caller has; none disables
-	// outbound and inbound networking entirely.
-	DefaultNetwork = NetworkBridge
+	MinPidsLimit     = 64
+	DefaultNetwork   = NetworkBridge
 
-	// MaxOutputBytes is the retained stdout+stderr budget per execution.
-	MaxOutputBytes = 1 << 20
-	// MaxOutputEvents bounds the number of stdout and stderr events.
-	MaxOutputEvents = 4096
-	// MaxEventDataBytes is the largest chunk carried by one output event.
-	MaxEventDataBytes = 32 << 10
-	// MaxIdempotencyKey is the longest accepted idempotency key, in characters.
-	MaxIdempotencyKey = 128
-	// MaxEnvEntries bounds the environment variables one execution may set.
-	// Together with the three per-entry limits it keeps a request from turning
-	// the request body limit into an unbounded per-execution allocation.
-	MaxEnvEntries = 64
-	// MaxEnvKeyBytes bounds one environment variable name.
-	MaxEnvKeyBytes = 64
-	// MaxEnvValueBytes bounds one environment variable value.
-	MaxEnvValueBytes = 8 << 10
-	// MaxEnvTotalBytes bounds the whole environment of one execution, measured
-	// as the sum of every name, "=" and value.
-	MaxEnvTotalBytes = 32 << 10
-	// MaxCwdBytes bounds the working directory. It matches the usual PATH_MAX,
-	// so a directory the kernel accepts is never rejected here.
-	MaxCwdBytes = 4096
-	// MaxFileBytes is the largest file the daemon accepts or serves.
-	MaxFileBytes = 10 << 20
-	// MaxRequestBodyBytes is the largest JSON request body.
-	MaxRequestBodyBytes = 1 << 20
-	// MaxExecutionRequestBodyBytes allows JSON escaping of one MiB of input.
+	MaxOutputBytes               = 1 << 20
+	MaxOutputEvents              = 4096
+	MaxEventDataBytes            = 32 << 10
+	MaxIdempotencyKey            = 128
+	MaxEnvEntries                = 64
+	MaxEnvKeyBytes               = 64
+	MaxEnvValueBytes             = 8 << 10
+	MaxEnvTotalBytes             = 32 << 10
+	MaxCwdBytes                  = 4096
+	MaxFileBytes                 = 10 << 20
+	MaxRequestBodyBytes          = 1 << 20
 	MaxExecutionRequestBodyBytes = 8 << 20
-	// MaxStdinBytes bounds decoded UTF-8 input, independently of JSON escaping.
-	MaxStdinBytes = 1 << 20
-	// MaxCommandBytes preserves the previous request-sized metadata bound.
-	// A byte is charged per argv separator so many empty args stay bounded.
-	MaxCommandBytes = 1 << 20
-	// MaxExecutionsPerSandbox bounds the execution history. Above it, the
-	// oldest completed execution and its retained output are dropped; the
-	// running execution is never dropped.
-	MaxExecutionsPerSandbox = 200
-	// MaxSandboxes bounds live sandboxes. Each one holds a container and its
-	// memory, so an unbounded agent loop would exhaust the host rather than get
-	// an answer; a create beyond the bound is rate_limited. Killed records do
-	// not count: they cost no container.
-	MaxSandboxes = 64
-	// MaxRetainedSandboxes bounds killed records kept for idempotent delete and
-	// history. Above it the oldest killed record is dropped whole, because a
-	// record that only answers "this existed" is not worth an unbounded share of
-	// the process's memory.
-	MaxRetainedSandboxes = 64
-	// MaxRetainedOutputBytes bounds the output retained across every sandbox.
-	// Per-execution limits alone multiply: 200 executions of 1 MiB in one
-	// sandbox is 200 MiB, and that is per sandbox. Once the total is reached,
-	// the oldest completed executions are dropped until it fits.
-	MaxRetainedOutputBytes = 64 << 20
-	// MaxStreamsPerSandbox bounds concurrent open SSE streams per sandbox so
-	// idle readers cannot exhaust goroutines or pin idle timeouts unboundedly.
-	MaxStreamsPerSandbox = 32
-	// BackendCallTimeout bounds one container-runtime call. The reaper shares
-	// one goroutine, so a call that never returns would stop timeout and
-	// eviction checks for every sandbox. Request paths use the same bound, so a
-	// stuck runtime cannot pin a sandbox lock.
-	BackendCallTimeout = 5 * time.Second
+	MaxStdinBytes                = 1 << 20
+	MaxCommandBytes              = 1 << 20
+	MaxExecutionsPerSandbox      = 200
+	MaxSandboxes                 = 64
+	MaxRetainedSandboxes         = 64
+	MaxRetainedOutputBytes       = 64 << 20
+	MaxStreamsPerSandbox         = 32
+	BackendCallTimeout           = 5 * time.Second
 )
 
-// State is a sandbox lifecycle state: pending, running, paused, or killed.
 type State string
 
-// States, as api.md defines them.
 const (
 	StatePending State = "pending"
 	StateRunning State = "running"
@@ -101,10 +48,8 @@ const (
 	StateKilled  State = "killed"
 )
 
-// KillReason explains why a sandbox reached StateKilled. It is terminal.
 type KillReason string
 
-// Kill reasons, as api.md defines them.
 const (
 	KillRequested   KillReason = "requested"
 	KillTimeout     KillReason = "timeout"
@@ -112,36 +57,22 @@ const (
 	KillEvicted     KillReason = "evicted"
 )
 
-// Action is what a timeout does when it fires. Only kill and pause exist.
 type Action string
 
-// NetworkMode is the sandbox container's network mode. Only the two modes that
-// keep the sandbox isolated from the host exist: host networking would expose
-// every host socket to code the caller does not control.
 type NetworkMode string
 
-// Network modes.
 const (
-	// NetworkBridge gives the container its own network namespace with
-	// outbound access, Docker's default. Package installs work.
 	NetworkBridge NetworkMode = "bridge"
-	// NetworkNone gives the container an empty namespace: no outbound
-	// connection and no inbound traffic.
-	NetworkNone NetworkMode = "none"
+	NetworkNone   NetworkMode = "none"
 )
 
-// Actions a timeout can take.
 const (
 	ActionKill  Action = "kill"
 	ActionPause Action = "pause"
 )
 
-// Reason is an execution termination reason. If several apply, the first in
-// this order wins: canceled, timeout, oom, evicted, exited. Exit code 137
-// alone never implies oom. With concurrent slots, unexplained 137 is unknown.
 type Reason string
 
-// Termination reasons, in the precedence order of api.md.
 const (
 	ReasonCanceled Reason = "canceled"
 	ReasonTimeout  Reason = "timeout"
@@ -151,16 +82,13 @@ const (
 	ReasonUnknown  Reason = "unknown"
 )
 
-// ExecState is an execution state: running or completed.
 type ExecState string
 
-// Execution states.
 const (
 	ExecRunning   ExecState = "running"
 	ExecCompleted ExecState = "completed"
 )
 
-// Sandbox is the contract view of a sandbox.
 type Sandbox struct {
 	MaxConcurrentExecutions int         `json:"max_concurrent_executions"`
 	ID                      string      `json:"id"`
@@ -179,7 +107,6 @@ type Sandbox struct {
 	KillReason              *KillReason `json:"kill_reason"`
 }
 
-// Execution is the contract view of an execution, including retained output.
 type Execution struct {
 	ID                string     `json:"id"`
 	PID               int        `json:"pid,omitzero"`
@@ -196,8 +123,6 @@ type Execution struct {
 	FinishedAt        *time.Time `json:"finished_at"`
 }
 
-// ExecutionSummary is an Execution without stdout and stderr, as returned by
-// list endpoints.
 type ExecutionSummary struct {
 	ID                string     `json:"id"`
 	PID               int        `json:"pid,omitzero"`
@@ -212,7 +137,6 @@ type ExecutionSummary struct {
 	FinishedAt        *time.Time `json:"finished_at"`
 }
 
-// Summary drops the retained output.
 func (e Execution) Summary() ExecutionSummary {
 	return ExecutionSummary{
 		ID:                e.ID,
@@ -229,53 +153,25 @@ func (e Execution) Summary() ExecutionSummary {
 	}
 }
 
-// CreateRequest carries the optional fields of POST /v1/sandboxes. A nil
-// pointer means "use the default"; a pointer to zero is an explicit zero.
 type CreateRequest struct {
-	MaxConcurrentExecutions *int         `json:"max_concurrent_executions,omitempty"`
-	Image                   *string      `json:"image,omitempty"`
-	MemoryMB                *int         `json:"memory_mb,omitempty"`
-	PidsLimit               *int         `json:"pids_limit,omitempty"`
-	NanoCPUs                *int64       `json:"nano_cpus,omitempty"`
-	Network                 *NetworkMode `json:"network,omitempty"`
-	TimeoutSeconds          *int         `json:"timeout_seconds,omitempty"`
-	TimeoutAction           *Action      `json:"timeout_action,omitempty"`
-	IdleTimeoutSeconds      *int         `json:"idle_timeout_seconds,omitempty"`
-	IdleTimeoutAction       *Action      `json:"idle_timeout_action,omitempty"`
-	// Env belongs to the sandbox: every execution sees it, and it survives a
-	// client reconnecting. A per-execution Env entry overrides it for that
-	// execution only. Raw values are never retained in a response or log.
-	Env map[string]string `json:"env,omitempty"`
+	MaxConcurrentExecutions *int              `json:"max_concurrent_executions,omitempty"`
+	Image                   *string           `json:"image,omitempty"`
+	MemoryMB                *int              `json:"memory_mb,omitempty"`
+	PidsLimit               *int              `json:"pids_limit,omitempty"`
+	NanoCPUs                *int64            `json:"nano_cpus,omitempty"`
+	Network                 *NetworkMode      `json:"network,omitempty"`
+	TimeoutSeconds          *int              `json:"timeout_seconds,omitempty"`
+	TimeoutAction           *Action           `json:"timeout_action,omitempty"`
+	IdleTimeoutSeconds      *int              `json:"idle_timeout_seconds,omitempty"`
+	IdleTimeoutAction       *Action           `json:"idle_timeout_action,omitempty"`
+	Env                     map[string]string `json:"env,omitempty"`
 }
 
-// UpdateRequest is the body of PATCH /v1/sandboxes/{id}. Only the fields that
-// may change while a sandbox lives are here; image, memory, CPU and network
-// are fixed at creation, because changing them means a different container.
 type UpdateRequest struct {
-	// TimeoutSeconds replaces the lifetime deadline with now plus this value.
-	// It may shorten or lengthen it. Zero removes the deadline, which means
-	// "run until killed", matching the create-time meaning.
 	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
-	// ExtendSeconds is the E2B connect rule: keep the later of the current
-	// deadline and now plus this value, so it can only ever extend. Zero is a
-	// no-op rather than "forever", so a reconnecting client cannot accidentally
-	// remove a deadline it did not intend to touch.
-	ExtendSeconds *int `json:"extend_seconds,omitempty"`
+	ExtendSeconds  *int `json:"extend_seconds,omitempty"`
 }
 
-// ExecuteRequest is the body of POST /v1/sandboxes/{id}/executions.
-//
-// TimeoutSeconds bounds one execution. A nil pointer or zero means the
-// execution has no deadline of its own and runs until it finishes, is
-// canceled, or the sandbox is killed. The sandbox lifetime policy still
-// applies: it can kill or pause the sandbox.
-//
-// Env is this execution's environment. It is additive: a name here overrides
-// the container's value and every other container variable stays visible. Cwd
-// is the directory the command runs in; empty means the image's working
-// directory. Execution records retain an environment fingerprint and entry count.
-// Raw environment values are never retained in history or
-// echoed in a response.
 type ExecuteRequest struct {
 	Command        []string          `json:"command"`
 	IdempotencyKey string            `json:"idempotency_key,omitempty"`
@@ -286,10 +182,6 @@ type ExecuteRequest struct {
 	Stdin          string            `json:"stdin,omitempty"`
 }
 
-// envPairs flattens Env into the "NAME=value" form the container runtime takes,
-// sorted by name so the result is deterministic: the same request always
-// produces the same argv and environment, which is what makes an idempotency
-// comparison and a replay meaningful.
 func (r ExecuteRequest) envPairs() []string {
 	if len(r.Env) == 0 {
 		return nil
@@ -302,9 +194,6 @@ func (r ExecuteRequest) envPairs() []string {
 	return pairs
 }
 
-// mergedEnv layers the request environment over the sandbox environment and
-// returns sorted "NAME=value" pairs, so the same inputs always produce the same
-// argv and an idempotent replay stays meaningful.
 func mergedEnv(base, override map[string]string) []string {
 	if len(base) == 0 && len(override) == 0 {
 		return nil
@@ -319,7 +208,6 @@ func mergedEnv(base, override map[string]string) []string {
 	return ExecuteRequest{Env: merged}.envPairs()
 }
 
-// sandboxOptions is a CreateRequest resolved against the defaults.
 type sandboxOptions struct {
 	maxConcurrentExecutions int
 	image                   string
@@ -331,19 +219,16 @@ type sandboxOptions struct {
 	timeoutAction           Action
 	idleTimeoutSeconds      int
 	idleTimeoutAction       Action
-	// env is the sandbox environment. It is applied to every execution as the
-	// base layer, with the request's own entries overriding it.
-	env map[string]string
+	env                     map[string]string
 }
 
-// resolve applies defaults and validates the request.
 func (r CreateRequest) resolve() (sandboxOptions, error) {
 	opts := sandboxOptions{
 		maxConcurrentExecutions: 1,
 		image:                   DefaultImage,
 		memoryMB:                DefaultMemoryMB,
 		pidsLimit:               DefaultPidsLimit,
-		nanoCPUs:                0, // no CPU limit, as Docker's own default
+		nanoCPUs:                0,
 		network:                 DefaultNetwork,
 		timeoutSeconds:          DefaultTimeoutSeconds,
 		timeoutAction:           ActionKill,
@@ -430,12 +315,9 @@ func validateAction(field string, action Action) error {
 	}
 }
 
-// newID returns an opaque identifier with the given prefix, such as "sbx_".
 func newID(prefix string) string {
 	var b [8]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		// crypto/rand cannot fail on supported platforms; if it does, the
-		// process has bigger problems than a duplicate ID.
 		panic("daemon: generate id: " + err.Error())
 	}
 	return prefix + hex.EncodeToString(b[:])

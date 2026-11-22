@@ -10,8 +10,6 @@ import (
 	"github.com/ruhuang2001/tiny-sandbox/internal/daemon"
 )
 
-// VerifyLimits fails closed if Docker did not retain the requested limits.
-// None means no external interface; bridge deliberately makes no egress claim.
 func (b *Backend) VerifyLimits(ctx context.Context, id string, spec daemon.ContainerSpec) error {
 	value, err := b.api.ContainerInspect(ctx, id)
 	if err != nil {
@@ -21,8 +19,6 @@ func (b *Backend) VerifyLimits(ctx context.Context, id string, spec daemon.Conta
 	if h.Memory != int64(spec.MemoryMB)<<20 || h.MemorySwap != h.Memory || h.NanoCpus != spec.NanoCPUs || h.PidsLimit == nil || *h.PidsLimit != int64(spec.PidsLimit) || h.NetworkMode != string(spec.Network) {
 		return errors.New("runtime did not confirm requested deployment limits")
 	}
-	// Inspect alone can echo settings even when the kernel lacks controllers.
-	// Policy mode requires readable cgroup v2 enforcement, not a warning.
 	data, err := b.capture(ctx, id, []string{"sh", "-c", "set -eu; cat /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.swap.max /sys/fs/cgroup/pids.max /sys/fs/cgroup/cpu.max; ls /sys/class/net"})
 	if err != nil {
 		return fmt.Errorf("cannot verify cgroup v2 limits: %w", err)

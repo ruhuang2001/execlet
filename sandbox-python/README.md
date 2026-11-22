@@ -82,20 +82,19 @@ and downgrade during a session are unsupported.
 ```python
 from tiny_sandbox.e2b import Sandbox
 
-sandbox = Sandbox.create(timeout=300)  # requires SANDBOX_E2B_IMAGE
+sandbox = Sandbox.create(timeout=300)
 handle = sandbox.commands.run(
     "sleep 2; printf done > /home/user/result.txt",
     background=True, timeout=60,
 )
 saved_sandbox_id, saved_pid = sandbox.sandbox_id, handle.pid
-handle.disconnect()                 # local only; command keeps running
+handle.disconnect()
 
-# A fresh controller can use saved_sandbox_id and saved_pid.
-connected = Sandbox.connect(saved_sandbox_id)  # sandbox connect extends TTL
-observer = connected.commands.connect(saved_pid, timeout=30)  # no TTL change
+connected = Sandbox.connect(saved_sandbox_id)
+observer = connected.commands.connect(saved_pid, timeout=30)
 result = observer.wait(on_stdout=lambda chunk: print(chunk, end=""))
 print(connected.files.read("result.txt"))
-connected.kill()                    # explicit sandbox cleanup
+connected.kill()
 ```
 
 - `commands.run(..., background=True)` returns a `CommandHandle` after a

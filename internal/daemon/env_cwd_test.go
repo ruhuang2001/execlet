@@ -10,10 +10,6 @@ import (
 	"github.com/ruhuang2001/tiny-sandbox/internal/daemon"
 )
 
-// TestExecEnvironmentLimits pins every bound from docs/api.md. Each case is one
-// over the limit, because a bound checked as "at most N" is only proven by
-// N+1: an implementation that accepted one extra entry would pass a test that
-// stayed under N.
 func TestExecEnvironmentLimits(t *testing.T) {
 	ctx := context.Background()
 
@@ -23,7 +19,6 @@ func TestExecEnvironmentLimits(t *testing.T) {
 	}
 
 	tooBigTotal := make(map[string]string)
-	// Each value is under the per-value limit, so only the total can reject it.
 	for i := 0; len(tooBigTotal) < 6; i++ {
 		tooBigTotal["T"+strings.Repeat("0", i+1)] = strings.Repeat("v", daemon.MaxEnvValueBytes-64)
 	}
@@ -57,9 +52,6 @@ func TestExecEnvironmentLimits(t *testing.T) {
 	}
 }
 
-// TestExecEnvironmentAtTheLimit proves the bounds are inclusive. Each value is
-// exactly at its limit, so rejecting any of them would break a request the
-// contract allows.
 func TestExecEnvironmentAtTheLimit(t *testing.T) {
 	ctx := context.Background()
 	h := newHarness(t)
@@ -77,7 +69,6 @@ func TestExecEnvironmentAtTheLimit(t *testing.T) {
 	h.waitCompleted(sb.ID, ex.ID)
 }
 
-// TestCwdValidation covers what the daemon decides without the runtime.
 func TestCwdValidation(t *testing.T) {
 	ctx := context.Background()
 	for _, tc := range []struct {
@@ -109,9 +100,6 @@ func TestCwdValidation(t *testing.T) {
 	}
 }
 
-// TestCwdIsEchoedAndEnvIsNot checks the response shape: cwd is a diagnostic a
-// client can read back, and the environment is deliberately absent because it
-// may carry credentials.
 func TestCwdIsEchoedAndEnvIsNot(t *testing.T) {
 	ctx := context.Background()
 	h := newHarness(t)
@@ -142,9 +130,6 @@ func TestCwdIsEchoedAndEnvIsNot(t *testing.T) {
 		t.Errorf("summary cwd = %v, want /work", list[0].Cwd)
 	}
 
-	// The wire form is what a client or a log sees, so check it rather than
-	// the struct: neither an env field nor the value may appear in any of
-	// the three views.
 	for name, view := range map[string]any{"start": started, "completed": done, "summary": list[0]} {
 		raw, err := json.Marshal(view)
 		wantNoError(t, err)
@@ -154,8 +139,6 @@ func TestCwdIsEchoedAndEnvIsNot(t *testing.T) {
 	}
 }
 
-// TestCwdDefaultIsNull keeps "no cwd requested" distinguishable from a
-// directory that happens to equal the image default.
 func TestCwdDefaultIsNull(t *testing.T) {
 	ctx := context.Background()
 	h := newHarness(t)
@@ -169,9 +152,6 @@ func TestCwdDefaultIsNull(t *testing.T) {
 	}
 }
 
-// TestIdempotencyComparesTheWholeInvocation is the regression this feature
-// needs: a replay that changes only the environment must not silently return
-// the execution that ran with the old one.
 func TestIdempotencyComparesTheWholeInvocation(t *testing.T) {
 	ctx := context.Background()
 	base := daemon.ExecuteRequest{
@@ -193,8 +173,6 @@ func TestIdempotencyComparesTheWholeInvocation(t *testing.T) {
 		}
 		h.waitCompleted(sb.ID, first.ID)
 
-		// A different map with the same pairs must still count as the same
-		// invocation, which is why the comparison sorts before comparing.
 		again := base
 		again.Env = map[string]string{"B": "2", "A": "1"}
 		replayed, created, err := h.s.StartExecution(ctx, sb.ID, again)
@@ -237,16 +215,11 @@ func TestIdempotencyComparesTheWholeInvocation(t *testing.T) {
 	}
 }
 
-// TestExecSpecReachesTheBackend proves the fields survive the engine: a value
-// that only reaches a local struct would pass the API tests and still run the
-// command with no environment at all.
 func TestExecSpecReachesTheBackend(t *testing.T) {
 	ctx := context.Background()
 	h := newHarness(t)
 	var got daemon.ExecSpec
 	h.be.Programs["capture"] = func(context.Context, []string) (string, string, int) { return "", "", 0 }
-	// membackend records the spec on the process it returns, so the harness
-	// observes it through the public surface.
 	sb := h.create(daemon.CreateRequest{})
 
 	ex, _, err := h.s.StartExecution(ctx, sb.ID, daemon.ExecuteRequest{
@@ -267,15 +240,9 @@ func TestExecSpecReachesTheBackend(t *testing.T) {
 	}
 }
 
-// TestExecEnvironmentTotalBoundary pins the total-bytes bound on both sides of
-// the edge. Every entry stays under the per-entry limits, so only the sum can
-// reject the request, and the accepted case exercises the arithmetic that
-// counts the "=" between name and value.
 func TestExecEnvironmentTotalBoundary(t *testing.T) {
 	ctx := context.Background()
 
-	// maxValueFilling fills MaxEnvEntries sized entries whose names, "=" and
-	// values add up to exactly total.
 	fill := func(total int) map[string]string {
 		perEntry := total / daemon.MaxEnvEntries
 		env := make(map[string]string, daemon.MaxEnvEntries)
@@ -320,10 +287,6 @@ func TestExecEnvironmentTotalBoundary(t *testing.T) {
 	}
 }
 
-// TestBadCwdReplayIsByteExact replays the execution behind a failed cwd. The
-// marker is stderr-only, so a replay that lost stderr, downgraded it to stdout,
-// or re-split it differently would hand an agent a different explanation than
-// the one it would have streamed live.
 func TestBadCwdReplayIsByteExact(t *testing.T) {
 	ctx := context.Background()
 	const dir = "/does-not-exist"

@@ -37,7 +37,6 @@ def raw(ctx, method, path, body=None, expected=200):
             value = payload.decode(errors='replace')
         evidence = {'at': time.monotonic(), 'method': method, 'path': path,
                     'status': response.status, 'response': value}
-        # Retained megabyte logs are inspected in memory; evidence stores hashes.
         if isinstance(value, dict):
             evidence['response'] = {k: {'bytes': len(v.encode()), 'sha256': hashlib.sha256(v.encode()).hexdigest()}
                                    if isinstance(v, str) and len(v) > 2048 else v for k, v in value.items()}
@@ -540,7 +539,6 @@ def b11(ctx):
     for attach in (False, True):
         job = Job(ctx, name='retry-' + str(attach), interval=.08)
         path = rf'/v1/sandboxes/{job.sid}/executions/[^/]+/events'
-        # Gate PRE as well for a start handle, so cuts cannot precede arming.
         if not attach:
             cut, replay = Fault('GET', path, 'cut'), Fault('GET', path, 'replay')
             ctx.local.faults.arm('retry', cut, replay)
@@ -605,7 +603,6 @@ def b13(ctx):
     job.ready()
     job.release()
     if ctx.language == 'typescript':
-        # stdout/stderr are independent streams; either callback may fail first.
         assert ctx.wait_until(lambda: any(ctx.ok('handle_stats', 'callback without wait')['callbacks'][stream]
                                          for stream in ('stdout', 'stderr')), 5)
         time.sleep(.05)
@@ -776,8 +773,6 @@ def b17(ctx):
 
 
 def b18(ctx):
-    # Both daemons share one case's cleanup owner. Keep it empty at the
-    # switch so old-server startup cannot remove a current-server fixture.
     assert ctx.count() == 0, 'old-server check needs an empty owner scope'
     directory = ctx.out / 'old'
     directory.mkdir()
@@ -834,7 +829,6 @@ def b19(ctx):
         for op in ('background', 'command_connect'):
             err = ctx.error(op, 'invalid duration', id=sid, command='true', pid=42, wait=duration)
             assert err['family'] == 'invalid', err
-    # JSON has no non-finite numbers: construct them in the real SDK worker.
     for token in ('nan', 'infinity', '-infinity'):
         for op in ('background', 'command_connect'):
             err = ctx.error(op, 'nonfinite duration', id=sid, command='true', pid=42, nonfinite=token)

@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# Installs reference SDKs and compiles the harness. Never calls E2B Cloud.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 PYTHON=${PYTHON:-python3}

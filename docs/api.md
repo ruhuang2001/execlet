@@ -105,7 +105,9 @@ or flag means unsupported, not permission to send fields an old server ignores.
 Flags describe the configured endpoint; mixed-version rolling servers are unsupported.
 Current native SDKs preflight nonempty env/cwd/stdin, explicit concurrency and
 managed `timeout_ms` before create/start. Basic legacy calls need no discovery.
-File methods use dedicated endpoints; they do not silently downgrade to shell.
+Directory listings require `files.list.v1`; archive reads and writes require
+`files.archive.v1`. These checks happen before the file request. Ordinary
+file reads and writes need no discovery; no file method downgrades to shell.
 
 ### `GET /metrics`
 

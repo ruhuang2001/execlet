@@ -60,6 +60,7 @@ paths:
         required: true
         schema: {type: integer, minimum: 1}
     get:
+      tags: [executions]
       operationId: attachCommand
       summary: Resolve newest retained managed command with atomic event watermark
       responses:
@@ -73,13 +74,24 @@ paths:
                 properties:
                   execution: {$ref: '#/components/schemas/Execution'}
                   last_event_id: {type: integer, minimum: 0}
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
   /v1/sandboxes/{sandbox_id}/executions/{execution_id}/kill:
     parameters:
       - $ref: '#/components/parameters/SandboxID'
       - $ref: '#/components/parameters/ExecutionID'
     post:
+      tags: [executions]
       operationId: killExecution
       summary: Immediately kill one immutable managed execution with confirmation
       responses:
@@ -93,8 +105,20 @@ paths:
                 properties:
                   execution: {$ref: '#/components/schemas/Execution'}
                   signaled: {type: boolean}
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/Internal'
         '502':
           $ref: '#/components/responses/BackendError'
+        '503':
+          $ref: '#/components/responses/Unavailable'
   /healthz:
     get:
       tags: [health]
@@ -224,9 +248,11 @@ paths:
       operationId: deleteSandbox
       summary: Kill a sandbox
       description: >-
-        Marks the sandbox killed and records canceled intent for a running
-        execution. Container removal is best effort and failures are not returned.
-        Deleting a killed sandbox returns it unchanged without retrying removal.
+        Marks the sandbox killed, records canceled intent for active executions,
+        and requests container removal. Unconfirmed runtime removal returns 502
+        backend_error while scheduling background retries; repeated deletes keep
+        reporting 502 until removal is confirmed, then return 200 with the stored
+        killed record.
       responses:
         '200':
           description: The sandbox, in state killed.
@@ -515,7 +541,9 @@ paths:
         newest event is 400 invalid_request. The server sends a ping comment
         every 15 seconds while open and closes the stream after complete.
         Closing a stream never affects the execution, and an open stream counts
-        as activity for the idle timeout. Execution history is bounded to 200
+        as activity for the idle timeout. Each sandbox permits 32 concurrent
+        streams; further attempts return 429 until a stream closes.
+        Execution history is bounded to 200
         records, protecting all active executions and the most recently completed
         one. Eligible records and their idempotency keys can be removed by history
         or aggregate-output pruning; no fixed replay window is guaranteed.
@@ -541,6 +569,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
         '429':
           $ref: '#/components/responses/RateLimited'
         '500':
@@ -556,9 +586,10 @@ paths:
       operationId: readFile
       summary: Read a file
       description: >-
-        Returns the raw bytes. The sandbox resumes first if it is paused. A
-        path that is not absolute is an invalid request. Files larger than
-        10 MiB are rejected by Docker archive extraction with 502 backend_error.
+        Returns the raw bytes of a regular file. The sandbox resumes first if
+        paused. Paths must be absolute UTF-8 without NUL or parent traversal;
+        directories and nonregular entries return 400 invalid_request. Files
+        larger than 10 MiB return 413 payload_too_large.
       responses:
         '200':
           description: The file contents.
@@ -575,6 +606,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
         '502':
           $ref: '#/components/responses/BackendError'
         '429':
@@ -629,11 +662,13 @@ paths:
       description: >-
         Resumes paused sandboxes. No snapshot consistency across pages. Paths
         must be UTF-8, absolute, at most 4096 bytes, without NUL or parent traversal.
-        Docker recursively scans at most 64 MiB and 10000 archive entries per
-        page within 30 seconds; large nested content can cause 413 even for a
-        small page. Child symlinks are not followed. Unknown or repeated query
-        parameters, malformed or path-mismatched cursors return 400. Runtime
-        deadlines return 502.
+        Standard images inspect at most 10000 immediate children and 64 MiB of
+        framed metadata per page within 30 seconds without reading nested subtrees;
+        if the image user cannot list the directory or the image lacks compatible
+        stat/readlink tools, a 64 MiB / 10000-entry archive scan is used. Child
+        symlinks are not followed. Unknown or repeated query parameters,
+        malformed or path-mismatched cursors return 400. Runtime deadlines
+        return 502.
       parameters:
         - in: query
           name: limit
@@ -655,35 +690,7 @@ paths:
                   entries:
                     type: array
                     items:
-                      type: object
-                      required: [name, size, mode, mtime, is_dir, type, uid, gid]
-                      properties:
-                        name: {type: string}
-                        size: {type: integer, format: int64, description: Regular-file bytes or symlink target-path bytes; zero for directories}
-                        mode: {type: integer, description: POSIX permission bits}
-                        mtime: {type: string, format: date-time}
-                        is_dir: {type: boolean}
-                        type:
-                          type: string
-                          enum: [file, dir, symlink, other]
-                          description: >-
-                            What the directory entry is. A symlink is reported as
-                            a symlink, never as the file it points at. `other`
-                            covers device nodes, sockets and FIFOs.
-                        uid: {type: integer, description: Numeric owner from the archive}
-                        gid: {type: integer, description: Numeric group from the archive}
-                        owner:
-                          type: string
-                          description: >-
-                            Owner name resolved inside the container. Omitted when
-                            the guest's account database has no such id; uid is
-                            still authoritative.
-                        group:
-                          type: string
-                          description: Group name resolved inside the container; omitted like owner.
-                        symlink_target:
-                          type: string
-                          description: Present only for a symlink with a UTF-8 target.
+                      $ref: '#/components/schemas/FileEntry'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -883,8 +890,8 @@ components:
             message: request body exceeds 1048576 bytes
     RateLimited:
       description: >-
-        429 rate_limited: the create would exceed the server's live-sandbox
-        limit. Retryable after deleting a sandbox.
+        429 rate_limited: the server's live-sandbox limit or a sandbox's open
+        event-stream limit was reached. Retry when capacity becomes available.
       headers:
         Retry-After:
           description: Seconds to wait before retrying.
@@ -1285,6 +1292,35 @@ components:
           description: Newest first, without stdout and stderr.
           items:
             $ref: '#/components/schemas/ExecutionSummary'
+    FileEntry:
+      type: object
+      required: [name, size, mode, mtime, is_dir, type, uid, gid]
+      properties:
+        name: {type: string}
+        size: {type: integer, format: int64, description: Regular-file bytes or symlink target-path bytes; zero for directories}
+        mode: {type: integer, description: POSIX permission bits}
+        mtime: {type: string, format: date-time}
+        is_dir: {type: boolean}
+        type:
+          type: string
+          enum: [file, dir, symlink, other]
+          description: >-
+            What the directory entry is. A symlink is reported as a symlink,
+            never as the file it points at. `other` covers device nodes,
+            sockets and FIFOs.
+        uid: {type: integer, description: Numeric owner from the archive}
+        gid: {type: integer, description: Numeric group from the archive}
+        owner:
+          type: string
+          description: >-
+            Owner name resolved inside the container. Omitted when the guest's
+            account database has no such id; uid is still authoritative.
+        group:
+          type: string
+          description: Group name resolved inside the container; omitted like owner.
+        symlink_target:
+          type: string
+          description: Present only for a symlink with a UTF-8 target.
     Error:
       type: object
       required: [code, message]

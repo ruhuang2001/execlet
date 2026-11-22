@@ -63,12 +63,13 @@ The compatibility surface is wider than the Go API:
 
 Prefer a new optional field or a new operation over changing an existing one. The server ignores unknown request fields, so a newer client can talk to an older server; the old server simply does not act on the new field. The client must therefore not assume a field took effect, and must document which contract version it needs. Old clients keep working against a new server because responses only gain fields.
 
-Current SDKs query authenticated `/v1/capabilities` before nonempty env/cwd/stdin,
-explicit concurrency and managed deadlines. Missing support rejects before
-create/start with `incompatible_server`; basic legacy calls skip discovery.
+Current SDKs check authenticated `/v1/capabilities` before nonempty env/cwd/stdin,
+explicit concurrency, managed deadlines, directory listings and archive transfers.
+Missing support returns `incompatible_server` before the operation; basic
+legacy calls, including ordinary file reads and writes, skip discovery.
 The E2B facade requires `e2b.background.v1` even for foreground run because its
-deadline semantics changed. TypeScript caches flags per immutable client;
-Python and Go read afresh. Mixed-version load balancers and downgrade within
+deadline semantics changed. Go and TypeScript cache flags per client;
+Python reads afresh. Mixed-version load balancers and downgrade within
 a session are unsupported. Capabilities do not certify guest image tooling.
 
 Removing a field, changing a unit, or reinterpreting an existing value is a major change.

@@ -16,42 +16,99 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+type specSchema struct {
+	Required   []string              `yaml:"required"`
+	Properties map[string]yaml.Node  `yaml:"properties"`
+	AllOf      []specSchemaRefOrPart `yaml:"allOf"`
+}
+
+type specSchemaRefOrPart struct {
+	Ref        string               `yaml:"$ref"`
+	Required   []string             `yaml:"required"`
+	Properties map[string]yaml.Node `yaml:"properties"`
+}
+
+func resolveSchema(schemas map[string]specSchema, name string) (props map[string]yaml.Node, required map[string]bool) {
+	props = make(map[string]yaml.Node)
+	required = make(map[string]bool)
+	s := schemas[name]
+	for _, r := range s.Required {
+		required[r] = true
+	}
+	for k, v := range s.Properties {
+		props[k] = v
+	}
+	for _, part := range s.AllOf {
+		if refName, ok := strings.CutPrefix(part.Ref, "#/components/schemas/"); ok {
+			subProps, subReq := resolveSchema(schemas, refName)
+			for k, v := range subProps {
+				props[k] = v
+			}
+			for r := range subReq {
+				required[r] = true
+			}
+		}
+		for _, r := range part.Required {
+			required[r] = true
+		}
+		for k, v := range part.Properties {
+			props[k] = v
+		}
+	}
+	return props, required
+}
+
 func TestSpecFieldsMatchRequestAndSandboxTypes(t *testing.T) {
 	var doc struct {
 		Components struct {
-			Schemas map[string]struct {
-				Properties map[string]yaml.Node `yaml:"properties"`
-			} `yaml:"schemas"`
+			Schemas map[string]specSchema `yaml:"schemas"`
 		} `yaml:"components"`
 	}
 	if err := yaml.Unmarshal(api.Spec(), &doc); err != nil {
 		t.Fatalf("parse embedded spec: %v", err)
 	}
 	for _, tc := range []struct {
-		schema string
-		value  any
+		schema        string
+		value         any
+		checkRequired bool
 	}{
-		{"CreateSandboxRequest", daemon.CreateRequest{}},
-		{"UpdateSandboxRequest", daemon.UpdateRequest{}},
-		{"UpdateSandboxRequest", sandbox.UpdateSandboxRequest{}},
-		{"CreateSandboxRequest", sandbox.CreateSandboxRequest{}},
-		{"ExecuteRequest", daemon.ExecuteRequest{}},
-		{"ExecuteRequest", sandbox.ExecuteRequest{}},
-		{"Sandbox", daemon.Sandbox{}},
-		{"Sandbox", sandbox.Sandbox{}},
+		{"CreateSandboxRequest", daemon.CreateRequest{}, false},
+		{"UpdateSandboxRequest", daemon.UpdateRequest{}, false},
+		{"UpdateSandboxRequest", sandbox.UpdateSandboxRequest{}, false},
+		{"CreateSandboxRequest", sandbox.CreateSandboxRequest{}, false},
+		{"ExecuteRequest", daemon.ExecuteRequest{}, false},
+		{"ExecuteRequest", sandbox.ExecuteRequest{}, false},
+		{"Sandbox", daemon.Sandbox{}, true},
+		{"Sandbox", sandbox.Sandbox{}, true},
+		{"ExecutionSummary", daemon.ExecutionSummary{}, true},
+		{"Execution", daemon.Execution{}, true},
+		{"Execution", sandbox.Execution{}, false},
+		{"FileEntry", daemon.FileEntry{}, true},
+		{"FileEntry", sandbox.FileEntry{}, true},
 	} {
 		typ := reflect.TypeOf(tc.value)
 		t.Run(tc.schema+"/"+typ.PkgPath(), func(t *testing.T) {
-			properties := doc.Components.Schemas[tc.schema].Properties
+			properties, required := resolveSchema(doc.Components.Schemas, tc.schema)
 			fields := make(map[string]bool)
 			for i := range typ.NumField() {
-				name := strings.Split(typ.Field(i).Tag.Get("json"), ",")[0]
+				tagParts := strings.Split(typ.Field(i).Tag.Get("json"), ",")
+				name := tagParts[0]
 				if name == "" || name == "-" {
 					continue
 				}
 				fields[name] = true
 				if _, ok := properties[name]; !ok {
 					t.Errorf("OpenAPI %s is missing field %s", tc.schema, name)
+				}
+				if tc.checkRequired {
+					omitted := strings.Contains(typ.Field(i).Tag.Get("json"), ",omitempty") ||
+						strings.Contains(typ.Field(i).Tag.Get("json"), ",omitzero")
+					if required[name] && omitted {
+						t.Errorf("%s.%s has omitempty/omitzero but is required in OpenAPI %s", typ, name, tc.schema)
+					}
+					if !required[name] && !omitted && typ.Field(i).Type.Kind() != reflect.Pointer {
+						t.Errorf("%s.%s lacks omitempty/omitzero/pointer but is optional in OpenAPI %s", typ, name, tc.schema)
+					}
 				}
 			}
 			for name := range properties {
@@ -154,6 +211,7 @@ func concretePath(path string) string {
 	return strings.NewReplacer(
 		"{sandbox_id}", "sbx_test",
 		"{execution_id}", "exe_test",
+		"{pid}", "1",
 	).Replace(path)
 }
 

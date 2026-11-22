@@ -246,6 +246,30 @@ func (b *Backend) Owned(ctx context.Context, owner string) ([]string, error) {
 	return ids, nil
 }
 
+// OwnedLiveness returns container states for every container owned by owner in
+// a single Engine API list call.
+func (b *Backend) OwnedLiveness(ctx context.Context, owner string) (map[string]daemon.Liveness, error) {
+	list, err := b.api.ContainerList(ctx, true, map[string][]string{"label": {daemon.OwnerLabelKey + "=" + owner}})
+	if err != nil {
+		return nil, fmt.Errorf("dockerbackend: list owned liveness: %w", err)
+	}
+	states := make(map[string]daemon.Liveness, len(list))
+	for _, c := range list {
+		if c.Labels[daemon.OwnerLabelKey] != owner {
+			continue
+		}
+		switch c.State {
+		case "running":
+			states[c.ID] = daemon.LivenessRunning
+		case "paused":
+			states[c.ID] = daemon.LivenessPaused
+		default:
+			states[c.ID] = daemon.LivenessStopped
+		}
+	}
+	return states, nil
+}
+
 // ---------------------------------------------------------------- executions
 
 // Exec starts spec.Command inside the container. The command is wrapped in a

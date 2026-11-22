@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"unicode/utf8"
 )
@@ -38,11 +39,8 @@ type Event struct {
 // its terminal events. It is the single source of truth for both the stream
 // and the retained stdout/stderr, so a replay from ID 0 reproduces them.
 //
-// The events are the only copy of the output. The retained stdout and stderr a
-// caller reads are assembled from them on demand, which keeps one execution at
-// roughly MaxOutputBytes instead of two or three times that. Assembling costs a
-// pass over the log; a snapshot does it once, and the runner writes it once into
-// the complete event.
+// The first reader indexes output by stream. Later snapshots share immutable
+// string prefixes and only visit events appended since the previous read.
 //
 // Bounds come from api.md: at most MaxOutputBytes of retained output, at most
 // MaxOutputEvents output events, and at most MaxEventDataBytes per chunk. Once
@@ -58,6 +56,9 @@ type eventLog struct {
 	outputEvents  int
 	truncated     bool
 	complete      bool
+	stdout        strings.Builder
+	stderr        strings.Builder
+	indexed       int
 	onFirstOutput func()
 }
 
@@ -195,14 +196,12 @@ func (l *eventLog) eventsAfterLocked(after uint64) ([]Event, bool) {
 		i = len(l.events)
 	}
 	events := append([]Event(nil), l.events[i:]...)
-	// The log stores no second copy of the output: the complete event carries
-	// the terminal record without it, and the copy a client sees is assembled
-	// here, once per delivery. Rebuilding it costs one pass over at most
-	// MaxOutputEvents events.
+	// The stored complete event omits output; delivery uses the same snapshot
+	// as GET, without copying either stream into the terminal log record.
 	if n := len(events); n > 0 && events[n-1].Type == EventComplete && events[n-1].Execution != nil {
 		stdout, stderr, truncated := l.outputLocked()
 		ex := *events[n-1].Execution
-		ex.Stdout, ex.Stderr, ex.OutputTruncated = string(stdout), string(stderr), truncated
+		ex.Stdout, ex.Stderr, ex.OutputTruncated = stdout, stderr, truncated
 		events[n-1].Execution = &ex
 	}
 	// done means "the complete event was delivered in this batch": the log is
@@ -247,26 +246,25 @@ func (l *eventLog) retainedBytes() int {
 }
 
 // output returns the retained stdout and stderr and whether output was
-// truncated. It copies, so callers that only need the flag use
-// truncatedOutput; a listing does.
-func (l *eventLog) output() (stdout, stderr []byte, truncated bool) {
+// truncated. Callers that only need the flag do not build the index.
+func (l *eventLog) output() (stdout, stderr string, truncated bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.outputLocked()
 }
 
-// outputLocked assembles the retained output from the events, which are its
-// only copy. Callers hold l.mu.
-func (l *eventLog) outputLocked() (stdout, stderr []byte, truncated bool) {
-	for _, ev := range l.events {
+// outputLocked also works for recovered logs: their first read starts at zero.
+func (l *eventLog) outputLocked() (stdout, stderr string, truncated bool) {
+	for _, ev := range l.events[l.indexed:] {
 		switch ev.Type {
 		case EventStdout:
-			stdout = append(stdout, ev.Data...)
+			l.stdout.Write(ev.Data)
 		case EventStderr:
-			stderr = append(stderr, ev.Data...)
+			l.stderr.Write(ev.Data)
 		}
 	}
-	return stdout, stderr, l.truncated
+	l.indexed = len(l.events)
+	return l.stdout.String(), l.stderr.String(), l.truncated
 }
 
 // lastEventID returns the ID of the newest event, 0 when there is none.

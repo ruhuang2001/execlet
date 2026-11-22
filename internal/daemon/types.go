@@ -80,6 +80,9 @@ const (
 	// sandbox is 200 MiB, and that is per sandbox. Once the total is reached,
 	// the oldest completed executions are dropped until it fits.
 	MaxRetainedOutputBytes = 64 << 20
+	// MaxStreamsPerSandbox bounds concurrent open SSE streams per sandbox so
+	// idle readers cannot exhaust goroutines or pin idle timeouts unboundedly.
+	MaxStreamsPerSandbox = 32
 	// BackendCallTimeout bounds one container-runtime call. The reaper shares
 	// one goroutine, so a call that never returns would stop timeout and
 	// eviction checks for every sandbox. Request paths use the same bound, so a

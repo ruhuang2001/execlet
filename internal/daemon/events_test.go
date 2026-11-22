@@ -460,3 +460,29 @@ func TestExecutionHistoryIsPruned(t *testing.T) {
 	}
 	h.waitCompleted(sb.ID, ex.ID)
 }
+
+func TestOpenStreamLimit(t *testing.T) {
+	h := newHarness(t)
+	sb := h.create(daemon.CreateRequest{})
+	ex, _, err := h.s.StartExecution(context.Background(), sb.ID, daemon.ExecuteRequest{Command: []string{"true"}})
+	wantNoError(t, err)
+	h.waitCompleted(sb.ID, ex.ID)
+
+	var streams []*daemon.Stream
+	defer func() {
+		for _, st := range streams {
+			st.Close()
+		}
+	}()
+	for range daemon.MaxStreamsPerSandbox {
+		st, err := h.s.Events(sb.ID, ex.ID, 0)
+		wantNoError(t, err)
+		streams = append(streams, st)
+	}
+	_, err = h.s.Events(sb.ID, ex.ID, 0)
+	wantCode(t, err, daemon.CodeRateLimited)
+	streams[0].Close()
+	st, err := h.s.Events(sb.ID, ex.ID, 0)
+	wantNoError(t, err)
+	st.Close()
+}

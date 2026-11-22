@@ -107,6 +107,15 @@ func (b *PolicyBackend) Ping(ctx context.Context) error {
 	}
 	return errors.New("backend cannot establish readiness")
 }
+
+// OwnedLiveness delegates batch eviction inspection when the runtime supports it.
+func (b *PolicyBackend) OwnedLiveness(ctx context.Context, owner string) (map[string]Liveness, error) {
+	if v, ok := b.Backend.(BatchLivenessBackend); ok {
+		return v.OwnedLiveness(ctx, owner)
+	}
+	return nil, errors.ErrUnsupported
+}
+
 func (b *PolicyBackend) usageLocked() PolicyUsage {
 	u := PolicyUsage{}
 	for _, a := range b.allocations {

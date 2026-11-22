@@ -67,8 +67,7 @@ func (s *Sandboxes) AttachCommand(sandboxID string, pid int) (CommandAttachment,
 		ex.log.mu.Lock()
 		// Output pumps can advance without ex.mu. Refresh output while the
 		// watermark is held so no pre-attach chunk is later reintroduced.
-		out, stderr, truncated := ex.log.outputLocked()
-		snapshot.Stdout, snapshot.Stderr, snapshot.OutputTruncated = string(out), string(stderr), truncated
+		snapshot.Stdout, snapshot.Stderr, snapshot.OutputTruncated = ex.log.outputLocked()
 		attached := CommandAttachment{snapshot, ex.log.nextID}
 		ex.log.mu.Unlock()
 		ex.mu.Unlock()

@@ -67,7 +67,7 @@ func (s *Sandboxes) Reap(ctx context.Context) {
 			continue
 		}
 		s.reapOne(ctx, sb, now)
-		if s.journal != nil {
+		if s.journal != nil && sb.dirty {
 			_ = s.saveSandboxLocked(sb)
 		}
 		sb.mu.Unlock()
@@ -132,12 +132,14 @@ func (s *Sandboxes) reapOne(ctx context.Context, sb *sandbox, now time.Time) {
 				liveness == LivenessPaused {
 				sb.state = StatePaused
 				sb.expiresAt = nil
+				sb.dirty = true
 			}
 			// Otherwise the next beat retries.
 			return
 		}
 		sb.state = StatePaused
 		sb.expiresAt = nil
+		sb.dirty = true
 	case ActionKill:
 		// terminateLocked bounds the removal itself and detaches it from the
 		// caller's context, so a reaper-driven kill during shutdown still
@@ -250,6 +252,12 @@ func (s *Sandboxes) scheduleRemoval(containerID string) {
 	s.retryIDs[containerID] = struct{}{}
 }
 
+// BatchLivenessBackend optionally lists all owned containers in one call so
+// EvictSweep scales O(1) in backend round-trips per sweep.
+type BatchLivenessBackend interface {
+	OwnedLiveness(ctx context.Context, owner string) (map[string]Liveness, error)
+}
+
 // EvictSweep checks every live sandbox's container and evicts those whose
 // container stopped or vanished without a request. It is what turns an
 // external `docker kill` into killed/evicted within the five-second budget;
@@ -259,6 +267,57 @@ func (s *Sandboxes) EvictSweep(ctx context.Context) {
 	order := append([]*sandbox(nil), s.order...)
 	s.mu.Unlock()
 
+	if s.owner != "" {
+		if batch, ok := s.backend.(BatchLivenessBackend); ok {
+			type candidate struct {
+				sb        *sandbox
+				container string
+			}
+			// Snapshot already-live containers before querying the runtime so a
+			// container created concurrently during OwnedLiveness cannot be
+			// mistaken for missing.
+			var candidates []candidate
+			for _, sb := range order {
+				if !sb.mu.TryLock() {
+					continue
+				}
+				if (sb.state == StateRunning || sb.state == StatePaused) && sb.container != "" {
+					candidates = append(candidates, candidate{sb: sb, container: sb.container})
+				}
+				sb.mu.Unlock()
+			}
+			if len(candidates) == 0 {
+				return
+			}
+			callCtx, cancel := backendCtx(ctx)
+			states, err := batch.OwnedLiveness(callCtx, s.owner)
+			cancel()
+			if errors.Is(err, errors.ErrUnsupported) {
+				s.sweepIndividually(ctx, order)
+				return
+			}
+			if err != nil {
+				return
+			}
+			for _, c := range candidates {
+				if state, present := states[c.container]; present && state != LivenessStopped && state != LivenessMissing {
+					continue
+				}
+				if !c.sb.mu.TryLock() {
+					continue
+				}
+				if (c.sb.state == StateRunning || c.sb.state == StatePaused) && c.sb.container == c.container {
+					_ = s.terminateLocked(ctx, c.sb, KillEvicted)
+				}
+				c.sb.mu.Unlock()
+			}
+			return
+		}
+	}
+	s.sweepIndividually(ctx, order)
+}
+
+func (s *Sandboxes) sweepIndividually(ctx context.Context, order []*sandbox) {
 	for _, sb := range order {
 		if !sb.mu.TryLock() {
 			continue

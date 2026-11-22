@@ -200,6 +200,7 @@ type sandbox struct {
 	// kill that races a failed create cannot free the same slot twice.
 	released   bool
 	forgotten  bool
+	dirty      bool
 	killReason *KillReason
 	// expiresAt is non-nil only while a lifetime deadline is armed: for a
 	// kill-action sandbox in any live state, and for a pause-action sandbox
@@ -446,8 +447,18 @@ func (s *Sandboxes) Touch(id string) {
 		return
 	}
 	sb.mu.Lock()
-	sb.lastActivity = s.now()
+	if sb.state == StateRunning || sb.state == StatePaused {
+		sb.touchLocked(s.now())
+	}
 	sb.mu.Unlock()
+}
+
+func (sb *sandbox) touchLocked(now time.Time) {
+	// The idle deadline is the only recovery decision based on this clock.
+	if sb.opts.idleTimeoutSeconds > 0 && !now.Equal(sb.lastActivity) {
+		sb.dirty = true
+	}
+	sb.lastActivity = now
 }
 
 // OpenStream records an open event stream for the idle timeout and returns the
@@ -459,8 +470,14 @@ func (s *Sandboxes) OpenStream(id string) (closeStream func(), err error) {
 		return nil, err
 	}
 	sb.mu.Lock()
+	if sb.streams >= MaxStreamsPerSandbox {
+		sb.mu.Unlock()
+		return nil, errorf(CodeRateLimited, "sandbox %s has reached its open event stream limit", id)
+	}
 	sb.streams++
-	sb.lastActivity = s.now()
+	if sb.state == StateRunning || sb.state == StatePaused {
+		sb.touchLocked(s.now())
+	}
 	sb.mu.Unlock()
 
 	var once sync.Once
@@ -468,7 +485,9 @@ func (s *Sandboxes) OpenStream(id string) (closeStream func(), err error) {
 		once.Do(func() {
 			sb.mu.Lock()
 			sb.streams--
-			sb.lastActivity = s.now()
+			if sb.state == StateRunning || sb.state == StatePaused {
+				sb.touchLocked(s.now())
+			}
 			sb.mu.Unlock()
 		})
 	}, nil
@@ -503,11 +522,6 @@ func (s *Sandboxes) Update(_ context.Context, id string, req UpdateRequest) (res
 	}
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
-	defer func() {
-		if err := s.saveSandboxLocked(sb); err != nil {
-			retErr = err
-		}
-	}()
 	if sb.state != StateRunning && sb.state != StatePaused {
 		return Sandbox{}, sb.invalidState()
 	}
@@ -519,6 +533,9 @@ func (s *Sandboxes) Update(_ context.Context, id string, req UpdateRequest) (res
 		sb.opts.timeoutSeconds = *req.TimeoutSeconds
 		if *req.TimeoutSeconds == 0 {
 			sb.expiresAt = nil
+			if err := s.saveSandboxLocked(sb); err != nil {
+				return Sandbox{}, err
+			}
 			return sb.snapshot(), nil
 		}
 		deadline := now.Add(time.Duration(*req.TimeoutSeconds) * time.Second)
@@ -526,6 +543,7 @@ func (s *Sandboxes) Update(_ context.Context, id string, req UpdateRequest) (res
 	case *req.ExtendSeconds == 0:
 		// Extending by zero is a no-op: a connect must never remove a deadline
 		// the caller did not ask to remove.
+		return sb.snapshot(), nil
 	default:
 		deadline := now.Add(time.Duration(*req.ExtendSeconds) * time.Second)
 		if sb.expiresAt == nil || deadline.After(*sb.expiresAt) {
@@ -533,7 +551,12 @@ func (s *Sandboxes) Update(_ context.Context, id string, req UpdateRequest) (res
 				sb.opts.timeoutSeconds = *req.ExtendSeconds
 			}
 			sb.expiresAt = &deadline
+		} else {
+			return sb.snapshot(), nil
 		}
+	}
+	if err := s.saveSandboxLocked(sb); err != nil {
+		return Sandbox{}, err
 	}
 	return sb.snapshot(), nil
 }
@@ -547,11 +570,6 @@ func (s *Sandboxes) Pause(ctx context.Context, id string) (result Sandbox, retEr
 	}
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
-	defer func() {
-		if err := s.saveSandboxLocked(sb); err != nil {
-			retErr = err
-		}
-	}()
 
 	switch sb.state {
 	case StatePaused:
@@ -561,7 +579,10 @@ func (s *Sandboxes) Pause(ctx context.Context, id string) (result Sandbox, retEr
 		return Sandbox{}, sb.invalidState()
 	}
 
-	if err := s.backend.Pause(ctx, sb.container); err != nil {
+	callCtx, cancel := backendCtx(ctx)
+	err = s.backend.Pause(callCtx, sb.container)
+	cancel()
+	if err != nil {
 		return Sandbox{}, s.backendFailure(ctx, sb, err)
 	}
 	sb.state = StatePaused
@@ -569,6 +590,9 @@ func (s *Sandboxes) Pause(ctx context.Context, id string) (result Sandbox, retEr
 	// deadline. A kill-timeout sandbox keeps counting, as api.md says.
 	if sb.opts.timeoutAction == ActionPause {
 		sb.expiresAt = nil
+	}
+	if err := s.saveSandboxLocked(sb); err != nil {
+		return Sandbox{}, err
 	}
 	return sb.snapshot(), nil
 }
@@ -600,7 +624,10 @@ func (s *Sandboxes) Resume(ctx context.Context, id string) (Sandbox, error) {
 // lifetime timeout acts by pausing. Every transition to running starts a new
 // interval; otherwise an automatic resume would expire again immediately.
 func (s *Sandboxes) unpauseLocked(ctx context.Context, sb *sandbox) error {
-	if err := s.backend.Unpause(ctx, sb.container); err != nil {
+	callCtx, cancel := backendCtx(ctx)
+	err := s.backend.Unpause(callCtx, sb.container)
+	cancel()
+	if err != nil {
 		return s.backendFailure(ctx, sb, err)
 	}
 	sb.state = StateRunning
@@ -667,6 +694,7 @@ func (s *Sandboxes) killLocked(sb *sandbox, reason KillReason) {
 	r := reason
 	sb.killReason = &r
 	sb.expiresAt = nil
+	sb.dirty = true
 	// A killed sandbox holds no container, so its slot is free immediately.
 	if !sb.released {
 		sb.released = true
@@ -713,13 +741,13 @@ func (s *Sandboxes) terminateLocked(ctx context.Context, sb *sandbox, reason Kil
 	}
 	removeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), BackendCallTimeout)
 	defer cancel()
-	if err := s.backend.Remove(removeCtx, sb.container); err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return persistErr
-		}
+	if err := s.backend.Remove(removeCtx, sb.container); err != nil && !errors.Is(err, ErrNotFound) {
 		s.scheduleRemoval(sb.container)
 		return s.unconfirmedRemoval(sb.container)
 	}
+	// A sibling execution can observe the same eviction and confirm a removal
+	// the first observer could not. Don't keep reporting it as outstanding.
+	s.forgetRemoval(sb.container)
 	return persistErr
 }
 
@@ -789,6 +817,9 @@ func (s *Sandboxes) lookup(id string) (*sandbox, error) {
 func (s *Sandboxes) backendFailure(_ context.Context, sb *sandbox, err error) error {
 	if errors.Is(err, ErrNotFound) {
 		s.killLocked(sb, KillEvicted)
+		if saveErr := s.saveSandboxLocked(sb); saveErr != nil {
+			return saveErr
+		}
 		return errorf(CodeInvalidState, "sandbox %s was evicted", sb.id)
 	}
 	return backendError(err)

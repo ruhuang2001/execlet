@@ -333,7 +333,7 @@ Live state is held in memory and bounded on four axes:
 - retained output, per execution (`MaxOutputBytes`) and in total (`MaxRetainedOutputBytes`): the total exists because the per-execution bound multiplies by history and by sandbox count;
 - executions per sandbox (`MaxExecutionsPerSandbox`).
 
-The event log is the only copy of an execution's output; `stdout` and `stderr` are assembled from it when a client asks, which keeps one execution near one retained byte per byte of output instead of three.
+The event log owns replay data. When a client asks for full output, the log appends any unindexed chunks to a per-stream buffer. Repeated reads share immutable string prefixes instead of rescanning or copying past output. The buffers cost up to another copy of the retained text plus allocation headroom; the output limits count payload bytes, not heap usage.
 
 Without `-state-dir`, startup removes containers carrying its owner label
 (`tiny-sandbox.owner=<owner>`, `-owner` defaults to the listen address);

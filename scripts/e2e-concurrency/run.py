@@ -236,7 +236,14 @@ def concurrent_stdin():
 
 def paused_missing_cancel():
     sb = create()
-    a, b = start(sb), start(sb)
+    command = ["sh", "-c", "echo ready; exec sleep 30"]
+    a, b = start(sb, command), start(sb, command)
+    # An attached exec may not have reached its first instruction yet. This
+    # case evicts two running processes, not two in-flight Docker starts.
+    deadline = time.monotonic() + 5
+    while not all("ready" in get(sb, ex)["stdout"] for ex in (a, b)):
+        assert time.monotonic() < deadline, "commands did not start before pause"
+        time.sleep(.02)
     call("POST", "/v1/sandboxes/" + sb + "/pause")
     subprocess.run(["docker", "rm", "-f", "tiny-sandbox-" + sb], check=True, capture_output=True)
     # A sweep may win the race and make cancel return the terminal record.

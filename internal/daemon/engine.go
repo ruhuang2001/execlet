@@ -104,9 +104,7 @@ func (ex *execution) finish(at time.Time, exitCode int, outcome ExecOutcome) boo
 	}
 	ex.reason = &reason
 
-	// The terminal record is stored without output: the log's events are the
-	// only copy, and the delivery path assembles it for the client. Storing it
-	// here as well would double the memory each execution keeps.
+	// Store the terminal record without a second output payload in the journal.
 	terminal := Execution{
 		ID:                ex.id,
 		PID:               ex.pid,
@@ -141,7 +139,11 @@ func (ex *execution) finish(at time.Time, exitCode int, outcome ExecOutcome) boo
 	if logger == nil {
 		logger = slog.Default()
 	}
-	logger.Info("execution completed", "sandbox_id", ex.sandboxID, "execution_id", ex.id, "exit_code", ex.exitCode, "reason", *ex.reason)
+	var exitVal any
+	if ex.exitCode != nil {
+		exitVal = *ex.exitCode
+	}
+	logger.Info("execution completed", "sandbox_id", ex.sandboxID, "execution_id", ex.id, "exit_code", exitVal, "reason", *ex.reason)
 	return true
 }
 
@@ -168,8 +170,8 @@ func (ex *execution) snapshotLocked() Execution {
 		State:             ex.state,
 		ExitCode:          cloneInt(ex.exitCode),
 		TerminationReason: cloneReason2(ex.reason),
-		Stdout:            string(stdout),
-		Stderr:            string(stderr),
+		Stdout:            stdout,
+		Stderr:            stderr,
 		OutputTruncated:   truncated,
 		StartedAt:         ex.startedAt,
 		FinishedAt:        cloneTime(ex.finished),
@@ -390,7 +392,6 @@ func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req Ex
 		ex.deadline = &deadline
 	}
 	if req.TimeoutMS != nil {
-		ex.timeoutMS = new(*req.TimeoutMS)
 		managed, ok := proc.(ManagedProcess)
 		if !ok || (managed.PID() <= 0 && startErr == nil) {
 			_ = s.terminateLocked(context.WithoutCancel(ctx), sb, KillRequested)
@@ -413,7 +414,7 @@ func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req Ex
 	if ex.persist != nil {
 		persistErr = ex.persist(ex.snapshotLocked(), nil)
 	}
-	sb.lastActivity = s.now()
+	sb.touchLocked(s.now())
 	sb.pruneExecutionsLocked()
 	// The contract reports the execution as running with empty output; the
 	// pumps below deliver the rest through the event log.
@@ -580,13 +581,10 @@ func (s *Sandboxes) CancelExecution(ctx context.Context, sandboxID, executionID 
 	// in a paused sandbox resumes it first.
 	sb.mu.Lock()
 	if sb.state == StatePaused {
-		if err := s.backend.Unpause(ctx, sb.container); err != nil {
-			failure := s.backendFailure(ctx, sb, err)
+		if err := s.unpauseLocked(ctx, sb); err != nil {
 			sb.mu.Unlock()
-			return Execution{}, failure
+			return Execution{}, err
 		}
-		sb.state = StateRunning
-		sb.armLifetimeLocked(s.now())
 	}
 	sb.mu.Unlock()
 
@@ -640,7 +638,10 @@ func (s *Sandboxes) timeoutExecution(ctx context.Context, sb *sandbox, ex *execu
 	// land; the deadline was already due, so this does not extend anything.
 	sb.mu.Lock()
 	if sb.state == StatePaused {
-		if err := s.backend.Unpause(ctx, sb.container); err != nil {
+		callCtx, cancel := backendCtx(ctx)
+		err := s.backend.Unpause(callCtx, sb.container)
+		cancel()
+		if err != nil {
 			// The process outlives its deadline by one beat and timedOut is
 			// already set, so the deadline is not reclaimed. Removing the
 			// container is the only guarantee left.
@@ -650,6 +651,9 @@ func (s *Sandboxes) timeoutExecution(ctx context.Context, sb *sandbox, ex *execu
 		}
 		sb.state = StateRunning
 		sb.armLifetimeLocked(s.now())
+		if saveErr := s.saveSandboxLocked(sb); saveErr != nil {
+			contextLogger(ctx).WarnContext(ctx, "cannot persist timeout unpause", "sandbox_id", sb.id)
+		}
 	}
 	sb.mu.Unlock()
 

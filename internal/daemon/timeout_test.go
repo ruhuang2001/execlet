@@ -2,10 +2,16 @@ package daemon_test
 
 import (
 	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/ruhuang2001/tiny-sandbox/internal/daemon"
+	"github.com/ruhuang2001/tiny-sandbox/internal/daemon/membackend"
 )
 
 // TestLifetimeTimeout covers the lifetime timeout rules in api.md: count from
@@ -495,4 +501,212 @@ func TestReaperRun(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("the reaper did not apply the lifetime timeout")
+}
+
+type deadlineCheckingBackend struct {
+	*membackend.Backend
+}
+
+func (b *deadlineCheckingBackend) Owned(context.Context, string) ([]string, error) {
+	return b.IDs(), nil
+}
+
+func (b *deadlineCheckingBackend) Pause(ctx context.Context, id string) error {
+	if _, ok := ctx.Deadline(); !ok {
+		return daemon.ErrStartUnconfirmed
+	}
+	return b.Backend.Pause(ctx, id)
+}
+
+func (b *deadlineCheckingBackend) Unpause(ctx context.Context, id string) error {
+	if _, ok := ctx.Deadline(); !ok {
+		return daemon.ErrStartUnconfirmed
+	}
+	return b.Backend.Unpause(ctx, id)
+}
+
+func TestPauseAndUnpauseApplyBackendCallTimeout(t *testing.T) {
+	be := &deadlineCheckingBackend{Backend: membackend.New()}
+	be.Programs["block"] = memLongBlock
+	s := daemon.New(be, daemon.WithClassifierSleep(noSleep), daemon.WithCancelGrace(10*time.Millisecond), daemon.WithCancelDeadline(100*time.Millisecond))
+	ctx := context.Background()
+
+	sb, err := s.Create(ctx, daemon.CreateRequest{})
+	wantNoError(t, err)
+	if _, err := s.Pause(ctx, sb.ID); err != nil {
+		t.Fatalf("Pause without caller deadline failed: %v", err)
+	}
+	if _, err := s.Resume(ctx, sb.ID); err != nil {
+		t.Fatalf("Resume without caller deadline failed: %v", err)
+	}
+
+	ex, _, err := s.StartExecution(ctx, sb.ID, daemon.ExecuteRequest{Command: []string{"block"}})
+	wantNoError(t, err)
+	if _, err := s.Pause(ctx, sb.ID); err != nil {
+		t.Fatalf("Pause before cancel failed: %v", err)
+	}
+	if _, err := s.CancelExecution(ctx, sb.ID, ex.ID); err != nil {
+		t.Fatalf("CancelExecution on paused sandbox without caller deadline failed: %v", err)
+	}
+}
+
+func TestDurableJournalSkipsIdleReapWritesAndPersistsTransitions(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "state")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	j, err := daemon.OpenJournal(dir, "test-owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = j.Close() })
+
+	clock := newFakeClock()
+	be := &deadlineCheckingBackend{Backend: membackend.New()}
+	s := daemon.New(be, daemon.WithOwnerLabel("test-owner"), daemon.WithClock(clock), daemon.WithClassifierSleep(noSleep))
+	ctx := context.Background()
+	wantNoError(t, s.Recover(ctx, j, be))
+
+	live, err := s.Create(ctx, daemon.CreateRequest{IdleTimeoutSeconds: ptr(60)})
+	wantNoError(t, err)
+	noIdle, err := s.Create(ctx, daemon.CreateRequest{})
+	wantNoError(t, err)
+	killed, err := s.Create(ctx, daemon.CreateRequest{})
+	wantNoError(t, err)
+	_, err = s.Delete(ctx, killed.ID)
+	wantNoError(t, err)
+
+	inodeOf := func(id string) uint64 {
+		t.Helper()
+		info, statErr := os.Stat(filepath.Join(dir, id+".json"))
+		if statErr != nil {
+			t.Fatal(statErr)
+		}
+		return info.Sys().(*syscall.Stat_t).Ino
+	}
+
+	liveIno := inodeOf(live.ID)
+	noIdleIno := inodeOf(noIdle.ID)
+	killedIno := inodeOf(killed.ID)
+
+	// Idle Reap ticks with no state or activity change must not rewrite records.
+	s.Reap(ctx)
+	if got := inodeOf(live.ID); got != liveIno {
+		t.Fatalf("unchanged live sandbox was rewritten on Reap: ino %d -> %d", liveIno, got)
+	}
+	if got := inodeOf(killed.ID); got != killedIno {
+		t.Fatalf("killed tombstone was rewritten on Reap: ino %d -> %d", killedIno, got)
+	}
+
+	// Touch updates in-memory activity and marks the sandbox dirty for checkpointing.
+	clock.Advance(5 * time.Second)
+	s.Touch(live.ID)
+	s.Touch(noIdle.ID)
+	s.Reap(ctx)
+	if got := inodeOf(noIdle.ID); got != noIdleIno {
+		t.Fatal("activity without an idle deadline rewrote the manifest")
+	}
+	if got := inodeOf(live.ID); got == liveIno {
+		t.Fatal("dirty live sandbox activity was not checkpointed on Reap")
+	}
+
+	// Eviction detected during Resume must persist StateKilled to the journal.
+	_, err = s.Pause(ctx, live.ID)
+	wantNoError(t, err)
+	be.Disappear(s.ContainerIDForTest(live.ID))
+	_, err = s.Resume(ctx, live.ID)
+	wantCode(t, err, daemon.CodeInvalidState)
+
+	_ = j.Close()
+	j2, err := daemon.OpenJournal(dir, "test-owner")
+	wantNoError(t, err)
+	defer func() { _ = j2.Close() }()
+	s2 := daemon.New(be, daemon.WithOwnerLabel("test-owner"), daemon.WithClock(clock), daemon.WithClassifierSleep(noSleep))
+	wantNoError(t, s2.Recover(ctx, j2, be))
+	recovered, err := s2.Get(live.ID)
+	wantNoError(t, err)
+	if recovered.State != daemon.StateKilled || recovered.KillReason == nil || *recovered.KillReason != daemon.KillEvicted {
+		t.Fatalf("recovered sandbox = %+v, want killed/evicted persisted before restart", recovered)
+	}
+}
+
+type batchSweepBackend struct {
+	*membackend.Backend
+	batchCalls  atomic.Int32
+	singleCalls atomic.Int32
+	failBatch   bool
+	onBatch     func()
+}
+
+func (b *batchSweepBackend) Liveness(ctx context.Context, id string) (daemon.Liveness, error) {
+	b.singleCalls.Add(1)
+	return b.Backend.Liveness(ctx, id)
+}
+
+func (b *batchSweepBackend) OwnedLiveness(ctx context.Context, _ string) (map[string]daemon.Liveness, error) {
+	b.batchCalls.Add(1)
+	if b.failBatch {
+		return nil, errors.New("runtime unavailable")
+	}
+	states := make(map[string]daemon.Liveness)
+	for _, id := range b.IDs() {
+		l, err := b.Backend.Liveness(ctx, id)
+		if err == nil && l != daemon.LivenessMissing {
+			states[id] = l
+		}
+	}
+	if b.onBatch != nil {
+		b.onBatch()
+	}
+	return states, nil
+}
+
+func TestBatchEvictSweepUsesSingleListAndProtectsConcurrentCreate(t *testing.T) {
+	ctx := context.Background()
+	be := &batchSweepBackend{Backend: membackend.New()}
+	s := daemon.New(be, daemon.WithOwnerLabel("sweep-owner"))
+
+	var sandboxes []daemon.Sandbox
+	for range 5 {
+		sb, err := s.Create(ctx, daemon.CreateRequest{})
+		wantNoError(t, err)
+		sandboxes = append(sandboxes, sb)
+	}
+	be.Kill(s.ContainerIDForTest(sandboxes[0].ID))
+
+	// A sandbox created while OwnedLiveness is returning must never be falsely evicted.
+	var concurrent daemon.Sandbox
+	be.onBatch = func() {
+		var err error
+		concurrent, err = s.Create(ctx, daemon.CreateRequest{})
+		wantNoError(t, err)
+	}
+	s.EvictSweep(ctx)
+	be.onBatch = nil
+
+	if got := be.batchCalls.Load(); got != 1 {
+		t.Fatalf("batchCalls = %d, want 1", got)
+	}
+	if got := be.singleCalls.Load(); got != 0 {
+		t.Fatalf("singleCalls = %d, want 0", got)
+	}
+	evicted, err := s.Get(sandboxes[0].ID)
+	wantNoError(t, err)
+	if evicted.State != daemon.StateKilled || evicted.KillReason == nil || *evicted.KillReason != daemon.KillEvicted {
+		t.Fatalf("evicted sandbox = %+v, want killed/evicted", evicted)
+	}
+	fresh, err := s.Get(concurrent.ID)
+	wantNoError(t, err)
+	if fresh.State != daemon.StateRunning {
+		t.Fatalf("concurrently created sandbox was falsely evicted: %+v", fresh)
+	}
+
+	// A failed batch sweep must not evict surviving sandboxes.
+	be.failBatch = true
+	s.EvictSweep(ctx)
+	surviving, err := s.Get(sandboxes[1].ID)
+	wantNoError(t, err)
+	if surviving.State != daemon.StateRunning {
+		t.Fatalf("batch error falsely evicted sandbox: %+v", surviving)
+	}
 }

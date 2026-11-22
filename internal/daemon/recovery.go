@@ -226,6 +226,7 @@ func (s *Sandboxes) saveSandboxExceptLocked(sb *sandbox, omit string) error {
 	if err != nil {
 		return errorf(CodeUnavailable, "cannot persist sandbox state")
 	}
+	sb.dirty = false
 	return nil
 }
 

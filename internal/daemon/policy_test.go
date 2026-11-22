@@ -85,6 +85,23 @@ func TestDeploymentPolicyAdmissionAndCleanup(t *testing.T) {
 	}
 }
 
+func TestPolicySweepWithoutBatchLiveness(t *testing.T) {
+	backend := &policyRuntime{Backend: membackend.New()}
+	policy := daemon.DeploymentPolicy{MaxSandboxes: 1, MemoryMB: 128, NanoCPUs: 1_000_000_000, Pids: 1024, Images: []string{"approved"}, Networks: []daemon.NetworkMode{daemon.NetworkNone}}
+	limited, err := daemon.NewPolicyBackend(backend, policy)
+	wantNoError(t, err)
+	s := daemon.New(limited, daemon.WithOwnerLabel("test-owner"))
+	sb, err := s.Create(t.Context(), daemon.CreateRequest{Image: new("approved"), MemoryMB: new(64)})
+	wantNoError(t, err)
+	backend.Disappear(s.ContainerIDForTest(sb.ID))
+	s.EvictSweep(t.Context())
+	got, err := s.Get(sb.ID)
+	wantNoError(t, err)
+	if got.State != daemon.StateKilled || got.KillReason == nil || *got.KillReason != daemon.KillEvicted {
+		t.Fatalf("sweep left missing container in state %s (%v)", got.State, got.KillReason)
+	}
+}
+
 func TestDeploymentPolicyRejectsUnknownConfiguration(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "policy.json")
 	for _, data := range []string{`{"max_sandboxes":1,"total_memory_mb":64,"total_nano_cpus":1000000000,"total_pids":64,"allowed_images":["approved"],"allowed_networks":["filtered"]}`, `{"max_sandboxes":1,"total_memory_mb":64,"total_nano_cpus":1000000000,"total_pids":64,"allowed_images":["approved"],"allowed_networks":["none"],"allow_private":false}`} {

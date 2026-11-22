@@ -1,6 +1,7 @@
 """Publish and retire local sandbox filesystem snapshots in an administrator policy."""
 
 import argparse
+import copy
 import fcntl
 import json
 import os
@@ -44,8 +45,8 @@ def exclude(path, roots):
     return any(path == root or path.startswith(root + "/") for root in roots)
 
 
-def filtered_export(container, destination, mounts):
-    roots = EXCLUDED | TRANSIENT_DIRS | mounts
+def filtered_export(container, destination, mounts, omit=()):
+    roots = EXCLUDED | TRANSIENT_DIRS | mounts | set(omit)
     with subprocess.Popen(
         ["docker", "export", container], stdout=subprocess.PIPE
     ) as proc:
@@ -71,6 +72,121 @@ def filtered_export(container, destination, mounts):
             proc.stdout.close()
         if proc.wait() != 0:
             raise RuntimeError("Docker filesystem export failed")
+
+
+def merge_runsc_layers(lower, upper, destination, mounts):
+    roots = EXCLUDED | TRANSIENT_DIRS | mounts
+    with tarfile.open(lower) as base, tarfile.open(upper) as changes:
+        entries = {}
+
+        def index(layer, overlay):
+            indexed = {}
+            hidden = set()
+            opaque = set()
+            links = {}
+            for h in layer:
+                path = archive_name(h.name)
+                if exclude(path, roots) and not (
+                    path in TRANSIENT_DIRS | mounts and h.isdir()
+                ):
+                    continue
+                if overlay and h.ischr() and h.devmajor == 0 and h.devminor == 0:
+                    hidden.add(path)
+                    continue
+                if overlay:
+                    for key in tuple(h.pax_headers):
+                        if key.startswith(
+                            (
+                                "SCHILY.xattr.trusted.overlay.",
+                                "SCHILY.xattr.user.overlay.",
+                            )
+                        ):
+                            value = h.pax_headers.pop(key)
+                            if key.endswith(".opaque") and value in ("x", "y"):
+                                if value == "y":
+                                    opaque.add(path)
+                            else:
+                                raise ValueError(
+                                    f"unsupported runsc overlay metadata {key} at {path}"
+                                )
+                    if not h.isdir():
+                        hidden.add(path)
+                if h.islnk():
+                    target = archive_name(h.linkname)
+                    if exclude(target, roots):
+                        raise ValueError(
+                            f"hard link {path!r} points into an excluded directory"
+                        )
+                    links[path] = target
+                else:
+                    indexed[path] = (layer, h)
+            for path, target in links.items():
+                seen = {path}
+                while target in links:
+                    if target in seen:
+                        raise ValueError("cyclic snapshot hard link")
+                    seen.add(target)
+                    target = links[target]
+                entry = indexed.get(target, entries.get(target))
+                if entry is None or not entry[1].isreg():
+                    raise ValueError(f"unresolved snapshot hard link {path}")
+                indexed[path] = entry
+            for path in list(entries):
+                parts = [str(p) for p in PurePosixPath(path).parents]
+                if path in hidden or any(p in hidden or p in opaque for p in parts):
+                    del entries[path]
+            entries.update(indexed)
+
+        index(base, False)
+        index(changes, True)
+        with tarfile.open(destination, "w") as merged:
+            written = {}
+            for path in sorted(entries):
+                layer, original = entries[path]
+                h = copy.copy(original)
+                h.pax_headers = {
+                    k: v
+                    for k, v in original.pax_headers.items()
+                    if k not in ("path", "linkpath")
+                }
+                h.name = path
+                identity = (layer, original.offset)
+                if h.isreg():
+                    if identity in written:
+                        h.type, h.linkname, h.size = (
+                            tarfile.LNKTYPE,
+                            written[identity],
+                            0,
+                        )
+                        h.pax_headers.pop("size", None)
+                    else:
+                        written[identity] = path
+                merged.addfile(h, layer.extractfile(original) if h.isreg() else None)
+
+
+def runsc_export(source, work, archive, mounts, runtime_root):
+    container = source["Id"]
+    lower, upper = work / "lower.tar", work / "upper.tar"
+    with ExitStack() as frozen:
+        if not source["State"]["Paused"]:
+            docker("pause", container)
+            frozen.callback(docker, "unpause", container)
+        subprocess.run(
+            [
+                "runsc",
+                "--root=" + runtime_root,
+                "tar",
+                "rootfs-upper",
+                "--file=" + str(upper),
+                container,
+            ],
+            check=True,
+            stdout=sys.stderr,
+        )
+        filtered_export(
+            container, lower, mounts, omit={".gvisor.filestore." + container}
+        )
+    merge_runsc_layers(lower, upper, archive, mounts)
 
 
 def image_settings(base, name):
@@ -107,10 +223,6 @@ def publish(args, cleanup):
         raise ValueError("source belongs to a different deployment owner")
     if not source["State"]["Running"]:
         raise ValueError("source sandbox must be running or paused")
-    if source["HostConfig"].get("Runtime") == "runsc":
-        raise ValueError(
-            "runsc snapshots are unsupported: Docker export can omit guest filesystem changes"
-        )
     base = inspect("image", source["Image"])
     settings = image_settings(base, args.name)
     mounts = {m["Destination"].strip("/") for m in source.get("Mounts", [])}
@@ -119,12 +231,15 @@ def publish(args, cleanup):
         ExitStack() as staging,
         tempfile.TemporaryDirectory(prefix="tiny-sandbox-template-") as work,
     ):
-        snapshot = docker("commit", source["Id"])
-        staging.callback(docker, "image", "rm", snapshot)
-        stopped = docker("create", "--network", "none", snapshot, "/bin/true")
-        staging.callback(docker, "rm", "-v", stopped)
         archive = Path(work) / "filesystem.tar"
-        filtered_export(stopped, archive, mounts)
+        if source["HostConfig"].get("Runtime") == "runsc":
+            runsc_export(source, Path(work), archive, mounts, args.runsc_root)
+        else:
+            snapshot = docker("commit", source["Id"])
+            staging.callback(docker, "image", "rm", snapshot)
+            stopped = docker("create", "--network", "none", snapshot, "/bin/true")
+            staging.callback(docker, "rm", "-v", stopped)
+            filtered_export(stopped, archive, mounts)
         digest = docker("import", *settings, str(archive), tag)
         cleanup.callback(docker, "image", "rm", tag)
     return digest
@@ -159,6 +274,11 @@ def main():
         sub.add_argument("--policy", type=Path, required=True)
         sub.add_argument("--name", required=True)
         if action == "save":
+            sub.add_argument(
+                "--runsc-root",
+                default="/var/run/docker/runtime-runc/moby",
+                help="Docker runtime state directory for runsc",
+            )
             sub.add_argument("--owner", required=True)
             sub.add_argument("--sandbox", required=True)
     args = parser.parse_args()
@@ -191,12 +311,13 @@ def main():
                 )
                 if result.returncode == 0:
                     image = json.loads(result.stdout)[0]
-                    if (image["Config"].get("Labels") or {}).get(
+                    origin = (image["Config"].get("Labels") or {}).get(
                         "tiny-sandbox.template"
-                    ) == args.name:
+                    )
+                    if origin and NAME.fullmatch(origin):
                         for tag in image.get("RepoTags") or []:
                             if tag.startswith(
-                                "tiny-sandbox-template/" + args.name + ":snapshot-"
+                                "tiny-sandbox-template/" + origin + ":snapshot-"
                             ):
                                 docker("image", "rm", "--force", tag)
     print(json.dumps(dict(name=args.name, image=digest, action=args.action)))

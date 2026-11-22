@@ -18,6 +18,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--server", default="bin/sandboxd")
     parser.add_argument("--out", type=Path, default=Path("artifacts/templates"))
+    parser.add_argument("--runtime", choices=("runc", "runsc"), default="runc")
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     policy = args.out / "policy.json"
@@ -35,6 +36,7 @@ def main():
     policy.write_text(
         json.dumps(
             dict(
+                allowed_runtimes=[args.runtime],
                 templates={"python": digest},
                 allowed_images=[digest],
                 allowed_networks=["none"],
@@ -116,9 +118,59 @@ def main():
             source,
             "mkdir -p /project /tmp/cache /var/tmp/cache /.tiny-sandbox; echo initial >/project/main; python3 -m venv /opt/project-env; echo private >/tmp/cache/token; echo secret >/var/tmp/cache/token; echo temporary >/mnt/scratch/token; echo ephemeral >/.tiny-sandbox/snapshot-marker",
         )
+        command(
+            source,
+            "rm /etc/alpine-release; rm -rf /etc/apk/keys; mkdir /etc/apk/keys; echo ours >/etc/apk/keys/only; ln /project/main /project/linked",
+        )
         saved = template("save", name, "--sandbox", source, "--owner", owner)
         assert saved.returncode == 0, saved.stderr
         saved = json.loads(saved.stdout)
+        assert command(source, "cat /project/main") == "initial"
+        if args.runtime == "runsc":
+            failed_name = name + "-failed"
+            failed = template(
+                "save",
+                failed_name,
+                "--sandbox",
+                source,
+                "--owner",
+                owner,
+                "--runsc-root",
+                "/tmp/missing-runsc-root-" + owner,
+            )
+            assert (
+                failed.returncode != 0
+                and failed_name not in json.loads(policy.read_text())["templates"]
+            )
+            assert command(source, "cat /project/main") == "initial"
+            rows.append(
+                dict(operation="capture_failure", unpublished=True, source_running=True)
+            )
+            client.pause_sandbox(source)
+            paused_name = name + "-paused"
+            paused = template(
+                "save", paused_name, "--sandbox", source, "--owner", owner
+            )
+            assert paused.returncode == 0, paused.stderr
+            assert (
+                subprocess.check_output(
+                    [
+                        "docker",
+                        "inspect",
+                        "--format",
+                        "{{.State.Paused}}",
+                        "tiny-sandbox-" + source,
+                    ],
+                    text=True,
+                ).strip()
+                == "true"
+            )
+            assert template("delete", paused_name).returncode == 0
+            client.resume_sandbox(source)
+            assert command(source, "cat /project/main") == "initial"
+            rows.append(
+                dict(operation="preserve_source_state", running=True, paused=True)
+            )
         assert (
             template("save", name, "--sandbox", source, "--owner", owner).returncode
             != 0
@@ -147,7 +199,7 @@ def main():
             assert (
                 command(
                     sid,
-                    "cat /project/main; /opt/project-env/bin/pip --version >/dev/null; test ! -e /tmp/cache/token; test ! -e /var/tmp/cache/token; test ! -e /mnt/scratch/token; test ! -e /.tiny-sandbox/snapshot-marker",
+                    'cat /project/main; test /project/main -ef /project/linked; test ! -e /etc/alpine-release; test "$(ls /etc/apk/keys)" = only; /opt/project-env/bin/pip --version >/dev/null; test ! -e /tmp/cache/token; test ! -e /var/tmp/cache/token; test ! -e /mnt/scratch/token; test ! -e /.tiny-sandbox/snapshot-marker',
                 )
                 == "initial"
             )
@@ -157,6 +209,9 @@ def main():
                     id=sid,
                     digest=client.get_sandbox(sid).image,
                     project="initial",
+                    deleted_base_file_absent=True,
+                    replaced_base_directory_opaque=True,
+                    hardlink_preserved=True,
                     pip="available",
                     excluded=[
                         "/tmp/cache",
@@ -166,6 +221,15 @@ def main():
                     ],
                 )
             )
+        catalog = json.loads(policy.read_text())
+        alias = name + "-copy"
+        catalog["templates"][alias] = saved["image"]
+        next_policy = policy.with_suffix(".tmp")
+        next_policy.write_text(json.dumps(catalog))
+        next_policy.replace(policy)
+        tags = saved_image["RepoTags"]
+        assert len(tags) == 1, tags
+        tag = tags[0]
         removed = template("delete", name)
         assert removed.returncode == 0, removed.stderr
         try:
@@ -174,9 +238,31 @@ def main():
             assert err.code == "invalid_request", err
         else:
             raise AssertionError("removed template remained available")
+        assert (
+            subprocess.run(
+                ["docker", "image", "inspect", tag], capture_output=True
+            ).returncode
+            == 0
+        )
+        live = create(alias)
+        assert command(live, "cat /project/main") == "initial"
+        client.kill_sandbox(live)
+        removed_alias = template("delete", alias)
+        assert removed_alias.returncode == 0, removed_alias.stderr
+        try:
+            assert (
+                subprocess.run(
+                    ["docker", "image", "inspect", tag], capture_output=True
+                ).returncode
+                != 0
+            ), tag
+        finally:
+            subprocess.run(["docker", "image", "rm", tag], capture_output=True)
         rows.append(
             dict(
                 operation="delete",
+                released_snapshot_tag=tag,
+                final_alias=alias,
                 snapshot=json.loads(removed.stdout),
                 retained_sandbox=client.get_sandbox(b).state,
             )
@@ -197,6 +283,7 @@ def main():
             {
                 "status": "passed",
                 "owner": owner,
+                "runtime": args.runtime,
                 "rows": rows,
                 "remaining_containers": 0,
             },

@@ -72,9 +72,19 @@ python3 scripts/template-admin.py delete --policy /etc/tiny-sandbox/policy.json 
   --name python-test
 ```
 
-Save requires a new name. A runsc sandbox must use an independently built template because Docker export may omit changes from the guest overlay. The save command rejects runsc sources before creating an image. For a supported source, Docker briefly freezes the sandbox during its
-commit, then the administrator tool exports a stopped copy, filters its tar
-and imports a local image. Finish dependency installation before saving to
+Save requires a new name. For runc, Docker briefly freezes the source during its commit. The administrator tool exports a stopped copy, filters its tar, and imports a local image.
+
+For runsc, execute the same command on the Linux Docker host with the installed
+`runsc` binary. Docker pauses writers while the tool captures the lower filesystem
+and gVisor's upper layer using `runsc tar rootfs-upper`. The merge applies file
+deletions, directory replacements, permissions and hard links, excludes the
+runtime's backing file and imports the flattened filesystem. A running source
+resumes after capture. A paused source stays paused. The default runtime state
+directory is `/var/run/docker/runtime-runc/moby`. Supply `--runsc-root DIR` for
+another installation path. An unsupported overlay format or failed capture
+aborts publication. This path was tested with gVisor release-20261116.0.
+[Upstream runsc tar command](https://github.com/google/gvisor/blob/release-20261116.0/runsc/cmd/tar.go)
+ Finish dependency installation before saving to
 capture an application-consistent project. Contents under `/tmp`, `/var/tmp`,
 `/run`, `/dev`, `/proc`, `/sys`, and each mounted volume are excluded.
 The tool also omits `/.tiny-sandbox`, `/.dockerenv` and Docker-managed
@@ -284,7 +294,7 @@ Replace the example digest with the installed image ID or repository digest. Inc
 
 The daemon counts each standby container against every deployment budget from the beginning of provisioning. It validates resource limits before making an instance available. An incoming request claims a matching image digest, memory size, CPU limit, PID limit, network and runtime under one lock. A miss takes the usual creation path subject to available quota. The sandbox lifetime starts at handoff. Each instance goes to one user and is discarded on deletion. The background worker replenishes the configured target while capacity is available. The `tiny_sandbox_prewarm_ready` metric counts instances available for handoff.
 
-On a journaled restart the daemon reconciles each delivered sandbox against its durable record. It removes unclaimed owner-labelled containers, then starts filling the pool. Graceful shutdown also removes idle pool containers. Changing a named template changes the digest used by incoming requests. Restart to warm the new digest.
+On a journaled restart the daemon reconciles each delivered sandbox against its durable record. It removes unclaimed owner-labelled containers, then starts filling the pool. Graceful shutdown also removes idle pool containers. Changing a named template switches new requests to its current digest. On its next reconciliation, the pool removes excess standby containers for the old digest and fills the new target. Deleting an alias leaves its pool target dormant, including across restarts. Registering that name again reactivates it.
 
 Run `python3 scripts/e2e-prewarm.py --samples 10` with Docker available to measure the interval from a create request to its first completed command. A private loopback registry serves a unique single-layer image for cold pulls. The script compares cold pulls, a local image, template resolution and confirmed pool hits on one engine. The output includes all samples, P50, P95, saturation and recovery results in `artifacts/prewarm-e2e/acceptance.json`.
 
@@ -304,6 +314,8 @@ The Linux acceptance run used Docker 29.1.3, cgroup v2 and gVisor release-202611
 | Guest handshake, non-root identity, stat, managed command and exit code | Passed | Passed |
 | Single-file read/write and readback after workload mutation | Passed | Passed through guest filesystem |
 | Tar upload/download, payload digest and cleanup | Passed | Passed through guest filesystem |
+
+The runtime suite also exercised a Docker Engine configured with runsc as its default, with no runtime in the request or policy. Docker inspection selects the filesystem transfer path at creation and journal recovery. Append `--engine-default` to the runtime suite command to reproduce that case. Both explicit runtimes preserved a workload-written file through a sandboxd restart.
 
 Runsc exposes a virtualized cgroup hierarchy to the guest. Policy verification therefore requires sandboxd to run on the Linux Docker host with access to its process table and cgroup tree. Admission fails if the matching scope or a limit cannot be checked. Runsc's private overlay and `/tmp` can diverge from Docker's archive view of the container. The backend uses a guest transfer helper for live filesystem operations.
 

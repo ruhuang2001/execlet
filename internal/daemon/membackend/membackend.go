@@ -15,8 +15,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/ruhuang2001/tiny-sandbox/internal/daemon"
@@ -260,32 +262,60 @@ func (b *Backend) OOMKillCount(_ context.Context, id string) (int64, error) {
 	return c.oom, nil
 }
 
-// ReadFile returns a stored file.
-func (b *Backend) ReadFile(_ context.Context, id, path string) ([]byte, error) {
+// ReadFile returns a stored regular file.
+func (b *Backend) ReadFile(_ context.Context, id, p string) ([]byte, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	c, err := b.get(id)
 	if err != nil {
 		return nil, err
 	}
-	data, ok := c.files[path]
+	p = path.Clean(p)
+	if h, ok := c.archiveHeaders[p]; ok && h.Typeflag != tar.TypeReg && h.Typeflag != 0 && h.Typeflag != tar.TypeLink {
+		return nil, &daemon.Error{Code: daemon.CodeInvalidRequest, Message: "path is not a regular file: " + p}
+	}
+	data, ok := c.files[p]
 	if !ok {
-		return nil, fmt.Errorf("membackend: %s: %w", path, daemon.ErrNotFound)
+		prefix := strings.TrimSuffix(p, "/") + "/"
+		for name := range c.files {
+			if strings.HasPrefix(name, prefix) {
+				return nil, &daemon.Error{Code: daemon.CodeInvalidRequest, Message: "path must identify a regular file: " + p}
+			}
+		}
+		for name := range c.archiveHeaders {
+			if strings.HasPrefix(name, prefix) {
+				return nil, &daemon.Error{Code: daemon.CodeInvalidRequest, Message: "path must identify a regular file: " + p}
+			}
+		}
+		return nil, fmt.Errorf("membackend: %s: %w", p, daemon.ErrNotFound)
+	}
+	if len(data) > daemon.MaxFileBytes {
+		return nil, &daemon.Error{Code: daemon.CodePayloadTooLarge, Message: fmt.Sprintf("file exceeds %d bytes", daemon.MaxFileBytes)}
 	}
 	return append([]byte(nil), data...), nil
 }
 
 // WriteFile stores a file.
-func (b *Backend) WriteFile(_ context.Context, id, path string, data []byte) error {
+func (b *Backend) WriteFile(_ context.Context, id, p string, data []byte) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	c, err := b.get(id)
 	if err != nil {
 		return err
 	}
-	c.detachHardlinks(path)
-	c.files[path] = append([]byte(nil), data...)
-	delete(c.archiveHeaders, path)
+	p = path.Clean(p)
+	if h, ok := c.archiveHeaders[p]; ok && h.Typeflag == tar.TypeDir {
+		return &daemon.Error{Code: daemon.CodeInvalidRequest, Message: "destination cannot hold a file: " + p}
+	}
+	prefix := strings.TrimSuffix(p, "/") + "/"
+	for name := range c.files {
+		if strings.HasPrefix(name, prefix) {
+			return &daemon.Error{Code: daemon.CodeInvalidRequest, Message: "destination cannot hold a file: " + p}
+		}
+	}
+	c.detachHardlinks(p)
+	c.files[p] = append([]byte(nil), data...)
+	delete(c.archiveHeaders, p)
 	return nil
 }
 

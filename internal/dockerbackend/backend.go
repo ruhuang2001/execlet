@@ -384,16 +384,22 @@ func (b *Backend) OOMKillCount(ctx context.Context, containerID string) (int64, 
 
 // ---------------------------------------------------------------- files
 
-// ReadFile reads a file through the archive API. Docker tar-wraps the bytes,
-// so the single entry is unwrapped here.
+// ReadFile reads a regular file through the archive API. Docker tar-wraps the
+// selected entry, so a directory or symlink is detectable from the first header
+// before reading nested contents.
 func (b *Backend) ReadFile(ctx context.Context, containerID, path string) ([]byte, error) {
 	rc, err := b.api.ArchiveGet(ctx, containerID, path)
 	if err != nil {
 		return nil, notFound(err, "%s", path)
 	}
 	defer func() { _ = rc.Close() }()
-	data, err := dockerapi.ExtractFile(rc)
-	if err != nil {
+	data, err := dockerapi.ExtractFile(io.LimitReader(rc, daemon.MaxFileScanBytes+1))
+	switch {
+	case errors.Is(err, dockerapi.ErrNotRegular):
+		return nil, &daemon.Error{Code: daemon.CodeInvalidRequest, Message: "path must identify a regular file: " + path}
+	case errors.Is(err, dockerapi.ErrFileTooLarge):
+		return nil, &daemon.Error{Code: daemon.CodePayloadTooLarge, Message: fmt.Sprintf("file exceeds %d bytes", daemon.MaxFileBytes)}
+	case err != nil:
 		return nil, fmt.Errorf("dockerbackend: read %s: %w", path, err)
 	}
 	return data, nil

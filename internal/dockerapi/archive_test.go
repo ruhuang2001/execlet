@@ -46,7 +46,7 @@ func TestBuildFileTarCleansName(t *testing.T) {
 	}
 }
 
-func TestExtractFileSkipsDirectories(t *testing.T) {
+func TestExtractFileRejectsDirectoryWithFile(t *testing.T) {
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
 	if err := tw.WriteHeader(&tar.Header{Name: "dir/", Typeflag: '5', Mode: 0o755}); err != nil {
@@ -63,11 +63,8 @@ func TestExtractFileSkipsDirectories(t *testing.T) {
 	}
 
 	got, err := ExtractFile(&buf)
-	if err != nil {
-		t.Fatalf("extract: %v", err)
-	}
-	if string(got) != "hi" {
-		t.Errorf("extracted %q, want hi", got)
+	if err == nil || len(got) != 0 {
+		t.Errorf("directory read returned %q, %v", got, err)
 	}
 }
 

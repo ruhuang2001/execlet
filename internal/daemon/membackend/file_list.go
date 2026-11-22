@@ -60,11 +60,23 @@ func (b *Backend) ListFiles(_ context.Context, id, p, after string, limit int) (
 		if h.Typeflag == tar.TypeSymlink {
 			size = int64(len(h.Linkname))
 		}
-		entry := daemon.FileEntry{Name: child, Size: size, Mode: h.Mode, Mtime: h.ModTime.UTC(), IsDir: h.Typeflag == tar.TypeDir}
+		entry := daemon.FileEntry{
+			Name:  child,
+			Size:  size,
+			Mode:  h.Mode,
+			Mtime: h.ModTime.UTC(),
+			IsDir: h.Typeflag == tar.TypeDir,
+			Type:  memFileType(h.Typeflag),
+		}
+		if h.Typeflag == tar.TypeSymlink {
+			entry.SymlinkTarget = h.Linkname
+		}
 		if nested {
 			entry.Size = 0
 			entry.Mode = 0o755
 			entry.IsDir = true
+			entry.Type = daemon.FileTypeDir
+			entry.SymlinkTarget = ""
 		}
 		entries = daemon.SelectFilePage(entries, entry, after, limit)
 	}
@@ -86,14 +98,27 @@ func (b *Backend) ListFiles(_ context.Context, id, p, after string, limit int) (
 			continue
 		}
 		seen[child] = true
-		size, mode := int64(len(data)), int64(0o644)
+		size, mode, kind := int64(len(data)), int64(0o644), daemon.FileTypeFile
 		if directory {
-			size, mode = 0, 0o755
+			size, mode, kind = 0, 0o755, daemon.FileTypeDir
 		}
-		entries = daemon.SelectFilePage(entries, daemon.FileEntry{Name: child, Size: size, Mode: mode, Mtime: time.Unix(0, 0).UTC(), IsDir: directory}, after, limit)
+		entries = daemon.SelectFilePage(entries, daemon.FileEntry{Name: child, Size: size, Mode: mode, Mtime: time.Unix(0, 0).UTC(), IsDir: directory, Type: kind}, after, limit)
 	}
 	if !exists {
 		return nil, daemon.ErrNotFound
 	}
 	return entries, nil
+}
+
+func memFileType(typeflag byte) daemon.FileType {
+	switch typeflag {
+	case tar.TypeDir:
+		return daemon.FileTypeDir
+	case tar.TypeSymlink:
+		return daemon.FileTypeSymlink
+	case tar.TypeReg, 0, tar.TypeLink:
+		return daemon.FileTypeFile
+	default:
+		return daemon.FileTypeOther
+	}
 }

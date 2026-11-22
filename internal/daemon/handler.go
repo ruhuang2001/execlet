@@ -303,11 +303,17 @@ func (h *Handler) writeFile(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	rc := http.NewResponseController(w)
+	_ = rc.SetReadDeadline(time.Now().Add(FileOperationTimeout))
+	defer func() { _ = rc.SetReadDeadline(time.Time{}) }()
 	body := http.MaxBytesReader(w, r.Body, MaxFileBytes)
 	data, err := io.ReadAll(body)
 	if err != nil {
-		writeError(w, http.StatusRequestEntityTooLarge, string(CodePayloadTooLarge),
-			fmt.Sprintf("file upload exceeds %d bytes", MaxFileBytes))
+		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
+			writeDaemonError(r.Context(), w, errorf(CodePayloadTooLarge, "file upload exceeds %d bytes", MaxFileBytes))
+		} else {
+			writeDaemonError(r.Context(), w, errorf(CodeInvalidRequest, "cannot read file upload body"))
+		}
 		return
 	}
 	if err := h.store.WriteFile(r.Context(), r.PathValue("sandbox_id"), path, data); err != nil {
@@ -317,14 +323,14 @@ func (h *Handler) writeFile(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// filePath validates the shared ?path= parameter.
+// filePath validates the shared ?path= parameter for regular file reads and writes.
 func filePath(w http.ResponseWriter, r *http.Request) (string, bool) {
-	path := r.URL.Query().Get("path")
-	if path == "" || path[0] != '/' {
-		writeError(w, http.StatusBadRequest, string(CodeInvalidRequest), "path must be absolute")
+	p := r.URL.Query().Get("path")
+	if err := validateRegularFilePath(p); err != nil {
+		writeDaemonError(r.Context(), w, err)
 		return "", false
 	}
-	return path, true
+	return p, true
 }
 
 // ---------------------------------------------------------------- events

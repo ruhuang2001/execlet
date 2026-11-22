@@ -418,14 +418,13 @@ Recorded because earlier builds hit them, not as hypotheticals:
 
 ### Directory listing
 
-The listing route shares file lifecycle rules and uses bounded recursive
-Docker archive reads. It retains only limit+1 immediate-child metadata records
-and emits a path-bound name cursor. A bounded map of scanned names, sizes and
-hardlink targets resolves file sizes even when targets are nested. Each request caps scanned archive bytes
-(64 MiB), headers (10000), and elapsed runtime work (30 seconds). This avoids
-unbounded host memory/work, but large nested file contents can prevent even
-a small page from succeeding. Pagination is deterministic without snapshot
-consistency; concurrent mutations can change later pages. See the API contract.
+The Docker listing probe reads metadata for immediate children, not file contents
+or descendants. It inspects up to 10000 children and returns a name-sorted page
+with a path-bound cursor. If the image user cannot list the directory or the
+guest tools lack the required stat format or readlink command, a compatibility
+fallback scans at most 64 MiB and 10000 Docker archive headers; only this fallback
+can fail because a nested file is large. Both paths share the 30-second deadline.
+Pagination is deterministic without snapshot consistency across requests.
 
 ### Tar transfer
 

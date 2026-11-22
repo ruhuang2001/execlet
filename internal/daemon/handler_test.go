@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/ruhuang2001/tiny-sandbox/internal/daemon"
@@ -419,6 +420,17 @@ func TestHandlerFiles(t *testing.T) {
 	relative := h.do(http.MethodGet, "/v1/sandboxes/"+sb.ID+"/files?path=relative", nil, nil)
 	if relative.Status != http.StatusBadRequest || h.errorCode(relative) != "invalid_request" {
 		t.Errorf("relative path = %d %s", relative.Status, h.errorCode(relative))
+	}
+}
+
+func TestIncompleteFileUploadIsNotAnOversizeFile(t *testing.T) {
+	h := newHandlerHarness(t)
+	path := "/v1/sandboxes/" + h.create().ID + "/files?path=/unfinished"
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, path, iotest.ErrReader(io.ErrUnexpectedEOF))
+	r := httptest.NewRecorder()
+	h.srv.Config.Handler.ServeHTTP(r, req)
+	if r.Code != http.StatusBadRequest || h.do(http.MethodGet, path, nil, nil).Status != http.StatusNotFound {
+		t.Fatalf("incomplete upload: %d %s", r.Code, r.Body.String())
 	}
 }
 

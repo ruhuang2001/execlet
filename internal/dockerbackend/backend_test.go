@@ -460,6 +460,32 @@ func TestFilesRoundTrip(t *testing.T) {
 	if string(data) != "hello" {
 		t.Errorf("read %q, want hello", data)
 	}
+	if _, err := b.ReadFile(context.Background(), id, "/home/user/deep/dir"); daemon.CodeOf(err) != daemon.CodeInvalidRequest {
+		t.Fatalf("read directory err = %v, want invalid_request", err)
+	}
+	big := make([]byte, daemon.MaxFileBytes+1)
+	f.mu.Lock()
+	f.containers[id].files["/home/user/huge.bin"] = big
+	f.mu.Unlock()
+	if _, err := b.ReadFile(context.Background(), id, "/home/user/huge.bin"); daemon.CodeOf(err) != daemon.CodePayloadTooLarge {
+		t.Fatalf("read oversized file err = %v, want payload_too_large", err)
+	}
+}
+
+func TestListFilesKeepsStatSizeIfLinkDisappears(t *testing.T) {
+	f := newFakeDaemon(t)
+	b := f.backend(t)
+	id, err := b.Create(t.Context(), daemon.ContainerSpec{Image: "fixture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.setProgram(func(_ string, _ []string) (string, string, int) {
+		return "\x00B\x00link\x00\x00a1ff:9:0:1000:1000\n\x00\x00", "", 0
+	})
+	entries, err := b.ListFiles(t.Context(), id, "/work", "", 1)
+	if err != nil || len(entries) != 1 || entries[0].Type != daemon.FileTypeSymlink || entries[0].Size != 9 || entries[0].SymlinkTarget != "" {
+		t.Fatalf("listing without confirmed link target: %+v, %v", entries, err)
+	}
 }
 
 func TestMissingFileIsNotFound(t *testing.T) {

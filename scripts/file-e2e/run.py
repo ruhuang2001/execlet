@@ -7,6 +7,7 @@ from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from tiny_sandbox import Client, CreateSandboxRequest
+from tiny_sandbox.e2b import Sandbox as E2BSandbox
 from archive_checks import check_archives
 
 out = pathlib.Path(os.environ['E2E_ARTIFACT_DIR'])
@@ -74,8 +75,11 @@ try:
         if name=='cli': assert len(payload['entries'])==2 and payload['next_cursor']
     assert client.exec(sb.id,['sh','-c','mkdir /wide; i=0; while [ "$i" -lt 10001 ]; do touch /wide/$i; i=$((i+1)); done']).exit_code==0
     raw(sb.id,'path=/wide&limit=1',413)
-    assert client.exec(sb.id,['sh','-c','mkdir /large; dd if=/dev/zero of=/large/big bs=1048576 count=65 2>/dev/null']).exit_code==0
-    raw(sb.id,'path=/large&limit=1',413)
+    assert client.exec(sb.id,['sh','-c','mkdir -p /large/nested; dd if=/dev/zero of=/large/big bs=1048576 count=65 2>/dev/null; dd if=/dev/zero of=/large/nested/deep bs=1048576 count=65 2>/dev/null']).exit_code==0
+    large_listing = raw(sb.id,'path=/large&limit=10',200)
+    assert {e['name']: e['size'] for e in large_listing['entries']} == {'big': 65 << 20, 'nested': 0}, large_listing
+    e2b_written = E2BSandbox(sb, client, 30.0).files.write('/large/e2b-meta.txt', 'ok')
+    assert e2b_written.name == 'e2b-meta.txt' and e2b_written.path == '/large/e2b-meta.txt'
     check_archives(client, sb.id, out)
     client.kill_sandbox(sb.id)
     raw(sb.id,'path=/listing',409)

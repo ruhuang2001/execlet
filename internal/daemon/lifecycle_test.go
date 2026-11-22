@@ -171,8 +171,17 @@ func TestTransitionTable(t *testing.T) {
 		t.Run("relative path", func(t *testing.T) {
 			h := newHarness(t)
 			sb := stateFor(t, h, daemon.StateRunning)
-			wantCode(t, h.s.WriteFile(ctx, sb.ID, "tmp/a", nil), daemon.CodeInvalidRequest)
-			_, err := h.s.ReadFile(ctx, sb.ID, "tmp/a")
+			for _, bad := range []string{"tmp/a", "/", "/tmp/../etc/passwd", "/tmp/bad\x00name"} {
+				wantCode(t, h.s.WriteFile(ctx, sb.ID, bad, nil), daemon.CodeInvalidRequest)
+				_, err := h.s.ReadFile(ctx, sb.ID, bad)
+				wantCode(t, err, daemon.CodeInvalidRequest)
+			}
+		})
+		t.Run("directory is not a regular file", func(t *testing.T) {
+			h := newHarness(t)
+			sb := stateFor(t, h, daemon.StateRunning)
+			wantNoError(t, h.s.WriteFile(ctx, sb.ID, "/tmp/dir/a", []byte("hi")))
+			_, err := h.s.ReadFile(ctx, sb.ID, "/tmp/dir")
 			wantCode(t, err, daemon.CodeInvalidRequest)
 		})
 		t.Run("missing file", func(t *testing.T) {

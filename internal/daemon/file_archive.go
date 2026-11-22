@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"path"
 	"strconv"
+	"time"
 
 	"github.com/ruhuang2001/tiny-sandbox/internal/filearchive"
 )
@@ -97,6 +98,9 @@ func (h *Handler) writeArchive(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	rc := http.NewResponseController(w)
+	_ = rc.SetReadDeadline(time.Now().Add(FileOperationTimeout))
+	defer func() { _ = rc.SetReadDeadline(time.Time{}) }()
 	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, filearchive.MaxBytes))
 	if err != nil {
 		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {

@@ -405,7 +405,7 @@ Server-sent events; see below.
 
 ### `GET /v1/sandboxes/{sandbox_id}/files?path=/abs/path`
 
-`200` with the raw bytes (`application/octet-stream`). `404 not_found` if missing. `path` must be absolute.
+`200` with the raw bytes (`application/octet-stream`). `404 not_found` if missing. `path` must be an absolute UTF-8 regular-file path without NUL or parent traversal; directories and nonregular entries return `400 invalid_request`. Files larger than 10 MiB return `413 payload_too_large`.
 
 ### `PUT /v1/sandboxes/{sandbox_id}/files?path=/abs/path`
 
@@ -424,9 +424,9 @@ RFC3339), `is_dir`, `type`, `uid` and `gid`, plus `next_cursor` when another
 page exists. `type` is `file`, `dir`, `symlink` or `other`; a symlink is never
 reported as the file it points at, and device nodes, sockets and FIFOs are
 `other` rather than being silently labelled files. `owner`, `group` and
-`symlink_target` appear when they are known: Docker's archive carries numeric
-ids only, so the names are read from the guest's `/etc/passwd` and `/etc/group`
-in one bounded exec, and stay absent when that lookup is unavailable. The
+`symlink_target` appear when they are known. The Docker metadata probe reads
+names from the guest's `/etc/passwd` and `/etc/group`; names stay absent when
+the lookup is unavailable. The
 numeric `uid`/`gid` are always present and authoritative. Only immediate
 children appear; child symlinks are not followed. Results sort by UTF-8 name
 bytes. Limits are 1–1000 (default 100); reuse the opaque cursor with the same
@@ -435,13 +435,12 @@ directories return entries: []; missing paths are 404 and files are 400.
 
 Paths must be absolute UTF-8, at most 4096 bytes, without NUL or parent
 traversal. Repeated/unknown parameters, invalid limits, and malformed or
-path-mismatched cursors return 400. Paused sandboxes resume first. Each page
-scans Docker's recursive tar stream, capped at 64 MiB, 10000 entries and
-30 seconds, retaining at most limit+1 page records and 10000 bounded
-name/size/link-target records to resolve hardlink sizes. Large nested files
-or trees can therefore return 413 even when immediate children are few;
-this API is not a constant-time filesystem index. Runtime deadline failures
-are 502. No archive is extracted on the host.
+path-mismatched cursors return 400. Paused sandboxes resume first. On images
+with compatible `stat` and `readlink`, each page inspects only immediate children as the image user
+(up to 10000 immediate entries within 30 seconds) without reading file contents
+or recursing into subdirectories. Inaccessible directories and images without
+compatible tools fall back to a bounded 64 MiB / 10000-entry Docker archive. Runtime deadline
+failures are 502. No archive is extracted on the host.
 
 <a id="tar-transfer"></a>
 
@@ -523,21 +522,22 @@ data: {"id":"exe_456","state":"completed","exit_code":0,"termination_reason":"ex
 |---|---|---|
 | Retained output per execution (stdout + stderr) | 1 MiB | the last chunk is cut to the budget, backing up to a UTF-8 boundary if necessary; one `truncated` event is sent and `output_truncated: true` is set; the process keeps running |
 | Output events per execution | 4096 | same as above |
+| Open event streams per sandbox | 32 | additional streams receive `429 rate_limited` until a slot is released |
 | Executions retained per sandbox | 200 | eligible completed records are dropped with their output and idempotency keys; all active executions and the most recently completed one are protected. `404 not_found` afterwards |
 | Live sandboxes | 64 | `POST /v1/sandboxes` returns `429 rate_limited` and starts no container. A killed sandbox does not count |
 | Retained sandbox records | 64 killed sandboxes | the oldest killed record is dropped whole, including its execution history. `404 not_found` afterwards. Live sandboxes are never dropped |
 | Retained output, all sandboxes | 64 MiB target | eligible completed records are dropped, oldest sandbox first. All active executions and each sandbox's most recently completed one survive, so protected output can exceed this target |
 | JSON request body | 1 MiB (execution starts: 8 MiB) | `413 payload_too_large` |
-| Directory listing archive scan | 64 MiB / 10000 headers | `413 payload_too_large` |
+| Directory listing scan | 10000 direct children / 64 MiB framed metadata; fallback: 64 MiB archive / 10000 headers | `413 payload_too_large` |
 | Directory listing runtime | 30 seconds | `502 backend_error` |
 | Tar transfer size/count | 32 MiB encoded / 16 MiB payload / 4096 members / 1 MiB total path text | `413 payload_too_large` |
 | Tar member/link name | 4096 bytes | `400 invalid_request` |
 | Decoded stdin | 1 MiB | `413 payload_too_large` |
 | Command metadata | 1 MiB, counting one separator byte per argument | `413 payload_too_large` |
 | File upload | 10 MiB | `413 payload_too_large` |
-| File download through Docker | 10 MiB | currently `502 backend_error` from archive extraction |
+| File download | 10 MiB | `413 payload_too_large` |
 
-The stored output is exactly the data delivered in events, so a replay from ID 0 reproduces `stdout` and `stderr`. The events are the server's only copy: `stdout` and `stderr` in an execution response and in the `complete` event are assembled from them.
+Replaying from ID 0 reproduces `stdout` and `stderr`. Execution responses and `complete` events use the same retained output, indexed incrementally from those events.
 
 Per-execution output and event limits are enforced as output arrives. Execution-history pruning runs on admission and completion; live-sandbox admission is checked at creation. Killed-record and aggregate-output pruning run on the periodic reaper, nominally once a second, and can lag under load. The aggregate output target cannot override protected active or most recently completed records.
 

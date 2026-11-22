@@ -74,30 +74,28 @@ func BuildOwnedFileTar(name string, data []byte, uid, gid int, dirs []string) ([
 	return buf.Bytes(), nil
 }
 
-// ExtractFile returns the contents of the regular file in a tar archive
-// produced by the archive endpoint. A directory entry is skipped: the archive
-// of a directory can contain the file under it, but the first regular file is
-// the only thing the caller asked for.
+// ErrNotRegular and ErrFileTooLarge classify errors attributable to the requested path.
+var (
+	ErrNotRegular   = errors.New("dockerapi: path must identify a regular file")
+	ErrFileTooLarge = errors.New("dockerapi: regular file exceeds the download limit")
+)
+
+// ExtractFile reads only the requested root entry. Never search a directory
+// archive for a child file or follow a link as a substitute for its contents.
 func ExtractFile(r io.Reader) ([]byte, error) {
 	tr := tar.NewReader(r)
-	for {
-		hdr, err := tr.Next()
-		if errors.Is(err, io.EOF) {
-			return nil, errors.New("dockerapi: archive contains no file")
-		}
-		if err != nil {
-			return nil, fmt.Errorf("dockerapi: read archive: %w", err)
-		}
-		if hdr.Typeflag != tar.TypeReg {
-			continue
-		}
-		if hdr.Size > MaxArchiveBytes {
-			return nil, fmt.Errorf("dockerapi: file is %d bytes, limit is %d", hdr.Size, MaxArchiveBytes)
-		}
-		data, err := io.ReadAll(io.LimitReader(tr, MaxArchiveBytes))
-		if err != nil {
-			return nil, fmt.Errorf("dockerapi: read archive body: %w", err)
-		}
-		return data, nil
+	hdr, err := tr.Next()
+	if errors.Is(err, io.EOF) {
+		return nil, errors.New("dockerapi: archive contains no file")
 	}
+	if err != nil {
+		return nil, fmt.Errorf("dockerapi: read archive: %w", err)
+	}
+	if hdr.Typeflag != tar.TypeReg {
+		return nil, ErrNotRegular
+	}
+	if hdr.Size > MaxArchiveBytes {
+		return nil, ErrFileTooLarge
+	}
+	return io.ReadAll(tr) // tar.Reader stops at the checked header's size
 }

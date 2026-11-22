@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -817,10 +818,13 @@ func (s *Sandboxes) LastEventID(sandboxID, executionID string) (uint64, error) {
 
 // ReadFile returns a file inside the sandbox. A paused sandbox resumes first,
 // as the transition table says.
-func (s *Sandboxes) ReadFile(ctx context.Context, sandboxID, path string) ([]byte, error) {
-	if !isAbsPath(path) {
-		return nil, errorf(CodeInvalidRequest, "path must be absolute")
+func (s *Sandboxes) ReadFile(ctx context.Context, sandboxID, p string) ([]byte, error) {
+	if err := validateRegularFilePath(p); err != nil {
+		return nil, err
 	}
+	p = path.Clean(p)
+	ctx, cancel := context.WithTimeout(ctx, FileOperationTimeout)
+	defer cancel()
 	sb, err := s.prepareFiles(ctx, sandboxID)
 	if err != nil {
 		return nil, err
@@ -829,7 +833,7 @@ func (s *Sandboxes) ReadFile(ctx context.Context, sandboxID, path string) ([]byt
 	container := sb.container
 	sb.mu.Unlock()
 
-	data, err := s.backend.ReadFile(ctx, container, path)
+	data, err := s.backend.ReadFile(ctx, container, p)
 	if err != nil {
 		return nil, backendError(err)
 	}
@@ -837,13 +841,16 @@ func (s *Sandboxes) ReadFile(ctx context.Context, sandboxID, path string) ([]byt
 }
 
 // WriteFile writes a file inside the sandbox, creating parent directories.
-func (s *Sandboxes) WriteFile(ctx context.Context, sandboxID, path string, data []byte) error {
-	if !isAbsPath(path) {
-		return errorf(CodeInvalidRequest, "path must be absolute")
+func (s *Sandboxes) WriteFile(ctx context.Context, sandboxID, p string, data []byte) error {
+	if err := validateRegularFilePath(p); err != nil {
+		return err
 	}
+	p = path.Clean(p)
 	if len(data) > MaxFileBytes {
 		return errorf(CodePayloadTooLarge, "file exceeds %d bytes", MaxFileBytes)
 	}
+	ctx, cancel := context.WithTimeout(ctx, FileOperationTimeout)
+	defer cancel()
 	sb, err := s.prepareFiles(ctx, sandboxID)
 	if err != nil {
 		return err
@@ -852,8 +859,18 @@ func (s *Sandboxes) WriteFile(ctx context.Context, sandboxID, path string, data 
 	container := sb.container
 	sb.mu.Unlock()
 
-	if err := s.backend.WriteFile(ctx, container, path, data); err != nil {
+	if err := s.backend.WriteFile(ctx, container, p, data); err != nil {
 		return backendError(err)
+	}
+	return nil
+}
+
+func validateRegularFilePath(p string) error {
+	if err := ValidateFilePath(p); err != nil {
+		return err
+	}
+	if path.Clean(p) == "/" {
+		return errorf(CodeInvalidRequest, "path must identify a regular file")
 	}
 	return nil
 }

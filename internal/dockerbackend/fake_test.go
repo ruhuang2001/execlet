@@ -497,6 +497,30 @@ func (f *fakeDaemon) archive(w http.ResponseWriter, r *http.Request, containerID
 	case http.MethodGet:
 		data, exists := c.files[p]
 		if !exists {
+			prefix := strings.TrimSuffix(p, "/") + "/"
+			var children []string
+			for name := range c.files {
+				if strings.HasPrefix(name, prefix) {
+					children = append(children, name)
+				}
+			}
+			if len(children) > 0 {
+				slices.Sort(children)
+				var buf bytes.Buffer
+				tw := tar.NewWriter(&buf)
+				base := path.Base(p)
+				_ = tw.WriteHeader(&tar.Header{Typeflag: tar.TypeDir, Name: base + "/", Mode: 0o755})
+				for _, child := range children {
+					rel := path.Join(base, strings.TrimPrefix(child, prefix))
+					body := c.files[child]
+					_ = tw.WriteHeader(&tar.Header{Typeflag: tar.TypeReg, Name: rel, Mode: 0o644, Size: int64(len(body))})
+					_, _ = tw.Write(body)
+				}
+				_ = tw.Close()
+				w.Header().Set("Content-Type", "application/x-tar")
+				_, _ = w.Write(buf.Bytes())
+				return
+			}
 			writeError(w, 404, "Could not find the file "+p+" in container "+containerID)
 			return
 		}

@@ -676,6 +676,7 @@ class _Files:
         if len(payload) > 10 << 20:
             raise AdapterError("file exceeds 10 MiB", code="payload_too_large")
         token = CancellationToken(timeout=self._request_timeout)
+        self._call(lambda: self._client.require_capabilities("files.list.v1", cancel=token), token)
         self._call(lambda: self._client.write_file(self._id, target, payload, cancel=token), token)
         parent, _, name = target.rpartition("/")
         found = next((entry for entry in self._list(parent or "/", token) if entry.name == name), None)
@@ -701,27 +702,31 @@ class _Files:
         target = _path(path)
         if type(depth) is not int or depth != 1:
             raise InvalidArgumentException("only depth 1 is supported")
-        return self._list(target, CancellationToken(timeout=self._request_timeout))
+        token = CancellationToken(timeout=self._request_timeout)
+        self._call(lambda: self._client.require_capabilities("files.list.v1", cancel=token), token)
+        return self._list(target, token)
 
     def _list(self, target: str, token: CancellationToken) -> builtins.list[EntryInfo]:
         entries: list[EntryInfo] = []
         cursor, seen = "", set()
         while True:
-            page = self._call(lambda: self._client.list_files(
-                self._id, target, limit=1000, cursor=cursor, cancel=token), token)
+            page = self._call(lambda: self._client._list_files_page(self._id, target, 1000, cursor, token), token)
             for entry in page.entries:
                 extra = entry.extra
-                if not isinstance(extra.get("owner"), str) or not isinstance(extra.get("group"), str):
+                owner = entry.owner if entry.owner is not None else extra.get("owner")
+                group = entry.group if entry.group is not None else extra.get("group")
+                if not isinstance(owner, str) or not isinstance(group, str):
                     raise AdapterError("guest owner/group metadata is unavailable", code="incompatible_server")
-                kind = extra.get("type")
+                kind = entry.type if entry.type is not None else extra.get("type")
                 if kind not in {"file", "dir", "symlink", "other"}:
                     raise AdapterError("guest file type is unavailable", code="incompatible_server")
+                symlink_target = entry.symlink_target if entry.symlink_target is not None else extra.get("symlink_target")
                 entries.append(EntryInfo(
                     name=entry.name, path=target.rstrip("/") + "/" + entry.name,
                     type=None if kind == "other" else FileType(kind), size=entry.size, mode=entry.mode,
                     permissions=stat.filemode(stat.S_IFREG | (entry.mode & 0o7777))[1:],
-                    owner=extra["owner"], group=extra["group"], modified_time=_date(entry.mtime),
-                    symlink_target=extra.get("symlink_target"),
+                    owner=owner, group=group, modified_time=_date(entry.mtime),
+                    symlink_target=symlink_target,
                 ))
             if len(entries) > 10000:
                 raise AdapterError("directory exceeds 10000 entries", code="payload_too_large")

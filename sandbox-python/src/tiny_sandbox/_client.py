@@ -121,19 +121,30 @@ class Client(SandboxAPI):
         execution = Execution(id=execution_id or "", sandbox_id=sandbox_id)
         try:
             if request is not None:
-                execution = Execution.from_dict(self._json(
+                recovered = Execution.from_dict(self._json(
                     "POST", self._sandbox_path(sandbox_id) + "/executions",
                     json_body=request.to_dict(), cancel=cleanup,
                 ))
+                if recovered.sandbox_id != sandbox_id:
+                    raise Error("decode", "recovered start identifies another sandbox")
+                execution = recovered
                 execution_id = execution.id
             if not execution_id:
                 raise Error("decode", "cancellation requires an execution id")
-            execution = self.cancel_execution(sandbox_id, execution_id, cancel=cleanup)
-            while execution.state != "completed":
+            snapshot = self._cancel_execution(sandbox_id, execution_id, cancel=cleanup, retry=False)
+            while True:
+                if snapshot.id != execution_id or snapshot.sandbox_id != sandbox_id:
+                    raise Error("decode", "cancellation snapshot identifies another execution")
+                execution = snapshot
+                if execution.state != "running":
+                    break
                 _sleep(0.05, cleanup)
-                execution = self.get_execution(sandbox_id, execution_id, cancel=cleanup)
-            if execution.id != execution_id or execution.sandbox_id != sandbox_id:
-                raise Error("decode", "cancellation snapshot identifies another execution")
+                snapshot = self.get_execution(sandbox_id, execution_id, cancel=cleanup)
+            reason = execution.termination_reason
+            if execution.state != "completed" or reason not in {"canceled", "timeout", "oom", "evicted", "exited"} or (
+                reason == "exited" and execution.exit_code is None
+            ):
+                raise Error("backend_error", "cancellation snapshot did not confirm a known terminal outcome")
         except (Error, _Cancellation) as exc:
             raise Error(
                 "cancel_unconfirmed", "could not confirm that remote execution stopped",

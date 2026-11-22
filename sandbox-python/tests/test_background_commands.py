@@ -66,6 +66,7 @@ class Reply:
 class HTTPFixture:
     def __init__(self):
         self.records = []
+        self.client_ports = []
         self.routes = {}
         self.stopped = threading.Event()
         fixture = self
@@ -86,6 +87,7 @@ class HTTPFixture:
                 body = json.loads(raw) if raw else None
                 record = dict(method=self.command, path=self.path, body=body, headers=dict(self.headers))
                 fixture.records.append(record)
+                fixture.client_ports.append(self.client_address[1])
                 if self.headers.get("Authorization") != "Bearer unit-key":
                     reply = Reply({"code": "unauthorized", "message": "invalid test key"}, 401)
                 else:
@@ -113,7 +115,7 @@ class HTTPFixture:
         self.thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": .01}, daemon=True)
         self.thread.start()
         self.domain = f"http://127.0.0.1:{self.server.server_port}"
-        self.put("GET", "/v1/capabilities", {"capabilities": ["e2b.background.v1", "execution.env-cwd.v1", "execution.stdin.v1", "execution.concurrent.v1"]})
+        self.put("GET", "/v1/capabilities", {"capabilities": ["e2b.background.v1", "execution.env-cwd.v1", "execution.stdin.v1", "execution.concurrent.v1", "files.list.v1", "files.archive.v1"]})
         sandbox = {"id": SID, "state": "running"}
         self.put("POST", "/v1/sandboxes", sandbox)
         self.put("GET", BASE, sandbox)
@@ -687,6 +689,9 @@ class BackgroundCommandsTests(unittest.TestCase):
               for extra in ({"env": {"X": "Y"}}, {"cwd": "/tmp"}, {"stdin": "payload"}, {"timeout_ms": 0})],
             lambda: self.native.get_command(SID, PID),
             lambda: self.native.kill_execution(SID, EID),
+            lambda: self.native.list_files(SID, "/"),
+            lambda: self.native.read_archive(SID, "/"),
+            lambda: self.native.write_archive(SID, "/", b"tar"),
         ]
         for operation in operations:
             self.http.records.clear()
@@ -698,6 +703,156 @@ class BackgroundCommandsTests(unittest.TestCase):
         self.http.records.clear()
         self.native.start_execution(SID, ExecuteRequest(command=["true"]))
         self.assertEqual([r["path"] for r in self.http.records], [START])
+
+    def test_native_cancellation_rejects_unknown_terminal_outcome_and_file_entry_metadata(self):
+        for bad_reason in ("unknown", "future_reason"):
+            self.http.put("POST", EXECUTION + "/cancel", execution(state="completed", termination_reason=bad_reason, exit_code=None))
+            token = CancellationToken()
+            token.cancel()
+            with self.subTest(reason=bad_reason), self.assertRaises(Error) as caught:
+                self.native.stream_execution(SID, EID, cancel=token)
+            self.assertEqual(caught.exception.code, "cancel_unconfirmed")
+        self.http.put("GET", f"/v1/sandboxes/{SID}/files/list?path=%2Fwork&limit=100&cursor=", {
+            "entries": [{
+                "name": "link", "size": 4, "mode": 0o777, "mtime": "2026-11-18T00:00:00Z",
+                "is_dir": False, "type": "symlink", "uid": 1000, "gid": 1000,
+                "owner": "user", "group": "user", "symlink_target": "dest", "future": 17,
+            }],
+        })
+        page = self.native.list_files(SID, "/work")
+        self.assertEqual(page.entries[0].type, "symlink")
+        self.assertEqual(page.entries[0].uid, 1000)
+        self.assertEqual(page.entries[0].symlink_target, "dest")
+        self.assertEqual(page.entries[0].extra, {"future": 17})
+
+    def test_malformed_file_list_is_not_coerced(self):
+        entry = dict(name="x", size=0, mode=0, mtime="2026-11-18T00:00:00Z", is_dir=False,
+                     type="future", uid=0, gid=0)
+        pages = [{"entries": None}, {"entries": [], "next_cursor": 1}]
+        pages.append({"entries": [{**entry, "owner": None}]})
+        for key, wrong in (("type", None), ("uid", True), ("gid", "0")):
+            pages.extend([{"entries": [{k: v for k, v in entry.items() if k != key}]},
+                          {"entries": [{**entry, key: wrong}]}])
+        for page in pages:
+            self.http.put("GET", BASE + "/files/list?path=%2F&limit=100&cursor=", page)
+            with self.subTest(page=page), self.assertRaises(Error) as caught:
+                self.native.list_files(SID, "/")
+            self.assertEqual(caught.exception.code, "decode")
+
+    def test_e2b_write_rejects_missing_list_support_before_overwrite(self):
+        self.http.put("GET", "/v1/capabilities", {"capabilities": []})
+        with patch.object(self.sandbox.files._client, "write_file") as write:
+            with self.assertRaises(AdapterError) as caught:
+                self.sandbox.files.write("/work/file", "replacement")
+            self.assertEqual(caught.exception.code, "incompatible_server")
+            write.assert_not_called()
+
+    def test_cancel_validates_every_snapshot_before_polling(self):
+        token = CancellationToken()
+        token.cancel()
+        for ack, poll, code, gets in [
+            (execution(), execution(), "canceled", 2),
+            (execution(id="wrong"), execution(), "cancel_unconfirmed", 0),
+            (execution(), execution(sandbox_id="wrong"), "cancel_unconfirmed", 1),
+            (Reply({}, 503), execution(), "cancel_unconfirmed", 0),
+        ]:
+            self.http.records.clear()
+            self.http.put("POST", EXECUTION + "/cancel", ack)
+            self.http.put("GET", EXECUTION, poll, complete())
+            with self.subTest(ack=ack, poll=poll), self.assertRaises(Error) as caught:
+                self.native.stream_execution(SID, EID, cancel=token)
+            self.assertEqual(caught.exception.code, code)
+            self.assertEqual((caught.exception.execution.id, caught.exception.execution.sandbox_id), (EID, SID))
+            self.assertEqual([(r["method"], r["path"]) for r in self.http.records],
+                             [("POST", EXECUTION + "/cancel")] + [("GET", EXECUTION)] * gets)
+
+    def test_recovered_start_from_another_sandbox_is_never_canceled(self):
+        self.http.put("POST", START, execution(sandbox_id="other"))
+        request = ExecuteRequest(command=["true"], idempotency_key="original")
+        with self.assertRaises(Error) as caught:
+            self.native._cancel_remote(SID, None, request=request)
+        self.assertEqual(caught.exception.code, "cancel_unconfirmed")
+        self.assertEqual(caught.exception.idempotency_key, "original")
+        self.assertEqual([r["path"] for r in self.http.records], [START])
+
+    def test_keep_alive_connection_pool_reuses_socket_across_requests(self):
+        ports = []
+
+        class KeepAliveHandler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, *_):
+                pass
+
+            def do_GET(self):
+                ports.append(self.client_address[1])
+                payload = json.dumps({"id": SID, "state": "running"}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), KeepAliveHandler)
+        thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
+        thread.start()
+        try:
+            with Client(domain=f"http://127.0.0.1:{server.server_port}", api_key="unit-key") as pooled:
+                pooled.get_sandbox(SID)  # warm both the socket and the server handler
+                start = threading.Thread.start
+                with patch.object(threading.Thread, "start", autospec=True, side_effect=start) as spawned:
+                    for _ in range(8):
+                        token = CancellationToken(timeout=2)
+                        self.assertEqual(pooled.get_sandbox(SID, cancel=token).id, SID)
+                        token.cancel()  # previous lease cannot interrupt the next borrower
+                    self.assertLessEqual(spawned.call_count, 1)
+            self.assertEqual(len(ports), 9)
+            self.assertEqual(len(set(ports)), 1)
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_lost_ack_on_pooled_socket_obeys_attempt_budget(self):
+        calls = []
+
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, *_):
+                pass
+
+            def do_GET(self):
+                calls.append((self.command, self.client_address[1]))
+                if len(calls) > 1:
+                    self.close_connection = True  # accepted, then disconnected before headers
+                    return
+                data = json.dumps({"id": SID, "state": "running"}).encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def do_POST(self):
+                self.rfile.read(int(self.headers["Content-Length"]))
+                self.do_GET()
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": .01}, daemon=True)
+        thread.start()
+        try:
+            for method, retries, attempts in [("POST", 3, 1), ("GET", 0, 1), ("GET", 1, 2)]:
+                calls.clear()
+                with self.subTest(method=method, retries=retries), Client(domain=f"http://127.0.0.1:{server.server_port}", max_retries=retries) as pooled:
+                    pooled.get_sandbox(SID)
+                    with self.assertRaises(Error) as caught:
+                        pooled.create_sandbox() if method == "POST" else pooled.get_sandbox(SID)
+                    self.assertEqual(caught.exception.code, "transport")
+                    self.assertEqual([call[0] for call in calls], ["GET"] + [method] * attempts)
+                    self.assertEqual(calls[0][1], calls[1][1])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
 
 
 if __name__ == "__main__":

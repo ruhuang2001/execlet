@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import threading
 import time
+from collections.abc import Callable
 
 
 class _Cancellation(Exception):
@@ -25,9 +26,35 @@ class CancellationToken:
             raise ValueError("timeout must be finite and nonnegative")
         self._event = threading.Event()
         self._deadline = None if timeout is None else time.monotonic() + timeout
+        self._lock = threading.Lock()
+        self._callbacks: list[Callable[[], None]] = []
 
     def cancel(self) -> None:
         self._event.set()
+        # Only internal socket-shutdown callbacks register here. Run them
+        # under the lock so unregister is a barrier before recycling a socket.
+        with self._lock:
+            while self._callbacks:
+                self._callbacks.pop()()
+
+    def _register(self, callback: Callable[[], None]) -> Callable[[], None]:
+        with self._lock:
+            if not self.cancelled:
+                self._callbacks.append(callback)
+
+                def unregister() -> None:
+                    with self._lock:
+                        try:
+                            self._callbacks.remove(callback)
+                        except ValueError:
+                            pass
+
+                return unregister
+        try:
+            callback()
+        except Exception:
+            pass
+        return lambda: None
 
     @property
     def cancelled(self) -> bool:

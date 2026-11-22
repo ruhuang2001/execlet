@@ -11,8 +11,9 @@ No post-implementation unit tests or mocked execution backend are added.
   recovery reuse one 128-bit key, run once and preserve the key on failure.
 - Cancellation before dispatch sends nothing. Cancellation in flight uses one
   independent five-second cleanup budget, including start recovery and
-  confirmation. A running cancel snapshot, failed cleanup or lost response
-  cannot prove termination and must produce cancel_unconfirmed with IDs/key.
+  confirmation. A matching running cancel snapshot requires GET polling, not
+  another signal. A mismatch, lost acknowledgement, or a budget that expires
+  before terminal confirmation must produce cancel_unconfirmed with IDs/key.
 - A connection can close mid-SSE frame or replay delivered IDs after reconnect.
   Only complete frames advance the cursor; deliver each event once in order,
   preserve UTF-8, send Last-Event-ID and never reset reconnect count on progress.

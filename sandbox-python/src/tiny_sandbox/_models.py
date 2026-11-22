@@ -173,9 +173,34 @@ class FileEntry(_Model):
     mode: int
     mtime: str
     is_dir: bool
+    type: str
+    uid: int
+    gid: int
+    owner: str | None = None
+    group: str | None = None
+    symlink_target: str | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> FileEntry:
+        from ._errors import Error
+
+        entry = super().from_dict(data)
+        # None represents an omitted name/target in Python, not a JSON null.
+        for key in ("owner", "group", "symlink_target"):
+            if key in data and data[key] is None:
+                raise Error("decode", "invalid response field: " + key)
+        return entry
 
 
 @dataclass(kw_only=True)
 class FileList(_Model):
     entries: list[FileEntry]
     next_cursor: str = ""
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> FileList:
+        from ._errors import Error
+
+        if not isinstance(data, dict) or not isinstance(data.get("entries"), list):
+            raise Error("decode", "file list entries must be an array")
+        return super().from_dict({**data, "entries": [FileEntry.from_dict(item) for item in data["entries"]]})

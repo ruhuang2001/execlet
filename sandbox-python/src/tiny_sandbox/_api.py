@@ -14,7 +14,7 @@ from ._cancel import CancellationToken, _Cancellation
 from ._errors import Error
 from ._models import (
     Capabilities, CommandAttachment, CreateSandboxRequest, ExecuteRequest, Execution,
-    ExecutionKillResult, FileEntry, FileList, Sandbox, UpdateSandboxRequest,
+    ExecutionKillResult, FileList, Sandbox, UpdateSandboxRequest,
 )
 from ._transport import Transport
 
@@ -69,7 +69,7 @@ class SandboxAPI(Transport, ABC):
         try:
             flags = self.get_capabilities(cancel=cancel).capabilities
         except Error as exc:
-            if exc.status_code not in {401, 403} and (exc.status_code in {404, 405, 501} or exc.code == "decode"):
+            if exc.status_code in {404, 405, 501} or (not exc.status_code and exc.code == "decode"):
                 raise Error("incompatible_server", "server does not advertise required capabilities", cause=exc) from exc
             raise
         missing = set(required).difference(flags)
@@ -301,11 +301,14 @@ class SandboxAPI(Transport, ABC):
         cancel: CancellationToken | None = None,
     ) -> Execution:
         """Request cancellation and return the server's latest execution snapshot."""
+        return self._cancel_execution(sandbox_id, execution_id, cancel=cancel, retry=True)
+
+    def _cancel_execution(self, sandbox_id, execution_id, *, cancel, retry) -> Execution:
         return Execution.from_dict(
             self._json(
                 "POST",
                 self._execution_path(sandbox_id, execution_id) + "/cancel",
-                cancel=cancel,
+                cancel=cancel, retry=retry,
             )
         )
 
@@ -315,16 +318,21 @@ class SandboxAPI(Transport, ABC):
         cancel: CancellationToken | None = None,
     ) -> FileList:
         """Return one name-ordered page of immediate directory children."""
+        self.require_capabilities("files.list.v1", cancel=cancel)
+        return self._list_files_page(sandbox_id, path, limit, cursor, cancel)
+
+    @_public_cancellation
+    def _list_files_page(self, sandbox_id, path, limit, cursor, cancel) -> FileList:
         query = urlencode({"path": path, "limit": limit, "cursor": cursor})
         payload = self._json("GET", self._sandbox_path(sandbox_id) + "/files/list?" + query, cancel=cancel)
-        entries = [FileEntry.from_dict(item) for item in _resource_items(payload, "entries")]
-        return FileList.from_dict({**payload, "entries": entries})
+        return FileList.from_dict(payload)
 
     @_public_cancellation
     def read_archive(
         self, sandbox_id: str, path: str, *, cancel: CancellationToken | None = None,
     ) -> bytes:
         """Download a validated tar rooted at the selected file/directory name."""
+        self.require_capabilities("files.archive.v1", cancel=cancel)
         return self._request("GET", self._sandbox_path(sandbox_id) + "/files/archive?" + urlencode({"path": path}), cancel=cancel)
 
     @_public_cancellation
@@ -332,6 +340,7 @@ class SandboxAPI(Transport, ABC):
         self, sandbox_id: str, path: str, data: bytes, *, cancel: CancellationToken | None = None,
     ) -> None:
         """Extract validated tar beneath an existing directory, without retries."""
+        self.require_capabilities("files.archive.v1", cancel=cancel)
         self._request("PUT", self._sandbox_path(sandbox_id) + "/files/archive?" + urlencode({"path": path}), body=data, cancel=cancel, retry=False)
 
     @_public_cancellation

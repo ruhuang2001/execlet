@@ -7,6 +7,8 @@ distribution imported as `tiny_sandbox`. The SDK speaks the [HTTP contract](api.
 
 Python 3.10 or newer is required. The synchronous client has no runtime
 dependencies outside the Python standard library. There is no async client.
+Create a new client in each child process after `fork`. Using or closing an
+inherited client raises `forked_client`; its sockets belong to the parent.
 Install from a repository checkout:
 
 ```sh
@@ -102,12 +104,8 @@ only, and `cwd` is an absolute working directory; `None` omits either. The
 [shared SDK contract](sdk.md) lists their limits and behavior, including exit
 code 126 for a `cwd` that is not a usable directory. The server never echoes
 `env`. `Execution.cwd` repeats the requested directory and is `None` when the
-request set none. A server older than this contract ignores both fields
-without an error: `Execution.cwd` staying `None` after a start that set `cwd`
-is the only visible sign, and nothing reveals an ignored `env`. Such a server
-also leaves them out of the idempotency comparison, so replaying a key with a
-different `env` or `cwd` returns the earlier execution instead of
-`idempotency_conflict`.
+request set none. Older servers can silently ignore these fields on raw HTTP
+requests, so the client requires `execution.env-cwd.v1` before sending them.
 
 ```python
 started = client.start_execution(sandbox.id, ExecuteRequest(
@@ -199,7 +197,10 @@ uses this wait-only path, Bash command strings and compatible error families.
 It does not change the native argv API or require an E2B dependency.
 
 Confirmation requires a terminal execution snapshot. If the cancel response
-is still running, the SDK polls within the remaining budget. If confirmation
+is still running, the SDK polls with `get_execution` within the remaining
+budget; it does not send another cancel or kill. Both IDs must match on every
+snapshot. A terminal reason of `unknown` (or `exited` without an exit code)
+does not confirm termination. If confirmation
 fails, it raises `cancel_unconfirmed` carrying the execution IDs when known and
 the start's idempotency key when applicable. Server cleanup may still continue;
 retain those identifiers to inspect or clean up later. A confirmed terminal
@@ -256,10 +257,16 @@ individual lines to the same size.
 
 ## Files
 
+Listing requires `files.list.v1`; both archive methods require `files.archive.v1`.
+Ordinary `read_file` and `write_file` skip capability discovery.
+
 `client.list_files(sandbox_id, path, limit=100, cursor="")` returns a `FileList` with
 `entries` and `next_cursor`. Pass `next_cursor` as the next call’s `cursor`. An optional
 `cancel=token` follows the normal request cancellation contract. Entries describe
 immediate children with name, size, mode, modification time, and directory status.
+`type`, `uid` and `gid` are required; `owner`, `group` and `symlink_target` may
+be absent. Malformed known fields raise `decode`. Future fields are retained
+in the model's `extra` dictionary, and type strings are open to new values.
 Follow the returned cursor until it is empty or absent. Pages are name-ordered, not a
 filesystem snapshot. The default page size is 100, with a maximum of 1000; bounded scans
 can fail with HTTP 413. See [directory listing](api.md#directory-listing) for cursor and
@@ -310,6 +317,10 @@ metadata; start or transport failures may have none.
 
 ## Retries
 
+Ordinary calls reuse fully consumed keep-alive connections (up to eight idle
+per client). A stale socket failure counts as a request attempt, not a free
+retry. Streams do not borrow pooled sockets. `close()` closes idle sockets.
+
 The policy matches Go except for configuring zero retries:
 
 - Retry transport failures before a complete response, truncated bodies, and
@@ -337,7 +348,7 @@ afresh with the current endpoint/credentials. Basic legacy calls skip it; raw
 HTTP can still have unknown fields ignored by old servers. This is not runtime
 image validation or support for mixed-version load balancers.
 
-Native `attach_command` returns the execution and atomic event watermark;
+Native `get_command` returns the execution and atomic event watermark;
 `kill_execution` sends one immediate managed kill, without retrying uncertain
 acknowledgements. The optional `tiny_sandbox.e2b.CommandHandle` supplies
 background run/connect/wait/disconnect/kill; see the [package examples](../sandbox-python/README.md)
@@ -347,9 +358,8 @@ and seconds-based deadlines remain unchanged.
 Important differences:
 
 1. Python's `max_retries=0` disables retries; Go's zero uses its default.
-2. Both SDKs require confirmed terminal outcomes during automatic cancellation.
-   Python polls a nonterminal response within the remaining cleanup budget; Go
-   returns `ErrCancelUnconfirmed` immediately without that polling step.
+2. Both SDKs poll a matching `running` cancellation response within the same
+   cleanup budget and require a confirmed terminal outcome.
 3. Both SDKs wrap callback failures as `callback`, even SDK-typed failures, and
    stop observation without retrying or canceling the remote execution.
 4. Python's `matches("nonzero_exit")` also matches retained nonzero exit codes

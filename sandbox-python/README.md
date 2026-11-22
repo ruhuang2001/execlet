@@ -54,9 +54,8 @@ defaults and graceful `cancel_execution` semantics are unchanged:
   the execution identity and is not automatically retried. Native missing
   resources remain `Error(code="not_found")`, not a fabricated result.
 
-The native caller is responsible for checking the advertised capability before
-sending `timeout_ms` to a potentially old server. The E2B facade does this
-automatically and fails closed.
+The native client checks `e2b.background.v1` before a managed start, attach,
+or kill. A missing capability fails before the command request is sent.
 
 ## Optional E2B facade
 

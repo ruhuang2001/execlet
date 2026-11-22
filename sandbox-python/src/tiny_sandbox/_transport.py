@@ -6,9 +6,11 @@ import http.client
 import json
 import os
 import random
+import select
 import socket
 import threading
 import time
+from collections import deque
 from contextlib import contextmanager
 from urllib.parse import urlsplit
 
@@ -76,6 +78,44 @@ def _status_error(status: int, body: bytes) -> Error:
     return Error(str(code), str(message), status_code=status)
 
 
+class _Deadlines:
+    """One lazy deadline worker per transport, not one thread per exchange."""
+
+    def __init__(self):
+        self.condition = threading.Condition()
+        self.pending = {}
+        self.running = False
+
+    def add(self, interrupt, deadline):
+        with self.condition:
+            self.pending[interrupt] = deadline
+            if not self.running:
+                threading.Thread(target=self._run, daemon=True).start()
+                self.running = True
+            self.condition.notify()
+
+    def remove(self, interrupt):
+        # A shutdown already in progress finishes before this socket is reused.
+        with self.condition:
+            self.pending.pop(interrupt, None)
+            self.condition.notify()
+
+    def _run(self):
+        with self.condition:
+            while True:
+                if not self.pending:
+                    if not self.condition.wait_for(lambda: self.pending, timeout=1):
+                        self.running = False
+                        return
+                interrupt = min(self.pending, key=self.pending.__getitem__)
+                remaining = self.pending[interrupt] - time.monotonic()
+                if remaining > 0:
+                    self.condition.wait(min(remaining, threading.TIMEOUT_MAX))
+                else:
+                    del self.pending[interrupt]
+                    interrupt()
+
+
 class Transport:
     def __init__(
         self, *, domain: str = "", api_key: str = "",
@@ -102,13 +142,67 @@ class Transport:
         self._port = port
         self._api_key = api_key or os.environ.get("SANDBOX_API_KEY", "")
         self._max_retries = max_retries
+        self._pid = os.getpid()
         self._closed = False
+        self._pool: deque[http.client.HTTPConnection] = deque()
+        self._pool_lock = threading.Lock()
+        self._deadlines = _Deadlines()
 
     def close(self) -> None:
-        """Reject future calls; each request already owns and closes its socket."""
-        self._closed = True
+        """Reject future calls and close pooled idle sockets."""
+        self._check_process()
+        with self._pool_lock:
+            self._closed = True
+            idle = list(self._pool)
+            self._pool.clear()
+        for conn in idle:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def _acquire(self, timeout: float | None, *, allow_reuse: bool) -> tuple[http.client.HTTPConnection, bool]:
+        if allow_reuse:
+            while True:
+                with self._pool_lock:
+                    conn = self._pool.pop() if self._pool else None
+                if conn is None:
+                    break
+                sock = conn.sock
+                if sock is None:
+                    conn.close()
+                    continue
+                try:
+                    if select.select([sock], [], [], 0)[0]:
+                        conn.close()
+                        continue
+                    conn.timeout = timeout
+                    sock.settimeout(timeout)
+                    return conn, True
+                except (OSError, ValueError):  # select() cannot probe a high-numbered fd
+                    conn.close()
+        connection_type = (
+            http.client.HTTPSConnection if self._url.scheme == "https"
+            else http.client.HTTPConnection
+        )
+        return connection_type(self._url.hostname, self._port, timeout=timeout), False
+
+    def _release(self, conn: http.client.HTTPConnection) -> None:
+        with self._pool_lock:
+            if self._closed or conn.sock is None or len(self._pool) >= 8:
+                close_now = True
+            else:
+                self._pool.append(conn)
+                close_now = False
+        if close_now:
+            conn.close()
+
+    def _check_process(self):
+        if os.getpid() != self._pid:
+            raise Error("forked_client", "create a new Client in the child process after fork")
 
     def __enter__(self):
+        self._check_process()
         if self._closed:
             raise Error("closed", "client is closed")
         return self
@@ -117,7 +211,8 @@ class Transport:
         self.close()
 
     @contextmanager
-    def _exchange(self, method, path, *, body=None, headers=None, cancel=None):
+    def _exchange(self, method, path, *, body=None, headers=None, cancel=None, allow_reuse=False):
+        self._check_process()
         if self._closed:
             raise Error("closed", "client is closed")
         if cancel is not None:
@@ -125,47 +220,46 @@ class Transport:
         timeout = None if cancel is None else cancel._remaining()
         if timeout is not None:
             timeout = max(0.001, timeout)
-        connection_type = (
-            http.client.HTTPSConnection if self._url.scheme == "https"
-            else http.client.HTTPConnection
-        )
-        conn = connection_type(self._url.hostname, self._port, timeout=timeout)
-        done = threading.Event()
-        sockets = []
-        watcher = None
+        conn, reused = self._acquire(timeout, allow_reuse=allow_reuse)
+        unregister = None
         dispatched = False
         response = None
+        keep_alive = False
 
-        def interrupt():
-            # shutdown(), not close(), wakes another thread's buffered read.
-            while not done.wait(0.02):
-                if cancel.cancelled:
-                    for sock in [conn.sock, *sockets]:
-                        if sock is not None:
-                            try:
-                                sock.shutdown(socket.SHUT_RDWR)
-                            except OSError:
-                                pass
-
-        if cancel is not None:
-            watcher = threading.Thread(target=interrupt, daemon=True)
-            watcher.start()
         try:
-            _connect(conn, cancel)
-            sockets.append(conn.sock)
-            if cancel is not None:
-                cancel._check()
             request_headers = {"Accept": "application/json", **(headers or {})}
             if self._api_key:
                 request_headers["Authorization"] = "Bearer " + self._api_key
+            target_path = self._url.path.rstrip("/") + path
+            if not reused:
+                _connect(conn, cancel)
+            if cancel is not None:
+                # Capture this lease's socket: http.client may clear conn.sock
+                # before we finish reading a response marked Connection: close.
+                sock = conn.sock
+
+                def interrupt():
+                    try:
+                        sock.shutdown(socket.SHUT_RDWR)
+                    except OSError:
+                        pass
+
+                unregister = cancel._register(interrupt)
+                if cancel._deadline is not None:
+                    self._deadlines.add(interrupt, cancel._deadline)
+                cancel._check()
+            # Even a partial write can reach the server. Only _request decides
+            # whether to retry and counts every attempt against its budget.
             dispatched = True
-            conn.request(method, self._url.path.rstrip("/") + path, body, request_headers)
+            conn.request(method, target_path, body, request_headers)
             response = conn.getresponse()
             if cancel is not None:
                 cancel._check()
             yield response
             if cancel is not None:
                 cancel._check()
+            if getattr(response, "_fully_read", False) and not response.will_close:
+                keep_alive = True
         except _Cancellation as exc:
             exc.dispatched = exc.dispatched or dispatched
             raise
@@ -176,12 +270,16 @@ class Transport:
             error._dispatched = dispatched
             raise error from exc
         finally:
-            done.set()
-            if response is not None:
-                response.close()
-            conn.close()
-            if watcher is not None:
-                watcher.join()
+            if unregister is not None:
+                unregister()
+                if cancel._deadline is not None:
+                    self._deadlines.remove(interrupt)
+            if keep_alive and not (cancel is not None and cancel.cancelled):
+                self._release(conn)
+            else:
+                if response is not None:
+                    response.close()
+                conn.close()
 
     def _request(self, method, path, *, body=None, json_body=None, cancel=None, retry=True):
         headers = {}
@@ -198,9 +296,12 @@ class Transport:
             for attempt in range(self._max_retries + 1):
                 after = ""
                 try:
-                    with self._exchange(method, path, body=body, headers=headers, cancel=cancel) as response:
+                    with self._exchange(
+                        method, path, body=body, headers=headers, cancel=cancel, allow_reuse=True
+                    ) as response:
                         dispatched = True
                         data = response.read()
+                        response._fully_read = True
                         if 200 <= response.status < 300:
                             return data
                         after = response.getheader("Retry-After", "")

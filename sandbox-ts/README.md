@@ -70,6 +70,7 @@ before starting or signaling work. Authentication errors remain distinct. The
 capability cache belongs to each client and its immutable endpoint/credential.
 
 ```ts
+import { writeFile } from 'node:fs/promises';
 import { Sandbox, type CommandHandle } from '@tiny-sandbox/sdk/e2b';
 
 const sandbox = await Sandbox.create();
@@ -78,12 +79,25 @@ const command: CommandHandle = await sandbox.commands.run('sleep 2; printf done'
   onStdout: async text => { console.log(text); },
 });
 const saved = { sandboxId: sandbox.sandboxId, pid: command.pid };
-console.log(command.executionId);
+await writeFile('command.json', JSON.stringify(saved));
 await command.disconnect();
+```
 
-const attached = await sandbox.commands.connect(saved.pid, { timeoutMs: 60_000 });
+Disconnect closes this process’s observation and leaves the command running.
+A second Node process can read the saved IDs with the same endpoint and
+credentials. `Sandbox.connect` renews the running sandbox’s lifetime.
+`commands.connect` attaches to the command and leaves both its original
+deadline and the sandbox lifetime alone.
+
+```ts
+import { readFile } from 'node:fs/promises';
+import { Sandbox } from '@tiny-sandbox/sdk/e2b';
+
+const { sandboxId, pid } = JSON.parse(await readFile('command.json', 'utf8'));
+const connected = await Sandbox.connect(sandboxId);
+const attached = await connected.commands.connect(pid, { timeoutMs: 60_000 });
 console.log(await attached.wait());
-await sandbox.kill();
+await connected.kill();
 ```
 
 - `background: true` returns a `CommandHandle` even for fast exits. Omitted/false

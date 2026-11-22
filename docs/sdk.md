@@ -34,9 +34,9 @@ type Config struct {
 func NewClient(cfg Config) (*Client, error)
 ```
 
-A domain without a scheme gets `http://`. Nonempty `Domain` and `APIKey` values override the environment; empty strings use the environment defaults.
+An empty `Config.Domain` uses `SANDBOX_DOMAIN`, then `http://localhost:8080`. A domain without a scheme gets `http://`. An empty `Config.APIKey` uses `SANDBOX_API_KEY`. Nonempty configuration values take precedence.
 
-The default domain is `http://localhost:8080`. The default HTTP client allows long-lived streams without a global timeout. Zero retries in `Config` selects the default of three retries. A negative value disables retries.
+A nil `Config.HTTPClient` selects a client without a global timeout so streams can stay open. `Config.MaxRetries == 0` selects three retries after the initial attempt. A positive value sets the retry limit and a negative value disables retries.
 
 ## Methods
 
@@ -213,7 +213,15 @@ var (
 )
 ```
 
-Client-side errors have a zero HTTP status. The code identifies the API error or execution outcome. An unconfirmed cancellation during start can carry the idempotency key needed to recover the execution.
+`Error.StatusCode` is zero when there is no HTTP response. For an HTTP API error, `Error.Code` contains the server’s code, such as `not_found`, `busy` or `invalid_state`. SDK-generated codes identify what happened locally or to the command.
+
+| `Error.Code` | Meaning |
+| --- | --- |
+| `nonzero_exit` | An ordinary exit reported a nonzero status or lacked an exit code. |
+| `timeout`, `oom`, `evicted`, `unknown` | The execution’s recorded termination reason. A future reason is preserved as its wire string. |
+| `canceled` | The command was canceled, the request was canceled before dispatch, or automatic cleanup confirmed remote termination after local cancellation. |
+| `cancel_unconfirmed` | Cleanup could not confirm that the execution stopped. During start recovery, `Error.IdempotencyKey` identifies the request for follow-up. |
+| `callback`, `transport`, `stream` | An event handler failed, an HTTP exchange failed, or the event stream could not be consumed. |
 
 The sentinels are mutually exclusive. An execution matches the sentinel for its termination reason and nothing else; `ErrNonZeroExit` therefore means the command exited on its own with a non-zero status, never an OOM kill, timeout, cancellation, or eviction that also happened to report a non-zero code. `ErrTimeout` does not distinguish the two deadlines that produce it: an execution timeout normally leaves the sandbox running, while a lifetime timeout with action `kill` removes it, so inspect the `Sandbox` when that difference matters.
 

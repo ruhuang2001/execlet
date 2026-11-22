@@ -88,6 +88,25 @@ def workflow_shell(pair):
     return SHELLS.get(command)
 
 
+def python_arguments(command):
+    if not command or command.type != "command":
+        return None
+    args = list(command.children_by_field_name("argument"))
+    name = command.child_by_field_name("name").text.strip(b"'\x22")
+    if name.split(b"/")[-1] == b"sandboxctl" and args and args[0].text == b"run":
+        separator = next((i for i, arg in enumerate(args) if arg.text == b"--"), len(args))
+        args = args[separator + 1:]
+        if not args:
+            return None
+        name = args.pop(0).text.strip(b"'\x22")
+    if (name.split(b"/")[-1] not in {b"python", b"python3"}
+            and name not in {b"$PYTHON", b"${PYTHON:-python3}"}):
+        return None
+    while args and re.fullmatch(rb"-[bBEIOqSsux]+", args[0].text):
+        args.pop(0)
+    return args
+
+
 def unlabelled_example(source):
     if re.search(rb"(?m)^\s*(?:package \w+|func \w+\(|[A-Z]\w+\(ctx[, )])", source):
         return "go"
@@ -151,7 +170,7 @@ def scan(path, data):
                     token = match[0]
                     if token == b"''":
                         token = b"'"
-                    elif token.startswith(b"\\"):
+                    elif raw.startswith(b'"') and token.startswith(b"\\"):
                         try:
                             token = json.loads(b'"' + token + b'"').encode()
                         except ValueError:
@@ -172,6 +191,29 @@ def scan(path, data):
                                   standalone=not lines[row][:col].strip() and not lines[end][end_col:].strip(),
                                   directive=is_directive(lang, value, row, col)))
                 return
+            if lang == "bash" and kind == "command":
+                args = python_arguments(node)
+                if args and len(args) >= 2 and args[0].text == b"-c":
+                    program = args[1]
+                    if program.type == "raw_string":
+                        body("python", program, 1, 1)
+                    elif program.type == "string" and all(c.type == "string_content" for c in program.named_children):
+                        parts = []
+                        for match in re.finditer(rb'\\([$"`\\\n])|[^\\]+|\\', program.text[1:-1]):
+                            if match[1] != b"\n":
+                                start = match.start(1) if match[1] else match.start()
+                                parts.append((match[1] or match[0], program.start_byte + 1 + start))
+                        mapped("python", parts)
+            if lang == "bash" and kind == "heredoc_redirect" and node.text.startswith((b"<<", b"0<<")):
+                command = node.parent.child_by_field_name("body")
+                fields = {child.type: child for child in node.named_children}
+                if command and command.text == b"cat" and "pipeline" in fields:
+                    command = fields["pipeline"].named_children[0]
+                args = python_arguments(command)
+                payload = fields.get("heredoc_body")
+                if (args is not None and (not args or args[0].text == b"-") and payload
+                        and all(c.type == "heredoc_content" for c in payload.named_children)):
+                    body("python", payload)
             if lang == "markdown" and kind in {"fenced_code_block", "indented_code_block"}:
                 fields = {child.type: child for child in node.named_children}
                 content = fields.get("code_fence_content") if kind == "fenced_code_block" else node
@@ -236,7 +278,7 @@ def revision_paths(revision):
 
 def main():
     cli = argparse.ArgumentParser(description="Reject new prose comments relative to a Git revision.")
-    cli.add_argument("--base", help="comparison revision (default: merge base with origin/main, or HEAD)")
+    cli.add_argument("--base", help="comparison revision (default: merge base with origin/main)")
     cli.add_argument("--inventory", action="store_true", help="emit all comments as JSON Lines")
     cli.add_argument("--revision", help="read the inventory from this commit instead of the worktree")
     args = cli.parse_args()
@@ -262,7 +304,9 @@ def main():
     base = args.base
     if base is None:
         merge = subprocess.run(["git", "merge-base", "HEAD", "origin/main"], capture_output=True)
-        base = merge.stdout.decode().strip() if merge.returncode == 0 else "HEAD"
+        if merge.returncode:
+            cli.error("cannot resolve the merge base with origin/main; provide --base REVISION")
+        base = merge.stdout.decode().strip()
     base = git("rev-parse", "--verify", base + "^{commit}").decode().strip()
     changed = paths(git("diff", "--no-renames", "--name-only", "-z", base, "--"))
     changed.update(paths(git("ls-files", "--others", "--exclude-standard", "-z")))

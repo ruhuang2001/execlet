@@ -7,7 +7,7 @@
 - For SDK and full coverage checks: Node 22+ and Python 3.10+. CI uses Python
   3.10 and 3.15; select a suitable local interpreter with `PYTHON`. Scripts
   that call `python3` directly also require that executable on `PATH`.
-- Install golangci-lint for `make lint` and GoReleaser for release verification.
+- `make lint` needs golangci-lint and Python 3.10+ with venv and pip. The first run installs the comment parsers. Install GoReleaser for release verification.
 
 Build the daemon and CLI with `make build`. See the [quick start](docs/quickstart.md)
 for Docker socket selection and running the service.

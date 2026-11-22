@@ -13,6 +13,11 @@ def run(*args, cwd, check=True):
     return subprocess.run(args, cwd=cwd, text=True, capture_output=True, check=check)
 
 
+def require(condition, details):
+    if not condition:
+        raise AssertionError(details)
+
+
 with tempfile.TemporaryDirectory() as tmp:
     repo = Path(tmp)
     run("git", "init", "-q", cwd=repo)
@@ -25,10 +30,13 @@ with tempfile.TemporaryDirectory() as tmp:
     def check(name, expected, paths=()):
         result = run(sys.executable, str(LINT), "--base", "HEAD", cwd=repo, check=False)
         results[name] = {"exit": result.returncode, "diagnostics": result.stdout.splitlines()}
-        assert result.returncode == expected, (name, result)
+        require(result.returncode == expected, (name, result))
         for path in paths:
-            assert any(line.startswith(path + ":") for line in result.stdout.splitlines()), (name, path)
+            require(any(line.startswith(path + ":") for line in result.stdout.splitlines()), (name, path))
 
+    missing_base = run(sys.executable, str(LINT), cwd=repo, check=False)
+    require(missing_base.returncode == 2 and "--base" in missing_base.stderr, missing_base)
+    results["missing comparison revision"] = {"exit": missing_base.returncode, "diagnostic": missing_base.stderr.strip()}
     check("unchanged legacy comment", 0)
     old.write_text(old.read_text().replace("// inherited\n", ""))
     check("deletion", 0)
@@ -92,12 +100,25 @@ with tempfile.TemporaryDirectory() as tmp:
             "```\n// unlabelled Go\nCreateSandbox(ctx, Config) (*Sandbox, error)\n```\n"
             "\n    # indented command\n    go run ./demo\n",
             ["// unlabelled Go", "# indented command"]),
+        "embedded.sh": (
+            "python - <<'PY'\n# direct stdin\nprint('# data')\nPY\n"
+            '"${PYTHON:-python3}" - "$OUT" <<\'PY\'\n# configured Python\nPY\n'
+            "cat <<'PY' | python3 -\n# piped program\nPY\n"
+            '"$BIN/sandboxctl" run --image demo -- python3 -c \'\n# guest code\n\'\n'
+            "python3 -c \"print('test') # quoted code\"\n"
+            "python3 -c 'print(\"# data\")'\n"
+            "python3 other.py -c '# script argument'\n"
+            "cat <<'PY'\n# plain data\nPY\n"
+            "python3 3<<'PY'\n# data on another fd\nPY\n"
+            "ruby - <<'PY'\n# unrelated\nPY\n",
+            ["# direct stdin", "# configured Python", "# piped program", "# guest code", "# quoted code"]),
         "complex.py": (
             "name = 'hello'\ntext = f\"\"\"{name}: # fixture\n# data\n\"\"\"\n"
             "box = f\"\"\"{(1  # expression\n)}\"\"\"\n# eof",
             ["# expression", "# eof"]),
         ".github/workflows/quoted.yml": (
             "defaults:\n  run:\n    shell: bash\njobs:\n  sample:\n    steps:\n"
+            "      - run: 'echo \\#tag'\n"
             "      - run: 'echo ''# inner'' # quoted'\n"
             '      - run: "echo \\"# inner\\" # escaped"\n'
             "      - run: | # block header\n          cat <<'EOF'\n          # payload\n"
@@ -134,18 +155,19 @@ with tempfile.TemporaryDirectory() as tmp:
     rows = [json.loads(line) for line in inventory.stdout.splitlines()]
     for path, (source, expected) in samples.items():
         subset = [r for r in rows if r["path"] == path]
-        assert [r["text"] for r in subset] == expected, (path, subset)
+        require([r["text"] for r in subset] == expected, (path, subset))
         for row in subset:
             lines = source.split("\n")
-            assert lines[row["start"] - 1].encode()[row["column"]:].startswith(
-                row["text"].splitlines()[0].encode()), row
+            original = lines[row["start"] - 1].encode()[row["column"]:]
+            require(original.startswith(row["text"].splitlines()[0].encode()), row)
     directives = {r["path"] for r in rows if r["directive"]}
-    assert {"late.py", "typed.ts", "Dockerfile"} <= directives
-    assert not {"alias.go", "binary.go"} & {r["path"] for r in rows}
+    require({"late.py", "typed.ts", "Dockerfile"} <= directives, directives)
+    unsupported = {"alias.go", "binary.go"} & {r["path"] for r in rows}
+    require(not unsupported, unsupported)
     run("git", "-c", "user.name=E2E", "-c", "user.email=e2e@example.invalid",
         "commit", "-qm", "inventory fixtures", cwd=repo)
     previous = run(sys.executable, str(LINT), "--inventory", "--revision", "HEAD", cwd=repo)
-    assert inventory.stdout == previous.stdout
+    require(inventory.stdout == previous.stdout, "revision and worktree inventories differ")
     results["worktree and revision report precise inventory"] = {"files": sorted(samples),
                                                                   "comments": len(rows)}
 

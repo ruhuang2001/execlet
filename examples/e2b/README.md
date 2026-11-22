@@ -10,7 +10,7 @@ not an E2B HTTP endpoint or a replacement package named `e2b`.
 Build and run `sandboxd` from the same checkout as the SDKs, following the
 [server instructions](../../docs/quickstart.md). Do not assume an older release
 supports these fields. If the server requires authentication, configure
-`SANDBOX_API_KEY` in your environment. From the repository root:
+`SANDBOX_API_KEY` through your environment’s secret store. From the repository root:
 
 ```sh
 docker build -t tiny-sandbox-e2b:local examples/e2b

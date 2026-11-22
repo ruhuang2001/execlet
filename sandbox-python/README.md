@@ -89,7 +89,16 @@ handle = sandbox.commands.run(
 )
 saved_sandbox_id, saved_pid = sandbox.sandbox_id, handle.pid
 handle.disconnect()
+```
 
+Disconnecting leaves the command running. A new controller can use the saved
+sandbox ID and PID. `Sandbox.connect(saved_sandbox_id)` renews the running
+sandbox’s lifetime (300 seconds by default), keeping any later existing
+deadline. `connected.commands.connect(saved_pid, timeout=30)` leaves that
+lifetime and the original command deadline alone. Its 30 seconds bound this
+observer’s wait.
+
+```python
 connected = Sandbox.connect(saved_sandbox_id)
 observer = connected.commands.connect(saved_pid, timeout=30)
 result = observer.wait(on_stdout=lambda chunk: print(chunk, end=""))

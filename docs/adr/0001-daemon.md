@@ -8,6 +8,12 @@ The route table pairs each operation with its handler method. Construction fails
 
 The HTTP and Docker JSON codecs use Go's legacy wire options to preserve field-name matching, acceptance of additive fields, nulls, omission rules, HTML escaping and UTF-8 replacement. Administrative policy and recovery files use strict decoding. An optional JSON body may be empty. A supplied body must contain one complete value. File uploads read far enough to distinguish excess bytes from a complete file at the limit.
 
+## Container backend contract
+
+The daemon calls backend methods concurrently. A backend returns the running container's ID from create, applies the requested PID limit at creation, and addresses later operations by that exact ID. A stable container name is a recovery hint. Missing objects expose `ErrNotFound` where the operation returns an error. Pause and resume cover every process in the container.
+
+Pass execution argv intact and apply the requested environment entries over the image environment. An empty working directory uses the image default. If a requested directory is unusable, return an observable process with a diagnostic on stderr and a nonzero exit. Recording a process preserves the execution history and cancellation path. Signal the process group, including descendants. Wait for the process tree to exit and expose its exit status, using -1 when the runtime cannot report one. Output readers reach EOF on completion. [Backend interface](../../internal/daemon/backend.go)
+
 ## Execution identity
 
 The backend receives argv as arguments. It layers per-command environment overrides over sandbox defaults, and carries one-shot stdin separately. A missing working directory should produce stderr and an exit status on the execution record. Checking existence before launch would add a round trip and race with filesystem changes. Request validation checks the shape and size of the input before sandbox lookup. The API echoes a requested working directory for diagnostics and uses null for the image default.

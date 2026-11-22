@@ -37,6 +37,7 @@ const (
 )
 
 type Sandbox struct {
+	Protected               bool        `json:"protected"`
 	MaxConcurrentExecutions int         `json:"max_concurrent_executions"`
 	ID                      string      `json:"id"`
 	State                   State       `json:"state"`

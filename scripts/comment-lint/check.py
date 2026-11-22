@@ -200,6 +200,10 @@ def scan(path, data):
                 row, col = point(where(node.start_byte))
                 end, end_col = point(where(node.end_byte))
                 value = node.text.decode(errors="replace")
+                if lang == "gomod" and value == "// indirect" and node.parent.type == "require_spec":
+                    previous = node.prev_named_sibling
+                    if previous and previous.type == "version" and previous.end_point.row == node.start_point.row:
+                        return
                 found.append(dict(path=str(path), start=row + 1, end=end + 1, column=col,
                                   end_column=end_col, text=value,
                                   standalone=not lines[row][:col].strip() and not lines[end][end_col:].strip(),

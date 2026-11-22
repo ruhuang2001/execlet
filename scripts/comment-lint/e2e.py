@@ -50,6 +50,7 @@ with tempfile.TemporaryDirectory() as tmp:
     (repo / "other.go").unlink()
 
     clean = {
+        "go.mod": "module example.test/demo\nrequire example.test/lib v1.0.0 // indirect\n",
         "guest.go": '//go:build live\n\npackage guest\nconst source = `// data`\n',
         "guest.py": '"""API documentation."""\nvalue = "a#b"\n',
         "client.ts": 'const url = `https://example.test/#fragment`;\n',

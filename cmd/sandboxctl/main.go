@@ -26,6 +26,7 @@ usage:
   sandboxctl <command> [flags]
 
 commands:
+  mcp --workspace DIR --image IMAGE      serve sandbox tools over MCP stdio
   doctor                                 check config, connectivity, docker
   run [flags] -- CMD [ARG...]            run a command in a sandbox
   run [flags] -- code 'PYTHON'           shorthand for python3 -c
@@ -99,6 +100,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "help", "-h", "--help":
 		_, _ = fmt.Fprint(stdout, usage)
 		return 0
+	case "mcp":
+		return in.mcpServer(rest)
 	case "doctor":
 		return in.doctor(rest)
 	case "run":

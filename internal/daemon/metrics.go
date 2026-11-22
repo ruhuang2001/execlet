@@ -64,10 +64,16 @@ func (h *Handler) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	}
 	fmt.Fprintf(&out, "# HELP tiny_sandbox_cleanup_failures_total Failed container removal attempts.\n# TYPE tiny_sandbox_cleanup_failures_total counter\ntiny_sandbox_cleanup_failures_total %d\n", m.cleanupFailures)
 	m.mu.Unlock()
-	h.store.mu.Lock()
-	live := h.store.live
-	h.store.mu.Unlock()
-	fmt.Fprintf(&out, "# HELP tiny_sandbox_live Live sandbox records, excluding pending removals.\n# TYPE tiny_sandbox_live gauge\ntiny_sandbox_live %d\n# HELP tiny_sandbox_cleanup_pending Containers awaiting confirmed removal.\n# TYPE tiny_sandbox_cleanup_pending gauge\ntiny_sandbox_cleanup_pending %d\n", live, len(h.store.pendingRemovals()))
+	h.store.retryMu.Lock()
+	live := 0
+	for _, active := range h.store.reservationLive {
+		if active {
+			live++
+		}
+	}
+	pending := len(h.store.retryIDs)
+	h.store.retryMu.Unlock()
+	fmt.Fprintf(&out, "# HELP tiny_sandbox_live Live sandbox records, excluding pending removals.\n# TYPE tiny_sandbox_live gauge\ntiny_sandbox_live %d\n# HELP tiny_sandbox_cleanup_pending Containers awaiting confirmed removal.\n# TYPE tiny_sandbox_cleanup_pending gauge\ntiny_sandbox_cleanup_pending %d\n", live, pending)
 	if policy, ok := h.store.backend.(*PolicyBackend); ok {
 		usage := policy.Usage()
 		for _, name := range []string{"tiny_sandbox_reserved_memory_bytes", "tiny_sandbox_reserved_nano_cpus", "tiny_sandbox_reserved_pids"} {

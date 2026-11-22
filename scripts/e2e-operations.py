@@ -25,7 +25,9 @@ def main():
     parser.add_argument('--image', required=True)
     parser.add_argument('--out', required=True)
     parser.add_argument('--samples', type=int, default=5)
-    parser.add_argument('--benchmark-only', action='store_true', help='run only the direct short-command workload')
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument('--cleanup-only', action='store_true', help='run only default admission during failed removals')
+    modes.add_argument('--benchmark-only', action='store_true', help='run only the direct short-command workload')
     args = parser.parse_args()
     if not __debug__:
         parser.error('assertions must be enabled')
@@ -111,6 +113,48 @@ def main():
 
     def create(**overrides):
         return http('/v1/sandboxes', 'POST', {**spec, **overrides})
+
+    def lost_create():
+        with proxy.lock:
+            proxy.drop_create = True
+            proxy.lost_create_id = None
+        status, _ = create()
+        with proxy.lock:
+            lost_id = proxy.lost_create_id
+            requests = proxy.requests.copy()
+        check('lost Docker create response cleans up the verified container ID', status == 502
+              and bool(lost_id) and not owned()
+              and any(r.startswith('DELETE ') and f'/containers/{lost_id}?' in r for r in requests), lost_id)
+
+    def cleanup_backpressure():
+        start()
+        lost_create()
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            starts = list(pool.map(lambda _: create(timeout_seconds=0), range(64)))
+            check('default admission fills 64 slots', all(status == 201 for status, _ in starts))
+            containers = sorted(owned())
+            check('all admitted containers exist in Docker', len(containers) == 64, containers)
+            proxy.arm(True)
+            deletes = list(pool.map(lambda pair: http('/v1/sandboxes/' + pair[1]['id'], 'DELETE')[0], starts))
+            check('Docker refuses every removal', deletes == [502] * 64, deletes)
+            metrics = http('/metrics')[1].splitlines()
+            check('all cleanup obligations remain visible', 'tiny_sandbox_cleanup_pending 64' in metrics
+                  and 'tiny_sandbox_live 0' in metrics)
+            refused = list(pool.map(lambda _: create()[0], range(8)))
+            check('pending cleanup blocks new admission without policy', refused == [429] * 8, refused)
+            check('Docker retains exactly the original containers', sorted(owned()) == containers)
+        proxy.arm(False)
+        until = time.monotonic() + 90
+        while time.monotonic() < until:
+            if not owned() and 'tiny_sandbox_cleanup_pending 0' in http('/metrics')[1].splitlines():
+                break
+            time.sleep(.2)
+        check('background retries confirm every original removal', not owned()
+              and 'tiny_sandbox_cleanup_pending 0' in http('/metrics')[1].splitlines())
+        status, sb = create()
+        check('confirmed cleanup restores default admission', status == 201, sb)
+        kill(sb['id'])
+        stop()
 
     def short_benchmark():
         start(['-policy', str(policy)], direct=True)
@@ -245,11 +289,15 @@ def main():
         if args.benchmark_only:
             short_benchmark()
             return
+        cleanup_backpressure()
+        if args.cleanup_only:
+            return
         for durable in [False, True]:
             for managed in [False, True]:
                 for fault in ['drop', 'stall']:
                     start_reliability(durable, managed, fault)
         start(['-policy', str(policy)])
+        lost_create()
         listing_fallbacks()
         status, sb = create()
         assert status == 201, sb

@@ -201,7 +201,7 @@ func (in *invocation) runCommand(args []string) int {
 	in.printExecutionStatus(final)
 
 	if rf.remove && created {
-		in.killQuietly(client, sandboxID)
+		in.cleanupSandbox(client, sandboxID)
 	}
 
 	if streamErr != nil {
@@ -214,16 +214,22 @@ func (in *invocation) runCommand(args []string) int {
 }
 
 func (in *invocation) startFailed(client *sandbox.Client, sandboxID string, created, remove bool, err error) int {
-	if created && (remove || errors.Is(err, sandbox.ErrCanceled)) {
-		in.killQuietly(client, sandboxID)
+	if created && (remove || errors.Is(err, sandbox.ErrCanceled) || errors.Is(err, sandbox.ErrCancelUnconfirmed)) {
+		in.cleanupSandbox(client, sandboxID)
 	}
 	return in.fail(err)
 }
 
-func (in *invocation) killQuietly(client *sandbox.Client, sandboxID string) {
+func (in *invocation) cleanupSandbox(client *sandbox.Client, sandboxID string) {
 	kctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, _ = client.KillSandbox(kctx, sandboxID)
+	sb, err := client.KillSandbox(kctx, sandboxID)
+	if err == nil && (sb.ID != sandboxID || sb.State != sandbox.StateKilled) {
+		err = fmt.Errorf("server returned sandbox %q in state %q", sb.ID, sb.State)
+	}
+	if err != nil {
+		_, _ = fmt.Fprintf(in.stderr, "sandboxctl: cleanup unconfirmed for %s: %s\n", sandboxID, messageOf(err))
+	}
 }
 
 func outcomeExit(ex *sandbox.Execution) error {

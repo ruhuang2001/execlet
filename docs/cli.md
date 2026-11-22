@@ -27,7 +27,7 @@ Status: normative. Contract for `sandboxctl`. It is a thin layer over the [Go SD
 | `version` | print the build version (injected with `-ldflags`) |
 | `help` | usage |
 
-`run` flags: `--sandbox ID`, `--image`, `--memory MB`, `--max-concurrent-executions N`, `--pids-limit N`, `--nano-cpus N`, `--network bridge|none`, `--timeout S`, `--timeout-action kill|pause`, `--idle-timeout S`, `--idle-action kill|pause`, `--exec-timeout S`, `--env NAME=VALUE`, `--cwd DIR`, `--stdin-file FILE`, `--rm` (request cleanup of a sandbox created by this invocation). `--max-concurrent-executions` is a creation-only flag (1–8, default 1). Creation flags together with `--sandbox` are an error. `--rm` does not remove a sandbox supplied through `--sandbox`. Cleanup errors are currently ignored; verify remote state when cleanup must be confirmed.
+`run` flags: `--sandbox ID`, `--image`, `--memory MB`, `--max-concurrent-executions N`, `--pids-limit N`, `--nano-cpus N`, `--network bridge|none`, `--timeout S`, `--timeout-action kill|pause`, `--idle-timeout S`, `--idle-action kill|pause`, `--exec-timeout S`, `--env NAME=VALUE`, `--cwd DIR`, `--stdin-file FILE`, `--rm` (request cleanup of a sandbox created by this invocation). `--max-concurrent-executions` is a creation-only flag (1–8, default 1). Creation flags together with `--sandbox` are an error. `--rm` does not remove a sandbox supplied through `--sandbox`. Successful cleanup is quiet. If deletion fails or the reply does not confirm the requested sandbox is killed, the CLI prints `cleanup unconfirmed` with the sandbox ID on stderr. Stdout and exit status still report the command outcome. Retry cleanup with `sandboxctl kill ID`.
 
 `--env` and `--cwd` apply to the execution, not to the sandbox, so they are
 valid together with `--sandbox`. Repeat `--env` to set more than one variable;
@@ -76,7 +76,7 @@ execution: exe_456
 execution exe_456: completed (exited), exit 0
 ```
 
-The first line reads `sandbox: sbx_123` when `--sandbox` was given. The last line is printed whenever the final execution is known, including after Ctrl+C. If streaming fails without a final result, the CLI prints the initial running snapshot instead. Without `--rm`, a sandbox created by `run` is kept for inspection, except when the start itself was canceled: then the CLI kills the sandbox it just created.
+The first line reads `sandbox: sbx_123` when `--sandbox` was given. The last line is printed whenever the final execution is known, including after Ctrl+C. If streaming fails without a final result, the CLI prints the initial running snapshot instead. Without `--rm`, a sandbox created by `run` is kept for inspection, except when the start itself was interrupted. The CLI then requests cleanup of the sandbox it just created, including when the server could not confirm command cancellation.
 
 ## Exit codes
 

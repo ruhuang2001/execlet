@@ -404,7 +404,6 @@ func (s *Sandboxes) Recover(ctx context.Context, j *Journal, backend RecoveryBac
 		}
 		if unsafe {
 			sb.state = StateKilled
-			sb.released = true
 			sb.expiresAt = nil
 			if sb.killReason == nil {
 				sb.killReason = new(KillEvicted)
@@ -418,7 +417,7 @@ func (s *Sandboxes) Recover(ctx context.Context, j *Journal, backend RecoveryBac
 				}
 			}
 		} else {
-			s.live++
+			s.reservationLive[sb.id] = true
 		}
 		for _, ex := range sb.executions {
 			if ex.state == ExecRunning {
@@ -471,9 +470,7 @@ func (s *Sandboxes) DrainPersistent(ctx context.Context) {
 			container := sb.container
 			sb.mu.Unlock()
 			if len(active) > 0 && container != "" {
-				if err := s.removeBounded(ctx, container); err != nil && !errors.Is(err, ErrNotFound) {
-					s.scheduleRemoval(container)
-				}
+				_ = s.removeOrQueue(ctx, sb.id, container)
 			}
 			for _, ex := range active {
 				s.waitDone(ctx, ex.done, BackendCallTimeout)

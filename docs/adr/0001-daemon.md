@@ -52,7 +52,7 @@ A subscriber advances over dense event IDs, rejects a cursor ahead of the curren
 
 ## Admission and cleanup
 
-Admission reserves a sandbox slot before container creation. A pending delete and failed create can race, so releasing that slot must happen once. A container that appears after deletion still requires removal. The ordinary live-slot count tracks the API lifecycle. With deployment policy enabled, aggregate reservations reflect declared resource limits and continue through unconfirmed removal. Recovery verifies and reserves eligible containers before serving traffic under that policy.
+Admission reserves a sandbox slot before container creation. A pending delete and failed create can race, so releasing that slot must happen once. A container that appears after deletion still requires removal. The slot stays reserved until creation fails without a container or the runtime confirms removal. A retry identifies both the container and its reservation so pruning the API record cannot free capacity. With deployment policy enabled, aggregate reservations reflect declared resource limits and continue through unconfirmed removal. Recovery verifies and reserves eligible containers before serving traffic under that policy.
 
 A task limit accounts for threads created by runtimes and by the guest helpers themselves. The minimum leaves room to launch those helpers. Bridge networking supports package installation. The allowed network modes keep sandbox processes in their own namespace. A policy can further restrict networks and provide a finite CPU default.
 

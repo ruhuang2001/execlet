@@ -45,6 +45,7 @@ func WithMaxRetainedOutputBytes(n int) Option {
 }
 
 const OwnerLabelKey = "tiny-sandbox.owner"
+const SandboxIDLabelKey = "tiny-sandbox.id"
 
 const (
 	ambiguousWindow     = 2 * time.Second
@@ -73,10 +74,10 @@ type Sandboxes struct {
 	mu    sync.Mutex
 	byID  map[string]*sandbox
 	order []*sandbox
-	live  int
 
 	retryMu            sync.Mutex
-	retryIDs           map[string]struct{}
+	reservationLive    map[string]bool
+	retryIDs           map[string]string
 	removalPassRunning bool
 }
 
@@ -95,7 +96,8 @@ func New(backend Backend, opts ...Option) *Sandboxes {
 		maxRetainedOutput:    MaxRetainedOutputBytes,
 		sleep:                sleepContext,
 		byID:                 make(map[string]*sandbox),
-		retryIDs:             make(map[string]struct{}),
+		reservationLive:      make(map[string]bool),
+		retryIDs:             make(map[string]string),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -143,7 +145,6 @@ type sandbox struct {
 	createdAt time.Time
 
 	state        State
-	released     bool
 	forgotten    bool
 	dirty        bool
 	killReason   *KillReason
@@ -192,12 +193,12 @@ func (s *Sandboxes) Create(ctx context.Context, req CreateRequest) (result Sandb
 	if err != nil {
 		return Sandbox{}, err
 	}
-	if err := s.reserve(); err != nil {
+	id := newID("sbx_")
+	if err := s.reserve(id); err != nil {
 		return Sandbox{}, err
 	}
 
 	now := s.now()
-	id := newID("sbx_")
 	sb := &sandbox{
 		id:           id,
 		opts:         opts,
@@ -217,7 +218,7 @@ func (s *Sandboxes) Create(ctx context.Context, req CreateRequest) (result Sandb
 	err = s.saveSandboxLocked(sb)
 	sb.mu.Unlock()
 	if err != nil {
-		s.release()
+		s.confirmRemoval(id, "")
 		s.forget(sb)
 		return Sandbox{}, err
 	}
@@ -228,60 +229,49 @@ func (s *Sandboxes) Create(ctx context.Context, req CreateRequest) (result Sandb
 		NanoCPUs:  opts.nanoCPUs,
 		Network:   opts.network,
 		Name:      "tiny-sandbox-" + id,
-		Labels:    map[string]string{OwnerLabelKey: s.owner},
+		Labels:    map[string]string{OwnerLabelKey: s.owner, SandboxIDLabelKey: id},
 	}
 	containerID, err := s.backend.Create(ctx, spec)
-	if err != nil {
-		if containerID != "" {
-			if removeErr := s.backend.Remove(context.WithoutCancel(ctx), containerID); removeErr != nil && !errors.Is(removeErr, ErrNotFound) {
-				s.scheduleRemoval(containerID)
-			}
-		}
-		sb.mu.Lock()
-		released := sb.released
-		sb.mu.Unlock()
-		if !released {
-			s.release()
-		}
-		s.forget(sb)
-		return Sandbox{}, backendError(err)
-	}
-
 	sb.mu.Lock()
 	sb.container = containerID
-	if sb.state != StatePending {
+	if err != nil || sb.state != StatePending {
+		s.killLocked(sb, KillRequested)
+		var cleanupErr error
+		if containerID != "" {
+			cleanupErr = s.removeOrQueue(context.WithoutCancel(ctx), id, containerID)
+		} else {
+			s.confirmRemoval(id, "")
+		}
+		out := sb.snapshot()
 		sb.mu.Unlock()
-		_ = s.backend.Remove(context.WithoutCancel(ctx), containerID)
-		return sb.snapshot(), nil
+		if err != nil {
+			s.forget(sb)
+			return Sandbox{}, backendError(err)
+		}
+		return out, cleanupErr
 	}
 	sb.state = StateRunning
 	sb.armLifetimeLocked(s.now())
 	err = s.saveSandboxLocked(sb)
 	if err != nil {
 		_ = s.terminateLocked(ctx, sb, KillEvicted)
-	}
-	sb.mu.Unlock()
-	if err != nil {
+		sb.mu.Unlock()
 		return Sandbox{}, err
 	}
-	return sb.snapshot(), nil
+	out := sb.snapshot()
+	sb.mu.Unlock()
+	return out, nil
 }
 
-func (s *Sandboxes) reserve() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.live >= s.maxSandboxes {
+func (s *Sandboxes) reserve(id string) error {
+	s.retryMu.Lock()
+	defer s.retryMu.Unlock()
+	if len(s.reservationLive) >= s.maxSandboxes {
 		return errorf(CodeRateLimited,
-			"%d live sandboxes are already running; delete one before creating another", s.live)
+			"all %d sandbox slots are reserved for creation, use or cleanup", s.maxSandboxes)
 	}
-	s.live++
+	s.reservationLive[id] = true
 	return nil
-}
-
-func (s *Sandboxes) release() {
-	s.mu.Lock()
-	s.live--
-	s.mu.Unlock()
 }
 
 func (s *Sandboxes) forget(sb *sandbox) {
@@ -553,10 +543,11 @@ func (s *Sandboxes) killLocked(sb *sandbox, reason KillReason) {
 	sb.killReason = &r
 	sb.expiresAt = nil
 	sb.dirty = true
-	if !sb.released {
-		sb.released = true
-		s.release()
+	s.retryMu.Lock()
+	if _, held := s.reservationLive[sb.id]; held {
+		s.reservationLive[sb.id] = false
 	}
+	s.retryMu.Unlock()
 
 	for id, ex := range sb.running {
 		switch reason {
@@ -584,13 +575,9 @@ func (s *Sandboxes) terminateLocked(ctx context.Context, sb *sandbox, reason Kil
 	if sb.container == "" {
 		return persistErr
 	}
-	removeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), BackendCallTimeout)
-	defer cancel()
-	if err := s.backend.Remove(removeCtx, sb.container); err != nil && !errors.Is(err, ErrNotFound) {
-		s.scheduleRemoval(sb.container)
-		return s.unconfirmedRemoval(sb.container)
+	if err := s.removeOrQueue(context.WithoutCancel(ctx), sb.id, sb.container); err != nil {
+		return err
 	}
-	s.forgetRemoval(sb.container)
 	return persistErr
 }
 
@@ -602,25 +589,24 @@ func (s *Sandboxes) Shutdown(ctx context.Context) {
 	sem := make(chan struct{}, shutdownWorkers)
 	for _, sb := range s.sandboxesInCreationOrder() {
 		sb.mu.Lock()
+		s.killLocked(sb, KillRequested)
 		container := sb.container
 		sb.mu.Unlock()
 		if container == "" {
 			continue
 		}
-		wg.Add(1)
 		sem <- struct{}{}
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			defer func() { <-sem }()
-			_ = s.backend.Remove(ctx, container)
-		}()
+			_ = s.removeOrQueue(ctx, sb.id, container)
+		})
 	}
 	wg.Wait()
+	s.runRemovalPass(ctx)
 
 	s.mu.Lock()
 	s.byID = make(map[string]*sandbox)
 	s.order = nil
-	s.live = 0
 	s.mu.Unlock()
 }
 
@@ -642,6 +628,7 @@ func (s *Sandboxes) lookup(id string) (*sandbox, error) {
 func (s *Sandboxes) backendFailure(_ context.Context, sb *sandbox, err error) error {
 	if errors.Is(err, ErrNotFound) {
 		s.killLocked(sb, KillEvicted)
+		s.confirmRemoval(sb.id, sb.container)
 		if saveErr := s.saveSandboxLocked(sb); saveErr != nil {
 			return saveErr
 		}

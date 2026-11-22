@@ -141,14 +141,16 @@ func (b *PolicyBackend) Create(ctx context.Context, spec ContainerSpec) (string,
 		}).VerifyLimits(ctx, id, spec)
 	}
 	if err != nil {
-		target := id
-		if target == "" {
-			target = spec.Name
+		if id == "" {
+			b.mu.Lock()
+			delete(b.allocations, spec.Name)
+			b.mu.Unlock()
+			return "", backendError(err)
 		}
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), BackendCallTimeout)
 		defer cancel()
-		if removeErr := b.Remove(cleanup, target); removeErr != nil && !errors.Is(removeErr, ErrNotFound) {
-			return target, errorf(CodeBackendError, "policy startup failed; removal unconfirmed and reservation retained")
+		if removeErr := b.Remove(cleanup, id); removeErr != nil && !errors.Is(removeErr, ErrNotFound) {
+			return id, errorf(CodeBackendError, "policy startup failed; removal unconfirmed and reservation retained")
 		}
 		return "", backendError(err)
 	}

@@ -89,6 +89,7 @@ func (s *Sandboxes) reapOne(ctx context.Context, sb *sandbox, now time.Time) {
 		if err != nil {
 			if errors.Is(err, ErrNotFound) {
 				s.killLocked(sb, KillEvicted)
+				s.confirmRemoval(sb.id, sb.container)
 				return
 			}
 			if liveness, livenessErr := s.liveness(ctx, sb.container); livenessErr == nil &&
@@ -132,7 +133,7 @@ func (s *Sandboxes) runRemovalPass(ctx context.Context) {
 		}
 		err := s.removeBounded(ctx, id)
 		if err == nil || errors.Is(err, ErrNotFound) {
-			s.forgetRemoval(id)
+			s.confirmRemoval("", id)
 		} else {
 			s.metrics.cleanupFailed()
 		}
@@ -155,9 +156,13 @@ func (s *Sandboxes) removeBounded(ctx context.Context, containerID string) error
 	return s.backend.Remove(callCtx, containerID)
 }
 
-func (s *Sandboxes) forgetRemoval(containerID string) {
+func (s *Sandboxes) confirmRemoval(sandboxID, containerID string) {
 	s.retryMu.Lock()
 	defer s.retryMu.Unlock()
+	if sandboxID == "" {
+		sandboxID = s.retryIDs[containerID]
+	}
+	delete(s.reservationLive, sandboxID)
 	delete(s.retryIDs, containerID)
 }
 
@@ -177,11 +182,19 @@ func (s *Sandboxes) finishRemovalPass() {
 	s.removalPassRunning = false
 }
 
-func (s *Sandboxes) scheduleRemoval(containerID string) {
+func (s *Sandboxes) removeOrQueue(ctx context.Context, sandboxID, containerID string) error {
+	if err := s.removeBounded(ctx, containerID); err == nil || errors.Is(err, ErrNotFound) {
+		s.confirmRemoval(sandboxID, containerID)
+		return nil
+	}
 	s.metrics.cleanupFailed()
 	s.retryMu.Lock()
 	defer s.retryMu.Unlock()
-	s.retryIDs[containerID] = struct{}{}
+	if _, held := s.reservationLive[sandboxID]; !held {
+		return nil
+	}
+	s.retryIDs[containerID] = sandboxID
+	return s.unconfirmedRemoval(containerID)
 }
 
 type BatchLivenessBackend interface {

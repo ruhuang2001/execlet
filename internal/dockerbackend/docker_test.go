@@ -4,6 +4,7 @@ package dockerbackend
 
 import (
 	"context"
+	"crypto/rand"
 	"io"
 	"os"
 	"strings"
@@ -432,4 +433,97 @@ func (h *realHarness) containerID(sandboxID string) string {
 		h.t.Fatalf("find container: %v, %d containers", err, len(list))
 	}
 	return list[0].ID
+}
+
+func TestRealCreateNameConflict(t *testing.T) {
+	h := newRealHarness(t)
+	for _, tc := range []struct {
+		name                                                     string
+		foreignOwner, differentSandbox, legacy, running, replace bool
+	}{
+		{name: "different-owner", foreignOwner: true},
+		{name: "different-sandbox", differentSandbox: true},
+		{name: "legacy", legacy: true},
+		{name: "running", running: true},
+		{name: "stopped-owned", replace: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			id := "sbx_" + rand.Text()
+			name := "tiny-sandbox-" + id
+			labels := map[string]string{daemon.OwnerLabelKey: h.owner, daemon.SandboxIDLabelKey: id}
+			if tc.foreignOwner {
+				labels[daemon.OwnerLabelKey] += "-other"
+			}
+			if tc.differentSandbox {
+				labels[daemon.SandboxIDLabelKey] += "-other"
+			}
+			if tc.legacy {
+				delete(labels, daemon.SandboxIDLabelKey)
+			}
+			cmd := []string{"true"}
+			if tc.running {
+				cmd = []string{"sleep", "120"}
+			}
+			cfg := dockerapi.ContainerConfig{Image: "alpine:3.20", Cmd: cmd, Labels: labels}
+			original, err := h.api.ContainerCreate(ctx, name, cfg)
+			if dockerapi.IsNoSuchImage(err) {
+				if err := h.api.PullImage(ctx, cfg.Image); err != nil {
+					t.Fatal(err)
+				}
+				original, err = h.api.ContainerCreate(ctx, name, cfg)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				err := h.api.ContainerRemove(context.Background(), original)
+				if err != nil && !dockerapi.IsNotFound(err) {
+					t.Errorf("remove fixture: %v", err)
+				}
+			})
+			if err := h.api.ContainerStart(ctx, original); err != nil {
+				t.Fatal(err)
+			}
+			if !tc.running {
+				h.waitFor("fixture exit", 10*time.Second, func() bool {
+					inspect, err := h.api.ContainerInspect(ctx, original)
+					return err == nil && inspect.State.Status == "exited"
+				})
+			}
+			spec := daemon.ContainerSpec{Name: name, Image: cfg.Image, MemoryMB: 64,
+				Labels: map[string]string{daemon.OwnerLabelKey: h.owner, daemon.SandboxIDLabelKey: id}}
+			var backend daemon.Backend = h.be
+			var policy *daemon.PolicyBackend
+			if !tc.replace {
+				spec.Network, spec.NanoCPUs, spec.PidsLimit = daemon.NetworkNone, 100_000_000, 64
+				policy, err = daemon.NewPolicyBackend(h.be, daemon.DeploymentPolicy{MaxSandboxes: 1, MemoryMB: 64, NanoCPUs: spec.NanoCPUs, Pids: 64, Images: []string{cfg.Image}, Networks: []daemon.NetworkMode{spec.Network}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				backend = policy
+			}
+			replacement, err := backend.Create(ctx, spec)
+			t.Logf("original=%s replacement=%q", original, replacement)
+			if tc.replace {
+				if err != nil || replacement == "" || replacement == original {
+					t.Fatalf("replacement = %q, err = %v", replacement, err)
+				}
+				if _, err := h.api.ContainerInspect(ctx, original); !dockerapi.IsNotFound(err) {
+					t.Fatalf("original lookup: %v", err)
+				}
+			} else {
+				if !dockerapi.IsConflict(err) || daemon.CodeOf(err) != daemon.CodeInvalidState {
+					t.Fatalf("expected name conflict, got %v", err)
+				}
+				if policy.Usage().Sandboxes != 0 {
+					t.Fatal("conflict retained a policy reservation")
+				}
+				inspect, err := h.api.ContainerInspect(ctx, name)
+				if err != nil || inspect.ID != original || inspect.State.Running != tc.running {
+					t.Fatalf("fixture changed: %#v, %v", inspect, err)
+				}
+			}
+		})
+	}
 }

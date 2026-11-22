@@ -3,6 +3,10 @@
 These regressions cover the four failures reproduced on source `1774cf4`.
 They do not change the historical v0.0.2 contract or claim stronger isolation.
 
+## Container name conflicts
+
+Verify that a matching name with a different owner, a different sandbox ID or a missing legacy ID label preserves the original container. A live matching container also keeps its identity. Policy compensation must preserve the same protected fixtures and release its reservation. An exited fixture with both expected labels can be replaced. A lost create acknowledgement requires verified cleanup even when the caller received no Docker ID. Record the fixture and replacement IDs from the Docker Engine and check cleanup by ID.
+
 ## Runtime: real Docker behind a private fault proxy
 
 - Normal keyed start and replay execute one side effect and return one identity.
@@ -70,3 +74,18 @@ primary request and rejects the first cleanup, while later cleanups succeed.
 `scripts/e2e.sh` runs this regression before the unchanged real-Docker
 concurrency scenarios. The socket fixture verifies the runner's diagnostics,
 not Docker execution or the cause of the original intermittent reset.
+
+## Cleanup and default admission
+
+A runtime can reject every container removal while still accepting new creates.
+If a delete frees its slot at the API transition to killed, the surviving
+containers and their retry IDs can exceed the daemon's 64-slot bound. The
+same risk applies when creation returns a container ID with an error, or when
+a pending sandbox is deleted before Docker reports its container ID. Concurrent
+retries and repeated deletes must release each reservation at most once.
+
+The operations suite runs without a deployment policy, fills the store, and
+uses the Docker proxy to refuse all removals. It checks rejected concurrent
+creates, the cleanup backlog and the actual owned container set. After the proxy
+recovers it checks that each container disappears, the backlog clears and
+admission succeeds. Run this case alone with `--cleanup-only`.

@@ -32,6 +32,8 @@ class DockerFault:
         self.path = str(path)
         self.lock = threading.Lock()
         self.fail_remove = False
+        self.drop_create = False
+        self.lost_create_id = None
         self.fail_exec = False
         self.fail_identity = False
         self.failed_identities = []
@@ -64,7 +66,7 @@ class DockerFault:
                 line = data.split(b'\r\n', 1)[0].decode('latin-1')
                 path = line.split(' ')[1].partition('?')[0] if ' ' in line else ''
                 head, body = data.split(b'\r\n\r\n', 1)
-                if line.startswith('POST ') and path.endswith('/exec'):
+                if line.startswith('POST ') and path.endswith(('/exec', '/containers/create')):
                     length = next((int(h.split(b':', 1)[1]) for h in head.split(b'\r\n')
                                    if h.lower().startswith(b'content-length:')), 0)
                     while len(body) < length:
@@ -75,6 +77,7 @@ class DockerFault:
                     data = head + b'\r\n\r\n' + body
                 with outer.lock:
                     outer.requests.append(line)
+                    drop_create = outer.drop_create and line.startswith('POST ') and path.endswith('/containers/create')
                     capture_start = False
                     if outer.start_fault and line.startswith('POST ') and path.endswith('/exec'):
                         command = json.loads(body).get('Cmd', [])
@@ -108,11 +111,16 @@ class DockerFault:
                             length = int(value.strip())
                     head = b'\r\n'.join(x for x in head.split(b'\r\n') if not x.lower().startswith(b'connection:'))
                     upstream.sendall(head + b'\r\nConnection: close\r\n\r\n' + body)
-                    if capture_start:
+                    if capture_start or drop_create:
                         response = http.client.HTTPResponse(upstream)
                         response.begin()
                         payload = response.read()
-                        if response.status == 201:
+                        if drop_create and response.status == 201:
+                            with outer.lock:
+                                outer.lost_create_id = json.loads(payload)['Id']
+                                outer.drop_create = False
+                            return
+                        if capture_start and response.status == 201:
                             with outer.lock:
                                 outer.start_targets[json.loads(payload)['Id']] = outer.start_fault
                         lines = ['HTTP/1.1 %d %s' % (response.status, response.reason),

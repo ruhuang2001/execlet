@@ -117,6 +117,10 @@ func (c *Client) ContainerRemove(ctx context.Context, id string) error {
 	return c.send(ctx, http.MethodDelete, "/containers/"+id, q, nil)
 }
 
+func (c *Client) ContainerRemoveStopped(ctx context.Context, id string) error {
+	return c.send(ctx, http.MethodDelete, "/containers/"+id, url.Values{"v": {"1"}}, nil)
+}
+
 func (c *Client) ContainerInspect(ctx context.Context, id string) (ContainerInspect, error) {
 	var out ContainerInspect
 	if err := c.getJSON(ctx, "/containers/"+id+"/json", &out); err != nil {

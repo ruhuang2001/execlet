@@ -36,13 +36,13 @@ type fakeDaemon struct {
 	creates      []dockerapi.ContainerConfig
 	createNames  []string
 	removed      []string
+	removalURIs  []string
 	kills        []string
 	execCommands [][]string
 	execEnvs     [][]string
 
 	failStart     bool
 	failInspect   bool
-	nameTaken     string
 	noPidFile     bool
 	missingImages map[string]bool
 	pulled        []string
@@ -198,8 +198,13 @@ func (f *fakeDaemon) containerOp(w http.ResponseWriter, r *http.Request, tail st
 	if !ok {
 		return
 	}
+	lookup := id
 	id = c.id
 	switch {
+	case action == "json" && r.Method == http.MethodGet:
+		writeJSON(w, 200, map[string]any{"Id": id, "Name": "/" + lookup,
+			"Config": map[string]any{"Labels": c.labels}, "State": map[string]string{"Status": c.state}})
+
 	case action == "start" && r.Method == http.MethodPost:
 		if f.failStart {
 			writeError(w, 500, "cannot start: simulated failure")
@@ -222,12 +227,10 @@ func (f *fakeDaemon) containerOp(w http.ResponseWriter, r *http.Request, tail st
 		w.WriteHeader(204)
 	case action == "" && r.Method == http.MethodDelete:
 		f.removed = append(f.removed, id)
+		f.removalURIs = append(f.removalURIs, r.URL.RequestURI())
 		for name, owner := range f.byName {
 			if owner == id {
 				delete(f.byName, name)
-				if name == f.nameTaken {
-					f.nameTaken = ""
-				}
 			}
 		}
 		delete(f.containers, id)
@@ -246,12 +249,7 @@ func (f *fakeDaemon) create(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	name := r.URL.Query().Get("name")
-	if f.nameTaken != "" && name == f.nameTaken {
-		if _, held := f.byName[name]; !held {
-			id := "ctr_leftover"
-			f.containers[id] = &fakeContainer{id: id, state: "exited", labels: map[string]string{}}
-			f.byName[name] = id
-		}
+	if _, held := f.byName[name]; held {
 		writeError(w, 409, "Conflict. The container name "+name+" is already in use")
 		return
 	}
@@ -540,18 +538,15 @@ func unwrap(cmd []string) (pidPath, dir string, env, actual []string, ok bool) {
 	if err != nil || n < 0 || len(cmd) < 7+n {
 		return "", "", nil, nil, false
 	}
-	rest := cmd[7+n:]
-	switch cmd[6] {
-	case "1":
-		if len(rest) < len(commandSeparator) || !slices.Equal(rest[:len(commandSeparator)], commandSeparator) {
+	if cmd[6] == "1" {
+		if len(cmd) < 9+n || cmd[7] != cmd[5] || cmd[8+n] != "command" {
 			return "", "", nil, nil, false
 		}
-		rest = rest[len(commandSeparator):]
-	case "0":
-	default:
-		return "", "", nil, nil, false
+		env = slices.Clone(cmd[8 : 8+n])
+		slices.Reverse(env)
+		return cmd[3], cmd[4], env, cmd[9+n:], true
 	}
-	return cmd[3], cmd[4], cmd[7 : 7+n], rest, true
+	return cmd[3], cmd[4], cmd[7 : 7+n], cmd[7+n:], cmd[6] == "0"
 }
 
 func (f *fakeDaemon) file(containerID, path string) []byte {

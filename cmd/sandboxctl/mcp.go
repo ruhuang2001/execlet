@@ -201,7 +201,7 @@ func (s *sandboxTools) create(ctx context.Context, in createInput) (toolOutput, 
 		_, killErr := s.client.KillSandbox(cleanup, sb.ID)
 		return toolOutput{}, errors.Join(fmt.Errorf("cannot save ownership receipt for %s: %w", sb.ID, err), killErr)
 	}
-	return toolOutput{"Created " + sb.ID + " with network " + sb.Network, map[string]any{"sandbox_id": sb.ID, "network": sb.Network, "expires_at": sb.ExpiresAt, "protected": sb.Protected}}, nil
+	return toolOutput{fmt.Sprintf("Created %s with network %s (protected=%t, expires_at=%v)", sb.ID, sb.Network, sb.Protected, sb.ExpiresAt), map[string]any{"sandbox_id": sb.ID, "network": sb.Network, "expires_at": sb.ExpiresAt, "protected": sb.Protected}}, nil
 }
 
 func (s *sandboxTools) readTool(ctx context.Context, in fileInput) (toolOutput, error) {
@@ -212,12 +212,16 @@ func (s *sandboxTools) readTool(ctx context.Context, in fileInput) (toolOutput, 
 	if !utf8.Valid(data) || bytes.IndexByte(data, 0) >= 0 {
 		return toolOutput{}, errors.New("payload_too_large: binary file cannot be returned as MCP text")
 	}
-	return toolOutput{fmt.Sprintf("Read %d bytes from %s", len(data), in.Path), map[string]string{"content": string(data)}}, nil
+	content := string(data)
+	return toolOutput{fmt.Sprintf("Read %d bytes from %s\n\n%s", len(data), in.Path, content), map[string]string{"content": content}}, nil
 }
 
 func (s *sandboxTools) writeTool(ctx context.Context, in writeInput) (toolOutput, error) {
 	entry, err := s.client.WriteFileInfo(ctx, in.SandboxID, in.Path, []byte(in.Content))
-	return toolOutput{"Wrote " + in.Path, entry}, err
+	if err != nil {
+		return toolOutput{}, err
+	}
+	return toolOutput{fmt.Sprintf("Wrote %s (%s, %d bytes)", in.Path, entry.Type, entry.Size), entry}, nil
 }
 
 func (s *sandboxTools) destroyTool(ctx context.Context, in sandboxInput) (toolOutput, error) {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -98,10 +99,27 @@ func executionResult(ex *sandbox.Execution, offset *int) toolOutput {
 		}
 		return stream[runeBoundary(stream, from):runeBoundary(stream, to)]
 	}
-	out["stdout"], out["stderr"] = window(ex.Stdout), window(ex.Stderr)
+	stdout, stderr := window(ex.Stdout), window(ex.Stderr)
+	out["stdout"], out["stderr"] = stdout, stderr
 	out["exit_code"], out["termination_reason"] = ex.ExitCode, ex.TerminationReason
 	out["output_truncated"], out["next_offset"] = truncated || ex.OutputTruncated, next
-	return toolOutput{summary, out}
+	var display strings.Builder
+	display.WriteString(summary)
+	if stdout != "" {
+		display.WriteString("\n\nstdout\n")
+		display.WriteString(stdout)
+	}
+	if stderr != "" {
+		display.WriteString("\n\nstderr\n")
+		display.WriteString(stderr)
+	}
+	if truncated {
+		_, _ = fmt.Fprintf(&display, "\nUse get_execution with byte offset %d to read retained output.", next)
+	}
+	if ex.OutputTruncated {
+		display.WriteString("\nThe daemon reached its retention limit.")
+	}
+	return toolOutput{display.String(), out}
 }
 
 func runeBoundary(s string, offset int) int {

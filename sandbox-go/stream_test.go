@@ -277,12 +277,13 @@ func TestStreamCallbackErrorStopsWithoutCancel(t *testing.T) {
 
 func TestAutomaticCancelRequiresTerminalIdentity(t *testing.T) {
 	for _, entry := range []string{"stream", "exec", "start"} {
-		for _, response := range []string{"running", "wrong-execution", "wrong-sandbox", "missing-reason", "unknown-reason", "invalid-reason", "exited", "completed"} {
+		for _, response := range []string{"running", "wrong-running", "wrong-poll", "wrong-execution", "wrong-sandbox", "missing-reason", "unknown-reason", "invalid-reason", "exited", "completed"} {
 			t.Run(entry+"/"+response, func(t *testing.T) {
 				f := newFakeServer(t)
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
 				var starts atomic.Int32
+				var polls atomic.Int32
 				f.setHandler(func(w http.ResponseWriter, r *http.Request) {
 					switch {
 					case strings.HasSuffix(r.URL.Path, "/executions"):
@@ -295,9 +296,12 @@ func TestAutomaticCancelRequiresTerminalIdentity(t *testing.T) {
 					case strings.HasSuffix(r.URL.Path, "/cancel"):
 						ex := Execution{ID: "exe_1", SandboxID: "sbx_1", State: "completed", TerminationReason: new(ReasonCanceled)}
 						switch response {
-						case "running":
+						case "running", "wrong-poll", "wrong-running":
 							ex.State = "running"
 							ex.TerminationReason = nil
+							if response == "wrong-running" {
+								ex.ID = "another"
+							}
 						case "wrong-execution":
 							ex.ID = "exe_other"
 						case "wrong-sandbox":
@@ -311,6 +315,14 @@ func TestAutomaticCancelRequiresTerminalIdentity(t *testing.T) {
 						case "exited":
 							ex.TerminationReason = new(ReasonExited)
 							ex.ExitCode = new(0)
+						}
+						writeJSON(w, http.StatusOK, ex)
+					case strings.HasSuffix(r.URL.Path, "/exe_1") && r.Method == http.MethodGet:
+						ex := Execution{ID: "exe_1", SandboxID: "sbx_1", State: "running"}
+						if polls.Add(1) == 1 && response == "wrong-poll" {
+							ex.SandboxID = "other"
+						} else if polls.Load() > 1 {
+							ex.State, ex.TerminationReason = "completed", new(ReasonCanceled)
 						}
 						writeJSON(w, http.StatusOK, ex)
 					default:
@@ -332,8 +344,14 @@ func TestAutomaticCancelRequiresTerminalIdentity(t *testing.T) {
 					_, err = c.StreamExecution(ctx, "sbx_1", "exe_1", callback)
 				}
 				want := ErrCancelUnconfirmed
-				if response == "completed" || response == "exited" {
+				if response == "completed" || response == "exited" || response == "running" {
 					want = ErrCanceled
+				}
+				if n := f.count(http.MethodPost, "/v1/sandboxes/sbx_1/executions/exe_1/cancel"); n != 1 {
+					t.Fatalf("sent %d cancel requests", n)
+				}
+				if wantPolls := map[string]int32{"running": 2, "wrong-poll": 1}[response]; polls.Load() != wantPolls {
+					t.Fatalf("polls = %d, want %d", polls.Load(), wantPolls)
 				}
 				if !errors.Is(err, want) {
 					t.Fatalf("err = %v, want %v", err, want)

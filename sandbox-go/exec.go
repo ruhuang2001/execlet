@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"time"
 )
 
 // StartExecution starts a command and returns the new execution. A start is
@@ -35,24 +36,22 @@ func (c *Client) StartExecution(ctx context.Context, sandboxID string, req Execu
 	if ctx.Err() != nil {
 		return nil, &Error{Code: "canceled", Message: "sandbox: request canceled", Cause: ctx.Err()}
 	}
+	var required []string
 	if req.TimeoutMS != nil {
 		req.TimeoutMS = new(*req.TimeoutMS)
 		if req.TimeoutSeconds != nil || *req.TimeoutMS < 0 || *req.TimeoutMS > 9223372036854 {
 			return nil, &Error{Code: "invalid_request", Message: "invalid or conflicting execution timeout"}
 		}
-		if err := c.RequireCapability(ctx, "e2b.background.v1"); err != nil {
-			return nil, err
-		}
+		required = append(required, "e2b.background.v1")
 	}
 	if len(req.Env) > 0 || req.Cwd != "" {
-		if err := c.RequireCapability(ctx, "execution.env-cwd.v1"); err != nil {
-			return nil, err
-		}
+		required = append(required, "execution.env-cwd.v1")
 	}
 	if req.Stdin != "" {
-		if err := c.RequireCapability(ctx, "execution.stdin.v1"); err != nil {
-			return nil, err
-		}
+		required = append(required, "execution.stdin.v1")
+	}
+	if err := c.RequireCapabilities(ctx, required...); err != nil {
+		return nil, err
 	}
 
 	ex, err := c.startExecution(ctx, sandboxID, req)
@@ -164,10 +163,14 @@ func (c *Client) ListExecutions(ctx context.Context, sandboxID string) ([]*Execu
 // bounded server fallback can return a running snapshot; inspect State before
 // treating it as confirmed termination. Idempotent on a completed execution.
 func (c *Client) CancelExecution(ctx context.Context, sandboxID, executionID string) (*Execution, error) {
+	return c.cancelExecution(ctx, sandboxID, executionID, true)
+}
+
+func (c *Client) cancelExecution(ctx context.Context, sandboxID, executionID string, repeatable bool) (*Execution, error) {
 	resp, err := c.do(ctx, request{
 		method:     http.MethodPost,
 		path:       executionPath(sandboxID, executionID) + "/cancel",
-		repeatable: true,
+		repeatable: repeatable,
 	})
 	if err != nil {
 		return nil, err
@@ -181,11 +184,26 @@ func (c *Client) CancelExecution(ctx context.Context, sandboxID, executionID str
 
 // Unknown outcomes (including failed persistence) do not prove termination.
 func (c *Client) cancelConfirmed(ctx context.Context, sandboxID, executionID string) (*Execution, error) {
-	ex, err := c.CancelExecution(ctx, sandboxID, executionID)
-	if err != nil {
-		return nil, err
+	ex, err := c.cancelExecution(ctx, sandboxID, executionID, false)
+	for {
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err() // cleanup deadline, not confirmed ErrCanceled
+			}
+			return nil, err
+		}
+		if ex.ID != executionID || ex.SandboxID != sandboxID {
+			return nil, errors.New("sandbox: cancellation snapshot identifies another execution")
+		}
+		if ex.State != "running" {
+			break
+		}
+		if !sleep(ctx, 50*time.Millisecond) {
+			return nil, ctx.Err()
+		}
+		ex, err = c.GetExecution(ctx, sandboxID, executionID)
 	}
-	if ex.ID == executionID && ex.SandboxID == sandboxID && ex.State == "completed" && ex.TerminationReason != nil {
+	if ex.State == "completed" && ex.TerminationReason != nil {
 		switch *ex.TerminationReason {
 		case ReasonCanceled, ReasonTimeout, ReasonOOM, ReasonEvicted:
 			return ex, nil

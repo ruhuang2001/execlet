@@ -11,15 +11,15 @@ import (
 // CreateSandbox creates a sandbox. The call is not idempotent and is never
 // retried: a retried create could start a second container.
 func (c *Client) CreateSandbox(ctx context.Context, req CreateSandboxRequest) (*Sandbox, error) {
+	var required []string
 	if len(req.Env) > 0 {
-		if err := c.RequireCapability(ctx, "execution.env-cwd.v1"); err != nil {
-			return nil, err
-		}
+		required = append(required, "execution.env-cwd.v1")
 	}
 	if req.MaxConcurrentExecutions != nil {
-		if err := c.RequireCapability(ctx, "execution.concurrent.v1"); err != nil {
-			return nil, err
-		}
+		required = append(required, "execution.concurrent.v1")
+	}
+	if err := c.RequireCapabilities(ctx, required...); err != nil {
+		return nil, err
 	}
 	resp, err := c.do(ctx, request{method: http.MethodPost, path: "/v1/sandboxes", body: req})
 	if err != nil {

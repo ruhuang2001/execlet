@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -433,5 +434,158 @@ func TestAdditiveFieldsRejectLegacyServer(t *testing.T) {
 	}
 	if _, err := c.StartExecution(t.Context(), "sbx_legacy", ExecuteRequest{Command: []string{"true"}}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCapabilitiesBatchedAndKillExecutionValidatesConfirmation(t *testing.T) {
+	f := newFakeServer(t)
+	mode := "nonterminal"
+	f.setHandler(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/capabilities":
+			writeJSON(w, http.StatusOK, map[string]any{
+				"capabilities": []string{"execution.env-cwd.v1", "execution.stdin.v1", "execution.concurrent.v1", "e2b.background.v1"},
+			})
+		case "/v1/sandboxes":
+			writeJSON(w, http.StatusCreated, Sandbox{ID: "sbx_1", State: StateRunning})
+		case "/v1/sandboxes/sbx_1/executions":
+			writeJSON(w, http.StatusCreated, Execution{ID: "exe_1", SandboxID: "sbx_1", State: "running"})
+		case "/v1/sandboxes/sbx_1/executions/exe_1/kill":
+			switch mode {
+			case "nonterminal":
+				writeJSON(w, http.StatusOK, CommandKill{Execution: Execution{ID: "exe_1", SandboxID: "sbx_1", State: "running"}, Signaled: true})
+			case "mismatch":
+				exited := ReasonExited
+				writeJSON(w, http.StatusOK, CommandKill{Execution: Execution{ID: "exe_1", SandboxID: "sbx_1", State: "completed", TerminationReason: &exited}, Signaled: true})
+			case "missing-signaled":
+				exited := ReasonExited
+				code := 0
+				writeJSON(w, http.StatusOK, map[string]any{"execution": Execution{ID: "exe_1", SandboxID: "sbx_1", State: "completed", TerminationReason: &exited, ExitCode: &code}})
+			case "null-signaled":
+				exited := ReasonExited
+				code := 0
+				writeJSON(w, http.StatusOK, map[string]any{"execution": Execution{ID: "exe_1", SandboxID: "sbx_1", State: "completed", TerminationReason: &exited, ExitCode: &code}, "signaled": nil})
+			default:
+				canceled := ReasonCanceled
+				code := 137
+				writeJSON(w, http.StatusOK, CommandKill{Execution: Execution{ID: "exe_1", SandboxID: "sbx_1", State: "completed", TerminationReason: &canceled, ExitCode: &code}, Signaled: true})
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	})
+
+	c := f.client(t, -1)
+	if _, err := c.CreateSandbox(t.Context(), CreateSandboxRequest{
+		Env:                     map[string]string{"A": "B"},
+		MaxConcurrentExecutions: new(2),
+	}); err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	if got := f.count(http.MethodGet, "/v1/capabilities"); got != 1 {
+		t.Fatalf("CreateSandbox capability requests = %d, want 1", got)
+	}
+
+	if _, err := c.StartExecution(t.Context(), "sbx_1", ExecuteRequest{
+		Command: []string{"cat"},
+		Env:     map[string]string{"A": "B"},
+		Cwd:     "/tmp",
+		Stdin:   "hi",
+	}); err != nil {
+		t.Fatalf("StartExecution: %v", err)
+	}
+	if got := f.count(http.MethodGet, "/v1/capabilities"); got != 1 {
+		t.Fatalf("total capability requests after StartExecution = %d, want 1 per client", got)
+	}
+
+	for _, badMode := range []string{"nonterminal", "mismatch", "missing-signaled", "null-signaled"} {
+		mode = badMode
+		_, err := c.KillExecution(t.Context(), "sbx_1", "exe_1")
+		sdkErr, ok := errors.AsType[*Error](err)
+		if !ok || sdkErr.Code != "backend_error" || sdkErr.Execution == nil || sdkErr.Execution.ID != "exe_1" {
+			t.Fatalf("KillExecution(%s) = %v, want backend_error with execution identity", badMode, err)
+		}
+	}
+	mode = "ok"
+	killed, err := c.KillExecution(t.Context(), "sbx_1", "exe_1")
+	if err != nil || !killed.Signaled {
+		t.Fatalf("KillExecution(ok) = %+v, %v", killed, err)
+	}
+}
+
+func TestFileListRejectsMissingMetadataButAcceptsRootOwner(t *testing.T) {
+	f := newFakeServer(t)
+	c := f.client(t, -1)
+	for _, field := range []string{"uid", "gid", "type", ""} {
+		entry := map[string]any{"name": "f", "size": 0, "mode": 0, "mtime": "2026-01-01T00:00:00Z", "is_dir": false, "type": "future-type", "uid": 0, "gid": 0}
+		delete(entry, field)
+		f.setHandler(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/capabilities" {
+				writeJSON(w, 200, map[string]any{"capabilities": []string{"files.list.v1"}})
+				return
+			}
+			writeJSON(w, 200, map[string]any{"entries": []any{entry}})
+		})
+		page, err := c.ListFiles(t.Context(), "s", "/", ListFilesOptions{})
+		if field != "" && err == nil {
+			t.Fatalf("missing %q silently decoded: %+v", field, page)
+		}
+		if field == "" && (err != nil || len(page.Entries) != 1 || page.Entries[0].Type != "future-type" || page.Entries[0].UID != 0) {
+			t.Fatalf("valid root-owned entry: %+v, %v", page, err)
+		}
+	}
+}
+
+func TestFileCapabilityDiscovery(t *testing.T) {
+	f := newFakeServer(t)
+	const path = "/v1/capabilities"
+	flags := []string{"files.list.v1", "files.archive.v1"}
+	f.setHandler(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != path {
+			t.Errorf("unexpected feature request %s", r.URL.Path)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"capabilities": flags})
+	})
+	c := f.client(t, -1)
+	var wg sync.WaitGroup
+	for range 20 {
+		wg.Go(func() {
+			if err := c.RequireCapabilities(t.Context(), flags...); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	wg.Wait()
+	if got := f.count(http.MethodGet, path); got != 1 {
+		t.Fatalf("concurrent discovery made %d requests", got)
+	}
+	for _, status := range []int{401, 403, 503} {
+		fresh := f.client(t, -1)
+		f.setHandler(func(w http.ResponseWriter, _ *http.Request) { writeAPIError(w, status, "failed", "failed") })
+		_, err := fresh.ReadArchive(t.Context(), "s", "/")
+		if e, ok := errors.AsType[*Error](err); !ok || e.StatusCode != status || e.Code != "failed" {
+			t.Fatalf("discovery status %d: %v", status, err)
+		}
+		f.setHandler(func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, map[string]any{"capabilities": flags}) })
+		if err := fresh.RequireCapabilities(t.Context(), flags...); err != nil {
+			t.Fatalf("failed discovery poisoned cache: %v", err)
+		}
+	}
+	flags = []string{"unrelated"}
+	refresh, err := c.Capabilities(t.Context())
+	if err != nil || len(refresh) != 1 || refresh[0] != "unrelated" {
+		t.Fatalf("explicit refresh: %v, %v", refresh, err)
+	}
+	refresh[0] = "files.archive.v1" // a caller must not be able to grant itself a capability
+	before := f.count(http.MethodGet, path)
+	_, listErr := c.ListFiles(t.Context(), "s", "/", ListFilesOptions{})
+	_, readErr := c.ReadArchive(t.Context(), "s", "/")
+	for _, err := range []error{listErr, readErr, c.WriteArchive(t.Context(), "s", "/", nil)} {
+		if e, ok := errors.AsType[*Error](err); !ok || e.Code != "incompatible_server" {
+			t.Fatalf("unsupported file operation: %v", err)
+		}
+	}
+	if got := f.count(http.MethodGet, path); got != before {
+		t.Fatalf("refreshed cache ignored: %d extra requests", got-before)
 	}
 }

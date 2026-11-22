@@ -3,8 +3,8 @@
 Status: normative. Contract for `sandbox-go` (package `sandbox`). The SDK speaks the contract in [api.md](api.md).
 
 For the synchronous Python client, see [sdk-python.md](sdk-python.md), including
-its differences in zero-retry configuration, error matching, and automatic
-cancellation polling. Both SDKs reject unconfirmed automatic cancellation and
+its differences in zero-retry configuration and error matching.
+Both SDKs reject unconfirmed automatic cancellation and
 stop observation on callback errors without canceling remote work.
 
 The [TypeScript SDK](sdk-typescript.md) uses the same HTTP contract with async
@@ -57,6 +57,7 @@ ListExecutions(ctx, sandboxID) ([]*Execution, error)
 CancelExecution(ctx, sandboxID, executionID) (*Execution, error)
 Capabilities(ctx) ([]string, error)
 RequireCapability(ctx, capability string) error
+RequireCapabilities(ctx, capabilities ...string) error
 AttachCommand(ctx, sandboxID string, pid int) (*CommandAttachment, error)
 KillExecution(ctx, sandboxID, executionID string) (*CommandKill, error)
 
@@ -102,8 +103,11 @@ and one-shot input:
 
 The native client checks capabilities before optional env/cwd/stdin, explicit
 concurrency and managed deadlines; missing support returns `incompatible_server`
-before mutation. Basic legacy calls skip discovery. Go reads capabilities afresh
-using the configured credentials. This is not mixed-version load-balancer support.
+before mutation. Basic legacy calls skip discovery. Concurrent calls to
+`RequireCapabilities` reuse one successful advertisement per client. Explicit
+`Capabilities` refreshes it using the configured credentials. Failed discovery
+is not cached; authentication and transient errors remain distinguishable from
+a missing feature. This is not mixed-version load-balancer support.
 `AttachCommand` returns an execution and atomic `LastEventID` watermark;
 `KillExecution` sends one immediate managed kill and returns the confirmed
 `Signaled` result. It never retries a lost signal acknowledgement. Native
@@ -150,8 +154,8 @@ a separate 8 MiB limit; command metadata remains limited to 1 MiB. Set input on 
 request to `StartExecution`, then stream the returned execution. This is not interactive
 input. The server does not return stdin in execution metadata, but a command can print
 it to output. See the [input contract](api.md#one-shot-stdin) for image requirements and
-cleanup behavior. Older servers silently ignore `Stdin`, so the command gets EOF;
-require a server that implements the input contract before sending input.
+cleanup behavior. Older servers can silently ignore `Stdin` on raw HTTP
+requests, so the client requires `execution.stdin.v1` before sending input.
 
 ### Concurrent executions
 
@@ -164,10 +168,14 @@ configured limit above one, an unexplained exit 137 is `unknown`: `Exec` returns
 
 ## Files
 
+Listing requires `files.list.v1`; archive download and upload require
+`files.archive.v1`. Ordinary byte reads and writes do not require discovery.
+
 `ListFiles(ctx, sandboxID, path, ListFilesOptions{Limit: 100})` returns a `FileList`
 page. Pass `NextCursor` as the next call's `Cursor`; a zero `Limit` uses the server
 default. Entries describe immediate children with name, size, mode, modification time,
-and directory status. Follow the returned cursor until it is empty or absent. Pages are
+and directory status, entry type, and numeric UID/GID. Owner/group names and
+symlink targets can be absent. Follow the returned cursor until it is empty or absent. Pages are
 name-ordered, not a filesystem snapshot. The default page size is 100, with a maximum of
 1000; bounded scans can fail with HTTP 413. See [directory listing](api.md#directory-listing) for cursor and metadata semantics.
 
@@ -237,7 +245,7 @@ new key to start a new execution with a different timeout.
 - Reconnect attempts use the retry backoff. The current implementation allows up to `MaxRetries` reconnects during one `StreamExecution` call; receiving output does not reset this budget.
 - It returns the Execution from the `complete` event. `StreamExecution` does not turn a nonzero exit or termination reason into an outcome error; `Exec` and `ExecStream` do that.
 - If `onEvent` returns any error, including a typed or wrapped `*sandbox.Error`, the SDK closes the stream and returns `Error{Code: "callback"}` wrapping it. `errors.Is` can still match the original error. It never reconnects or cancels remote work, even when the callback also ends the local context. Call `CancelExecution` explicitly when the command itself should stop.
-- If the caller's context ends without a callback failure, the SDK calls `CancelExecution` with a fresh 5-second context. It checks both IDs, `state: completed`, and a recognized terminal reason other than `unknown` (`exited` also requires an exit code). Only then does it return `ErrCanceled` with the Execution. Otherwise it returns `ErrCancelUnconfirmed` carrying the requested IDs. Go does not poll after a nonterminal cancellation response.
+- If the caller's context ends without a callback failure, the SDK sends one cancel under a fresh 5-second deadline. As in start recovery, a matching `running` acknowledgement triggers only `GetExecution` polling within the remaining budget, never another cancel or kill. Both IDs must match on every snapshot. Only `completed` with a recognized reason other than `unknown` (`exited` also requires an exit code) yields `ErrCanceled`; otherwise the result is `ErrCancelUnconfirmed` carrying the requested IDs.
 - Ending a stream for any other reason never cancels the execution.
 
 Automatic cleanup reports local cancellation even when the command won the

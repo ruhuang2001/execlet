@@ -31,6 +31,10 @@ type Client struct {
 	apiKey     string
 	httpClient *http.Client
 	maxRetries int
+	// The gate serializes discovery (including explicit refreshes), but a
+	// caller waiting for someone else's discovery can still be canceled.
+	discoveryGate chan struct{}
+	capabilities  []string // guarded by discoveryGate; nil until successful discovery
 }
 
 // NewClient validates cfg and returns a Client.
@@ -69,9 +73,10 @@ func NewClient(cfg Config) (*Client, error) {
 	}
 
 	return &Client{
-		domain:     strings.TrimSuffix(u.String(), "/"),
-		apiKey:     apiKey,
-		httpClient: httpClient,
-		maxRetries: maxRetries,
+		domain:        strings.TrimSuffix(u.String(), "/"),
+		apiKey:        apiKey,
+		httpClient:    httpClient,
+		maxRetries:    maxRetries,
+		discoveryGate: make(chan struct{}, 1),
 	}, nil
 }

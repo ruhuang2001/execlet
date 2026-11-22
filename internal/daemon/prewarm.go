@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -39,19 +41,16 @@ func (p DeploymentPolicy) prewarmTargets() (map[prewarmKey]int, error) {
 	targets := map[prewarmKey]int{}
 	budget := PolicyUsage{Sandboxes: min(p.MaxSandboxes, MaxSandboxes), MemoryMB: p.MemoryMB, NanoCPUs: p.NanoCPUs, Pids: p.Pids}
 	for _, t := range p.Prewarm {
-		image, err := p.ResolveImage(t.Image)
-		if err != nil {
-			return nil, err
-		}
-		if !templateDigest.MatchString(image) {
-			return nil, fmt.Errorf("prewarm %q requires an immutable image digest", t.Image)
+		name, alias := strings.CutPrefix(t.Image, "template:")
+		if alias && !templateName.MatchString(name) || !alias && !templateDigest.MatchString(t.Image) {
+			return nil, fmt.Errorf("prewarm %q requires a template name or immutable image digest", t.Image)
 		}
 		runtime := t.Runtime
 		if len(p.Runtimes) > 0 {
 			runtime = cmp.Or(runtime, p.Runtimes[0])
 		}
-		k := prewarmKey{image, cmp.Or(t.MemoryMB, DefaultMemoryMB), cmp.Or(t.PidsLimit, DefaultPidsLimit), cmp.Or(t.NanoCPUs, min(int64(1_000_000_000), p.NanoCPUs)), cmp.Or(t.Network, p.Networks[0]), runtime}
-		if !p.allowsImage(image) || !slices.Contains(p.Networks, k.network) || (k.runtime != "" && !slices.Contains(p.Runtimes, k.runtime)) || k.memoryMB < MinMemoryMB || k.pidsLimit < MinPidsLimit || k.nanoCPUs <= 0 {
+		k := prewarmKey{t.Image, cmp.Or(t.MemoryMB, DefaultMemoryMB), cmp.Or(t.PidsLimit, DefaultPidsLimit), cmp.Or(t.NanoCPUs, min(int64(1_000_000_000), p.NanoCPUs)), cmp.Or(t.Network, p.Networks[0]), runtime}
+		if (!alias && !p.allowsImage(t.Image)) || !slices.Contains(p.Networks, k.network) || (k.runtime != "" && !slices.Contains(p.Runtimes, k.runtime)) || k.memoryMB < MinMemoryMB || k.pidsLimit < MinPidsLimit || k.nanoCPUs <= 0 {
 			return nil, fmt.Errorf("prewarm %q violates deployment limits", t.Image)
 		}
 		if t.Count < 1 || t.Count > budget.Sandboxes || int64(k.memoryMB) > budget.MemoryMB/int64(t.Count) || int64(k.pidsLimit) > budget.Pids/int64(t.Count) || k.nanoCPUs > budget.NanoCPUs/int64(t.Count) {
@@ -75,6 +74,9 @@ func (b *PolicyBackend) takeReady(k prewarmKey) string {
 	}
 	id := ids[len(ids)-1]
 	b.ready[k] = ids[:len(ids)-1]
+	if len(b.ready[k]) == 0 {
+		delete(b.ready, k)
+	}
 	return id
 }
 
@@ -92,32 +94,57 @@ func (b *PolicyBackend) discardReady(ctx context.Context, k prewarmKey, id strin
 		return
 	}
 	b.ready[k] = slices.Delete(b.ready[k], i, i+1)
+	if len(b.ready[k]) == 0 {
+		delete(b.ready, k)
+	}
 	b.mu.Unlock()
 	if err := b.Remove(ctx, id); err != nil && !errors.Is(err, ErrNotFound) {
 		retry(id)
 	}
 }
 
+func (b *PolicyBackend) desiredPrewarm() map[prewarmKey]int {
+	p := b.policy
+	catalog, err := p.currentTemplates()
+	if err != nil {
+		catalog = nil
+	}
+	p.catalogPath = ""
+	p.Templates = catalog
+	targets := make(map[prewarmKey]int, len(b.targets))
+	for key, count := range b.targets {
+		image, err := p.ResolveImage(key.image)
+		if err != nil || !p.allowsImage(image) {
+			continue
+		}
+		key.image = image
+		targets[key] += count
+	}
+	return targets
+}
+
+func (b *PolicyBackend) trimPrewarm(ctx context.Context, targets map[prewarmKey]int, retry func(string)) {
+	b.mu.Lock()
+	keys := slices.Collect(maps.Keys(b.ready))
+	b.mu.Unlock()
+	for _, key := range keys {
+		ids := b.readyIDs(key)
+		for _, id := range ids[min(len(ids), targets[key]):] {
+			cleanup, cancel := context.WithTimeout(ctx, BackendCallTimeout)
+			b.discardReady(cleanup, key, id, retry)
+			cancel()
+		}
+	}
+}
+
 func (b *PolicyBackend) maintainPrewarm(ctx context.Context, owner string, retry func(string)) {
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
-	defer func() {
-		for key := range b.targets {
-			for _, id := range b.readyIDs(key) {
-				cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), BackendCallTimeout)
-				b.discardReady(cleanup, key, id, retry)
-				cancel()
-			}
-		}
-	}()
+	defer b.trimPrewarm(context.WithoutCancel(ctx), nil, retry)
 	for {
-		for key, count := range b.targets {
-			if !b.policy.allowsImage(key.image) {
-				for _, id := range b.readyIDs(key) {
-					b.discardReady(ctx, key, id, retry)
-				}
-				continue
-			}
+		targets := b.desiredPrewarm()
+		b.trimPrewarm(ctx, targets, retry)
+		for key, count := range targets {
 			for _, id := range b.readyIDs(key) {
 				probe, cancel := backendCtx(ctx)
 				live, err := b.Liveness(probe, id)

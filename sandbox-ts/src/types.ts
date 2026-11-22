@@ -76,6 +76,7 @@ export interface CreateSandboxRequest {
 export interface UpdateSandboxRequest { timeout_seconds?: number; extend_seconds?: number }
 
 export interface ExecuteRequest {
+  output_tail?: boolean;
   command: readonly string[];
   idempotency_key?: string;
   timeout_seconds?: number;

@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 import argparse
 import contextlib
+import datetime
 import hashlib
 import json
 import os
 import pathlib
+import shutil
 import socket
 import subprocess
 import tempfile
@@ -95,11 +97,23 @@ def run(tmp, evidence, record):
                 time.sleep(0.1)
         else:
             raise RuntimeError("sandboxd did not start")
-        def connect(workspace=work, extra=(), endpoint=domain):
+
+        def connect(workspace=work, extra=(), endpoint=domain, ttl=90):
             proc = subprocess.Popen(
-                [tmp / "client", tmp / "sandboxctl", "mcp", "--workspace", workspace,
-                 "--image", IMAGE, "--sandbox-ttl", "90", *extra],
-                text=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                [
+                    tmp / "client",
+                    tmp / "sandboxctl",
+                    "mcp",
+                    "--workspace",
+                    workspace,
+                    "--image",
+                    IMAGE,
+                    *(["--sandbox-ttl", str(ttl)] if ttl else []),
+                    *extra,
+                ],
+                text=True,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
                 env={**env, "SANDBOX_DOMAIN": endpoint},
             )
             stack.callback(proc.wait)
@@ -111,7 +125,14 @@ def run(tmp, evidence, record):
             proc.stdin.close()
             assert proc.wait(timeout=10) == 0
 
-        proc, tools = connect()
+        for missing_args in (["--image", IMAGE], ["--workspace", str(work)]):
+            invalid = subprocess.run(
+                [tmp / "sandboxctl", "mcp", *missing_args],
+                capture_output=True,
+                timeout=10,
+            )
+            assert invalid.returncode == 2 and not invalid.stdout
+        proc, tools = connect(ttl=None)
         record["tools"] = [tool["name"] for tool in tools]
         assert len(tools) == 8
         for tool in tools:
@@ -127,6 +148,11 @@ def run(tmp, evidence, record):
                 {"request": compact(request), "response": compact(response)}
             )
             assert bool(response.get("isError")) == error, (name, response)
+            if error:
+                fault = response["structuredContent"]
+                assert (
+                    fault["code"] and fault["message"] in response["content"][0]["text"]
+                )
             return (
                 response["content"][0]["text"]
                 if error
@@ -136,7 +162,14 @@ def run(tmp, evidence, record):
         assert "policy_denied" in call("create_sandbox", error=True, network="bridge")
         created = call("create_sandbox")
         sb = created["sandbox_id"]
-        assert created["network"] == "none" and isinstance(created["protected"], bool)
+        assert created["network"] == "none" and created["protected"]
+        info = get(domain + "/v1/sandboxes/" + sb)
+        assert info["image"] == IMAGE and info["timeout_seconds"] == 1800
+        record["creation_defaults"] = {
+            "ttl_seconds": info["timeout_seconds"],
+            "image": info["image"],
+            "network": info["network"],
+        }
 
         def tool(name, **args):
             return call(name, sandbox_id=sb, **args)
@@ -163,22 +196,33 @@ def run(tmp, evidence, record):
         before = get(domain + "/v1/sandboxes/" + sb)["expires_at"]
         other = tmp / "other-workspace"
         other.mkdir()
-        for workspace,extra in ((other, ()), (work, ("--allow-network", "bridge")),
-                                (work, ("--image", "another-image"))):
-            proc,_ = connect(workspace, extra)
+        for workspace, extra in (
+            (other, ()),
+            (work, ("--allow-network", "bridge")),
+            (work, ("--image", "another-image")),
+        ):
+            proc, _ = connect(workspace, extra)
             msg = call("sync_workspace", error=True, sandbox_id=sb)
             assert "sandbox_not_running" in msg, msg
+            if "--allow-network" in extra:
+                bridge = call("create_sandbox", network="bridge")
+                assert bridge["network"] == "bridge"
+                call("destroy_sandbox", sandbox_id=bridge["sandbox_id"])
             disconnect(proc)
         assert get(domain + "/v1/sandboxes/" + sb)["expires_at"] == before
-        proc,_ = connect(work, endpoint=domain + "/")
+        proc, _ = connect(work, endpoint=domain + "/")
         resumed = tool("sync_workspace")
         assert resumed["uploaded"] == 0
-        record["reconnection"] = {"sandbox_id": sb, "unchanged_uploaded": 0,
-                                  "workspace_image_network_mismatches_rejected": True}
+        record["reconnection"] = {
+            "sandbox_id": sb,
+            "unchanged_uploaded": 0,
+            "workspace_image_network_mismatches_rejected": True,
+        }
         source.write_text(correct)
         assert tool("sync_workspace")["uploaded"] == 1
         passed = tool("run_command", command=cmd)
         assert passed["exit_code"] == 0 and "1 passed" in passed["stdout"], passed
+        archive_limit_cases(work, sb, call, tool, record)
         (pkg / "remove me").unlink()
         assert tool("sync_workspace")["deleted"] == 1
         gone = tool(
@@ -193,7 +237,38 @@ def run(tmp, evidence, record):
         assert gone["exit_code"] == 0, gone
         assert tool("write_file", path="/tmp/note", content="hello")["type"] == "file"
         assert tool("read_file", path="/tmp/note")["content"] == "hello"
+        manifest = pathlib.Path.home() / ".cache/tiny-sandbox/mcp" / (sb + ".json")
+        manifest.write_text("{interrupted")
         assert tool("sync_workspace", reset=True)["uploaded"] == initial["uploaded"] - 1
+        mixed = tool(
+            "run_command",
+            command=["python3", "-c", "print('a'*65535+'界'+'b'*2000,end='')"],
+        )
+        unicode_page = tool(
+            "get_execution", execution_id=mixed["execution_id"], offset=0
+        )
+        remaining = tool(
+            "get_execution",
+            execution_id=mixed["execution_id"],
+            offset=unicode_page["next_offset"],
+        )
+        assert len(unicode_page["stdout"].encode()) <= 65536
+        assert (
+            unicode_page["stdout"] + remaining["stdout"]
+            == "a" * 65535 + "界" + "b" * 2000
+        )
+        binary = tool(
+            "run_command",
+            command=[
+                "python3",
+                "-c",
+                "open('/tmp/mcp-binary','wb').write(bytes([255]))",
+            ],
+        )
+        assert binary["exit_code"] == 0
+        assert "payload_too_large" in call(
+            "read_file", error=True, sandbox_id=sb, path="/tmp/mcp-binary"
+        )
         large = tool(
             "run_command", command=["python3", "-c", "print('a' * 70000 + 'THE END')"]
         )
@@ -209,6 +284,32 @@ def run(tmp, evidence, record):
             offset=first["next_offset"],
         )
         assert first["stdout"] + last["stdout"] == "a" * 70000 + "THE END\n"
+        for stream in ("stdout", "stderr"):
+            end_marker = "終わり-" + stream
+            oversized = tool(
+                "run_command",
+                command=[
+                    "python3",
+                    "-c",
+                    "import sys; sys."
+                    + stream
+                    + ".write('x'*1200000 + "
+                    + repr(end_marker)
+                    + ")",
+                ],
+            )
+            assert oversized["exit_code"] == 0 and oversized["output_truncated"]
+            assert oversized[stream].endswith(end_marker), (
+                stream,
+                oversized[stream][-30:],
+            )
+            assert len(oversized[stream].encode()) <= 65536
+            observed = tool("get_execution", execution_id=oversized["execution_id"])
+            assert observed[stream] == oversized[stream]
+        record["true_output_tail"] = {
+            "bytes_per_stream": 1200000,
+            "terminal_markers": ["stdout", "stderr"],
+        }
         started = time.monotonic()
         live = tool("run_command", command=["sh", "-c", "echo started; exec sleep 85"])
         assert live["state"] == "running" and time.monotonic() - started < 70, live
@@ -244,21 +345,209 @@ def run(tmp, evidence, record):
             "manifest_exists": manifest.exists(),
         }
         assert (
-            sb not in record["cleanup"]["active_ids"]
+            all(row["id"] != sb for row in records)
             and not containers
             and not manifest.exists()
         )
         assert not manifest.with_suffix(".owner").exists()
+        disconnect(proc)
+        fixtures = (
+            (
+                "github.com/google/jsonschema-go",
+                "v0.4.3",
+                "8c4ab4f02ef64dcea5502e47a6113e8292944087",
+            ),
+            (
+                "github.com/modelcontextprotocol/go-sdk",
+                "v1.8.0",
+                "eeddd84db4054984ba4d2d2504851a5001182d53",
+            ),
+        )
+        for module, version, revision in fixtures:
+            repo = tmp / module.rsplit("/", 1)[1]
+            shell("git", "init", "-q", str(repo))
+            shell(
+                "git",
+                "-C",
+                str(repo),
+                "fetch",
+                "-q",
+                "--depth=1",
+                "https://" + module + ".git",
+                revision,
+            )
+            shell("git", "-C", str(repo), "checkout", "-q", "--detach", "FETCH_HEAD")
+            commit = shell(
+                "git",
+                "-C",
+                str(repo),
+                "rev-parse",
+                "HEAD",
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            proc, _ = connect(repo)
+            sid = call("create_sandbox")["sandbox_id"]
+            upload = call("sync_workspace", sandbox_id=sid)
+            unchanged = call("sync_workspace", sandbox_id=sid)
+            checksum = hashlib.sha256((repo / "go.mod").read_bytes()).hexdigest()
+            check = call("run_command", sandbox_id=sid, command=["sha256sum", "go.mod"])
+            assert check["exit_code"] == 0 and check["stdout"].split()[0] == checksum
+            assert upload["uploaded"] > 20 and unchanged["uploaded"] == 0
+            record.setdefault("upstream_sync", []).append(
+                {
+                    "repository": module,
+                    "version": version,
+                    "commit": commit,
+                    "upload": upload,
+                    "go_mod_sha256": checksum,
+                }
+            )
+            call("destroy_sandbox", sandbox_id=sid)
+            disconnect(proc)
+        proc, _ = connect()
         stale = call("create_sandbox")["sandbox_id"]
         call("sync_workspace", sandbox_id=stale)
-        with urllib.request.urlopen(urllib.request.Request(domain + "/v1/sandboxes/" + stale,method="DELETE")) as response:
+        with urllib.request.urlopen(
+            urllib.request.Request(domain + "/v1/sandboxes/" + stale, method="DELETE")
+        ) as response:
             assert response.status == 200
-        assert "sandbox_not_running" in call("sync_workspace", sandbox_id=stale, error=True)
-        assert not (manifest.parent/(stale + ".owner")).exists()
-        assert not (manifest.parent/(stale + ".json")).exists()
+        assert "sandbox_not_running" in call(
+            "sync_workspace", sandbox_id=stale, error=True
+        )
+        assert not (manifest.parent / (stale + ".owner")).exists()
+        assert not (manifest.parent / (stale + ".json")).exists()
+        disconnect(proc)
+        proc, _ = connect(ttl=5)
+        ttl_sandbox = call("create_sandbox")
+        ttl_id = ttl_sandbox["sandbox_id"]
+        original_deadline = datetime.datetime.fromisoformat(
+            ttl_sandbox["expires_at"].removesuffix("Z")[:26] + "+00:00"
+        ).timestamp()
+        time.sleep(2.1)
+        call(
+            "write_file",
+            sandbox_id=ttl_id,
+            path="/tmp/renewal-evidence",
+            content="alive",
+        )
+        new_deadline = get(domain + "/v1/sandboxes/" + ttl_id)["expires_at"]
+        time.sleep(max(0, original_deadline - time.time() + 0.25))
+        assert get(domain + "/v1/sandboxes/" + ttl_id)["state"] == "running"
+        assert (
+            call("read_file", sandbox_id=ttl_id, path="/tmp/renewal-evidence")[
+                "content"
+            ]
+            == "alive"
+        )
+        record["survived_original_deadline"] = {
+            "initial": ttl_sandbox["expires_at"],
+            "renewed": new_deadline,
+        }
+        call("destroy_sandbox", sandbox_id=ttl_id)
+        disconnect(proc)
+        proc, _ = connect()
+        offline_id = call("create_sandbox")["sandbox_id"]
+        with urllib.request.urlopen(
+            urllib.request.Request(
+                domain + "/v1/sandboxes/" + offline_id, method="DELETE"
+            )
+        ) as response:
+            assert response.status == 200
         daemon.terminate()
         daemon.wait(timeout=15)
-        assert "daemon_unreachable" in call("create_sandbox", error=True)
+        inputs = {
+            "sync_workspace": {},
+            "read_file": {"path": "/tmp/a"},
+            "write_file": {"path": "/tmp/a", "content": "x"},
+            "run_command": {"command": ["true"]},
+            "get_execution": {"execution_id": "exe_missing"},
+            "cancel_execution": {"execution_id": "exe_missing"},
+            "destroy_sandbox": {},
+        }
+        for name, payload in inputs.items():
+            msg = call(name, error=True, sandbox_id=offline_id, **payload)
+            assert "daemon_unreachable" in msg and "sandboxctl doctor" in msg, (
+                name,
+                msg,
+            )
+        msg = call("create_sandbox", error=True)
+        assert "daemon_unreachable" in msg and "sandboxctl doctor" in msg
+        (manifest.parent / (offline_id + ".owner")).unlink(missing_ok=True)
+        policy = tmp / "bridge-only.json"
+        policy.write_text(
+            json.dumps(
+                {
+                    "max_sandboxes": 2,
+                    "total_memory_mb": 2048,
+                    "total_pids": 2048,
+                    "total_nano_cpus": 2000000000,
+                    "allowed_images": [IMAGE],
+                    "allowed_networks": ["bridge"],
+                }
+            )
+        )
+        replacement = subprocess.Popen(
+            [tmp / "sandboxd", "-addr", addr, "-owner", owner, "-policy", policy],
+            env=env,
+            stdout=log,
+            stderr=log,
+        )
+        stack.callback(replacement.wait)
+        stack.callback(replacement.terminate)
+        for _ in range(150):
+            try:
+                with urllib.request.urlopen(domain + "/healthz", timeout=0.5):
+                    break
+            except OSError:
+                time.sleep(0.1)
+        msg = call("create_sandbox", error=True)
+        assert "invalid_request" in msg and "network none" in msg, msg
+        assert not get(domain + "/v1/sandboxes")["sandboxes"]
+        record["offline_policy_denial"] = msg
+
+
+def archive_limit_cases(work, sid, call, tool, record):
+    limits = work / "limits"
+    limits.mkdir()
+    oversized = limits / "payload"
+    batch = limits / "batch"
+    batch.mkdir()
+    try:
+        (work / "sandbox-python/remove me").unlink()
+        with oversized.open("wb") as f:
+            f.truncate((16 << 20) + 1)
+        msg = call("sync_workspace", error=True, sandbox_id=sid)
+        assert "payload_too_large" in msg and "16 MiB" in msg, msg
+        assert (
+            tool("run_command", command=["test", "-f", "sandbox-python/remove me"])[
+                "exit_code"
+            ]
+            == 0
+        )
+        oversized.unlink()
+        for n in range(4097):
+            (batch / str(n)).touch()
+        msg = call("sync_workspace", error=True, sandbox_id=sid)
+        assert "payload_too_large" in msg and "4096" in msg, msg
+        assert (
+            tool("run_command", command=["test", "!", "-e", "limits"])["exit_code"] == 0
+        )
+        (work / "sandbox-python/remove me").write_text("old")
+        shutil.rmtree(batch)
+        batch.mkdir()
+        for n in range(108):
+            (batch / f"item {n}").touch()
+        assert tool("sync_workspace")["uploaded"] == 108
+        shutil.rmtree(batch)
+        assert tool("sync_workspace")["deleted"] == 108
+        record["archive_limits"] = {
+            "extracted_bytes_rejected": (16 << 20) + 1,
+            "members_rejected": 4097,
+            "deleted_in_batches": 108,
+        }
+    finally:
+        shutil.rmtree(limits)
 
 
 def main():

@@ -317,7 +317,13 @@ paths:
         and requests container removal. Unconfirmed runtime removal returns 502
         backend_error while scheduling background retries; repeated deletes keep
         reporting 502 until removal is confirmed, then return 200 with the stored
-        killed record.
+        killed record. With purge=true, wait for execution settlement and
+        discard the record and its retained executions after confirmed removal.
+      parameters:
+        - in: query
+          name: purge
+          schema: {type: boolean, default: false}
+          description: Requires sandbox.purge.v1. Later lookups return 404.
       responses:
         '200':
           description: The sandbox, in state killed.
@@ -1228,13 +1234,17 @@ components:
       type: object
       required: [command]
       properties:
+        output_tail:
+          type: boolean
+          default: false
+          description: Retain newest output events within the existing limits. Requires execution.output-tail.v1 and participates in idempotency.
         timeout_ms:
           type: integer
           minimum: 0
           maximum: 9223372036854
           description: >-
             Managed execution deadline, requiring e2b.background.v1 capability
-            and Linux Python 3 in the image. Mutually exclusive with
+            and a guest agent or Linux Python 3 for the legacy supervisor. Mutually exclusive with
             timeout_seconds and nonempty stdin. Zero disables the deadline.
             Unlike timeout_seconds, this is part of the idempotency identity
             and expiry uses immediate group kill. Check capabilities first.

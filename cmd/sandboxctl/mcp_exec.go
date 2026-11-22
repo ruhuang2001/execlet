@@ -21,11 +21,12 @@ func (s *sandboxTools) runTool(ctx context.Context, in runInput) (toolOutput, er
 			return toolOutput{}, err
 		}
 	}
-	ex, err := s.client.StartExecution(ctx, in.SandboxID, sandbox.ExecuteRequest{Command: in.Command, Cwd: cwd, TimeoutSeconds: in.Timeout, IdempotencyKey: in.Key})
+	deadline := time.Now().Add(60 * time.Second)
+	ex, err := s.client.StartExecution(ctx, in.SandboxID, sandbox.ExecuteRequest{OutputTail: true, Command: in.Command, Cwd: cwd, TimeoutSeconds: in.Timeout, IdempotencyKey: in.Key})
 	if err != nil {
 		return toolOutput{}, err
 	}
-	wait, cancel := context.WithTimeout(ctx, 60*time.Second)
+	wait, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
 	tick := time.NewTicker(200 * time.Millisecond)
 	defer tick.Stop()
@@ -52,7 +53,7 @@ func (s *sandboxTools) runTool(ctx context.Context, in runInput) (toolOutput, er
 
 func (s *sandboxTools) getTool(ctx context.Context, in getInput) (toolOutput, error) {
 	if in.Offset != nil && *in.Offset < 0 {
-		return toolOutput{}, errors.New("invalid_request: offset must be non-negative")
+		return toolOutput{}, toolError("invalid_request", "offset must be non-negative")
 	}
 	ex, err := s.client.GetExecution(ctx, in.SandboxID, in.ExecutionID)
 	if err != nil {
@@ -86,7 +87,16 @@ func executionResult(ex *sandbox.Execution, offset *int) toolOutput {
 	next := length
 	if offset != nil {
 		start = min(*offset, length)
-		end = start + min(length-start, mcpPage)
+		end = length
+		if length-start > mcpPage {
+			end = start + mcpPage
+			for _, stream := range []string{ex.Stdout, ex.Stderr} {
+				if end < len(stream) && !utf8.RuneStart(stream[end]) {
+					end = start + mcpPage - (utf8.UTFMax - 1)
+					break
+				}
+			}
+		}
 		next = end
 		truncated = end < length
 	} else if truncated {

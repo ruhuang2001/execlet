@@ -228,6 +228,8 @@ class SandboxAPI(Transport, ABC):
         required = []
         if keyed_request.env or keyed_request.cwd:
             required.append("execution.env-cwd.v1")
+        if keyed_request.output_tail:
+            required.append("execution.output-tail.v1")
         if keyed_request.stdin:
             required.append("execution.stdin.v1")
         if keyed_request.timeout_ms is not None:

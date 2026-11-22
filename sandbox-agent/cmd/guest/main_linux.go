@@ -135,7 +135,14 @@ func (s *server) handle(c net.Conn) {
 		case 'S':
 			value, err = stat(req.Path)
 		case 'L':
-			value, err = list(req.Path, req.After, req.Limit)
+			entries, listErr := list(req.Path, req.After, req.Limit)
+			if listErr == nil && req.Op == "frames" {
+				if writeListFrames(c, entries, false) != nil {
+					return
+				}
+				continue
+			}
+			value, err = entries, listErr
 		case 'C', 'K', 'P':
 			value, err = s.dispatch(kind, req)
 		default:
@@ -152,7 +159,7 @@ func (s *server) handle(c net.Conn) {
 			if protocol.Write(c, 'e', reply) != nil {
 				return
 			}
-		} else if protocol.Write(c, kind+32, value) != nil {
+		} else if protocol.Write(c, protocol.ResponseType(kind), value) != nil {
 			return
 		}
 	}

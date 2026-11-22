@@ -153,7 +153,7 @@ func (s *sandboxTools) add[In interface{ sandboxID() string }](server *mcp.Serve
 	mcp.AddTool(server, &mcp.Tool{Name: name, Description: description}, func(ctx context.Context, _ *mcp.CallToolRequest, in In) (*mcp.CallToolResult, any, error) {
 		id := in.sandboxID()
 		if !filepath.IsLocal(id) || id == "." || filepath.Base(id) != id || strings.ContainsAny(id, "/\\") {
-			return respond(toolOutput{}, errors.New("invalid_request: invalid sandbox ID"))
+			return respond(toolOutput{}, toolError("invalid_request", "invalid sandbox ID"))
 		}
 		receipt, err := s.openReceipt(ctx, id)
 		if err != nil {
@@ -161,6 +161,9 @@ func (s *sandboxTools) add[In interface{ sandboxID() string }](server *mcp.Serve
 		}
 		defer func() { _ = receipt.Close() }()
 		if err := s.renew(ctx, id); err != nil {
+			if name == "destroy_sandbox" && errors.Is(err, errSandboxGone) {
+				return respond(destroyed(id), nil)
+			}
 			return respond(toolOutput{}, err)
 		}
 		if name != "sync_workspace" && name != "destroy_sandbox" {
@@ -173,32 +176,38 @@ func (s *sandboxTools) add[In interface{ sandboxID() string }](server *mcp.Serve
 	})
 }
 
+func toolError(code, message string) error { return &sandbox.Error{Code: code, Message: message} }
+
 func respond(out toolOutput, err error) (*mcp.CallToolResult, any, error) {
+	result := &mcp.CallToolResult{}
 	if err != nil {
+		code, message := "internal_error", err.Error()
 		if isConnectionRefused(err) {
-			err = fmt.Errorf("daemon_unreachable: run sandboxctl doctor: %w", err)
+			code, message = "daemon_unreachable", "run sandboxctl doctor: "+message
 		} else if sdk, ok := errors.AsType[*sandbox.Error](err); ok {
-			err = fmt.Errorf("%s: %w", sdk.Code, err)
+			code = cmp.Or(sdk.Code, code)
 		}
-		return nil, nil, err
+		result.IsError = true
+		out = toolOutput{code + ": " + message, map[string]string{"code": code, "message": message}}
 	}
-	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: out.summary}}}, out.value, nil
+	result.Content = []mcp.Content{&mcp.TextContent{Text: out.summary}}
+	return result, out.value, nil
 }
 
 func (s *sandboxTools) create(ctx context.Context, in createInput) (toolOutput, error) {
 	image := cmp.Or(in.Image, s.images[0])
 	network := cmp.Or(in.Network, "none")
 	if !slices.Contains(s.images, image) || !slices.Contains(s.networks, network) {
-		return toolOutput{}, errors.New("policy_denied: image or network is outside the MCP configuration")
+		return toolOutput{}, toolError("policy_denied", "image or network is outside the MCP configuration")
 	}
 	sb, err := s.client.CreateSandbox(ctx, sandbox.CreateSandboxRequest{Image: &image, MemoryMB: in.MemoryMB, Network: &network, TimeoutSeconds: &s.ttl})
 	if err != nil {
-		return toolOutput{}, err
+		return toolOutput{}, fmt.Errorf("create sandbox with network %s: %w", network, err)
 	}
 	if err := s.saveReceipt(sb.ID); err != nil {
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer cancel()
-		_, killErr := s.client.KillSandbox(cleanup, sb.ID)
+		_, killErr := s.client.DestroySandbox(cleanup, sb.ID)
 		return toolOutput{}, errors.Join(fmt.Errorf("cannot save ownership receipt for %s: %w", sb.ID, err), killErr)
 	}
 	return toolOutput{fmt.Sprintf("Created %s with network %s (protected=%t, expires_at=%v)", sb.ID, sb.Network, sb.Protected, sb.ExpiresAt), map[string]any{"sandbox_id": sb.ID, "network": sb.Network, "expires_at": sb.ExpiresAt, "protected": sb.Protected}}, nil
@@ -210,7 +219,7 @@ func (s *sandboxTools) readTool(ctx context.Context, in fileInput) (toolOutput, 
 		return toolOutput{}, err
 	}
 	if !utf8.Valid(data) || bytes.IndexByte(data, 0) >= 0 {
-		return toolOutput{}, errors.New("payload_too_large: binary file cannot be returned as MCP text")
+		return toolOutput{}, toolError("payload_too_large", "binary file cannot be returned as MCP text")
 	}
 	content := string(data)
 	return toolOutput{fmt.Sprintf("Read %d bytes from %s\n\n%s", len(data), in.Path, content), map[string]string{"content": content}}, nil
@@ -225,12 +234,16 @@ func (s *sandboxTools) writeTool(ctx context.Context, in writeInput) (toolOutput
 }
 
 func (s *sandboxTools) destroyTool(ctx context.Context, in sandboxInput) (toolOutput, error) {
-	sb, err := s.client.KillSandbox(ctx, in.SandboxID)
-	if err != nil {
+	_, err := s.client.DestroySandbox(ctx, in.SandboxID)
+	if err != nil && !errors.Is(err, sandbox.ErrNotFound) {
 		return toolOutput{}, err
 	}
-	if err := s.forgetReceipt(sb.ID); err != nil {
+	if err := s.forgetReceipt(in.SandboxID); err != nil {
 		return toolOutput{}, err
 	}
-	return toolOutput{"Destroyed " + sb.ID, map[string]any{"state": sb.State}}, nil
+	return destroyed(in.SandboxID), nil
+}
+
+func destroyed(id string) toolOutput {
+	return toolOutput{"Destroyed " + id, map[string]any{"state": sandbox.StateKilled}}
 }

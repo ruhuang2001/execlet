@@ -100,6 +100,7 @@ type UpdateSandboxRequest struct {
 }
 
 type ExecuteRequest struct {
+	OutputTail     bool              `json:"output_tail,omitzero"`
 	Command        []string          `json:"command"`
 	IdempotencyKey string            `json:"idempotency_key,omitempty"`
 	TimeoutSeconds *int              `json:"timeout_seconds,omitempty"`

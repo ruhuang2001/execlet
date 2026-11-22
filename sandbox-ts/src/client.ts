@@ -127,6 +127,7 @@ export class Client {
     };
     const required = [];
     if ((keyed.env && Object.keys(keyed.env).length) || keyed.cwd) required.push('execution.env-cwd.v1');
+    if (keyed.output_tail) required.push('execution.output-tail.v1');
     if (keyed.stdin) required.push('execution.stdin.v1');
     if (keyed.timeout_ms !== undefined) required.push('e2b.background.v1');
     await this.requireCapabilities(required, options);

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -69,23 +70,19 @@ func guestArchive(arch string) ([]byte, error) {
 	data, _ := archiveCache.LoadOrStore(arch, buf.Bytes())
 	return data.([]byte), nil
 }
-func (b *Backend) deliverGuest(ctx context.Context, id string) error {
-	c, err := b.api.ContainerInspect(ctx, id)
-	if err != nil {
-		return err
+func (b *Backend) guestImage(ctx context.Context, cfg *dockerapi.ContainerConfig) ([]byte, error) {
+	if b.guestMode != "auto" {
+		return nil, nil
 	}
-	if c.Image == "" {
-		return errors.New("missing container image identity")
+	info, err := b.api.ImageInspect(ctx, cfg.Image)
+	if info.ID != "" {
+		cfg.Image = info.ID
 	}
-	image, err := b.api.ImageInspect(ctx, c.Image)
-	if err != nil {
-		return err
+	if err == nil && info.Architecture != "" {
+		return guestArchive(info.Architecture)
 	}
-	archive, err := guestArchive(image.Architecture)
-	if err != nil {
-		return err
-	}
-	return b.api.ArchivePut(ctx, id, "/", archive)
+	archive, archiveErr := guestArchive(runtime.GOARCH)
+	return archive, errors.Join(fmt.Errorf("image architecture unavailable; staged host architecture %s", runtime.GOARCH), err, archiveErr)
 }
 func (b *Backend) startGuest(ctx context.Context, id string, spec daemon.ContainerSpec) error {
 	raw, err := b.captureAs(ctx, id, "", []string{protocol.Binary, "identity"})
@@ -118,8 +115,28 @@ func (b *Backend) startGuest(ctx context.Context, id string, spec daemon.Contain
 				g.close()
 				return errors.New("incompatible guest protocol")
 			}
+			for _, check := range []struct {
+				path string
+				mode int64
+				typ  daemon.FileType
+			}{
+				{PidDir, 0o700, daemon.FileTypeDir}, {protocol.Socket, 0o600, daemon.FileTypeOther},
+			} {
+				var entry daemon.FileEntry
+				if err := g.call(ctx, 'S', protocol.Request{Path: check.path}, &entry); err != nil {
+					g.close()
+					return err
+				}
+				if entry.Mode != check.mode || entry.UID != 0 || entry.GID != 0 || entry.Type != check.typ {
+					g.close()
+					return fmt.Errorf("unexpected guest control permissions on %s", check.path)
+				}
+			}
 			b.guests.Store(id, g)
 			return nil
+		}
+		if daemon.CodeOf(err) == daemon.CodeInvalidState {
+			return err
 		}
 		select {
 		case <-ctx.Done():
@@ -161,7 +178,17 @@ func (g *guestSession) call(ctx context.Context, kind byte, req protocol.Request
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	if g.stream == nil {
+	if g.stream != nil {
+		state, err := g.b.api.ContainerInspect(ctx, g.id)
+		if err != nil {
+			return err
+		}
+		if state.State.Paused {
+			return &daemon.Error{Code: daemon.CodeInvalidState, Message: "sandbox is paused"}
+		}
+	}
+	opening := g.stream == nil
+	if opening {
 		attachCtx, stop := context.WithCancel(context.WithoutCancel(ctx))
 		handshake := context.AfterFunc(ctx, stop)
 		stream, err := g.b.api.ExecAttach(attachCtx, g.id, dockerapi.ExecConfig{User: "0:0", Cmd: []string{protocol.Binary, "connect"}}, false)
@@ -183,38 +210,64 @@ func (g *guestSession) call(ctx context.Context, kind byte, req protocol.Request
 	}
 	stream := g.stream
 	stop := context.AfterFunc(ctx, func() { _ = stream.Close() })
-	var data []byte
-	var reply byte
-	err := protocol.Write(stream, kind, req)
+	var err error
+	if opening && kind != 'H' {
+		var hello protocol.Result
+		if err = protocol.Write(stream, 'H', protocol.Request{}); err == nil {
+			err = readGuestReply(stream, 'H', protocol.Request{}, &hello)
+		}
+		if err == nil && hello.Version != protocol.Version {
+			err = errors.New("incompatible guest protocol")
+		}
+	}
 	if err == nil {
-		reply, data, err = protocol.Read(stream)
+		err = protocol.Write(stream, kind, req)
+	}
+	if err == nil {
+		err = readGuestReply(stream, kind, req, out)
 	}
 	if !stop() {
 		err = ctx.Err()
 	}
-	if err != nil {
+	if _, applicationError := errors.AsType[*daemon.Error](err); err != nil && !applicationError {
 		_ = stream.Close()
 		g.stream = nil
-		if errors.Is(err, context.DeadlineExceeded) {
-			check, stop := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
-			defer stop()
-			if live, e := g.b.Liveness(check, g.id); e == nil && live == daemon.LivenessPaused {
-				return &daemon.Error{Code: daemon.CodeInvalidState, Message: "sandbox is paused"}
-			}
-		}
-		return err
 	}
-	if reply == 'e' {
-		var failure protocol.Error
-		if err = json.Unmarshal(data, &failure); err != nil {
+	return err
+}
+
+func readGuestReply(stream io.Reader, kind byte, req protocol.Request, out any) error {
+	for {
+		reply, data, err := protocol.Read(stream)
+		if err != nil {
 			return err
 		}
-		return &daemon.Error{Code: daemon.Code(failure.Code), Message: failure.Message}
+		if reply == 'e' {
+			var failure protocol.Error
+			if err := json.Unmarshal(data, &failure); err != nil {
+				return err
+			}
+			return &daemon.Error{Code: daemon.Code(failure.Code), Message: failure.Message}
+		}
+		if reply != protocol.ResponseType(kind) && (kind != 'K' || reply != 'k') {
+			return errors.New("unexpected guest response")
+		}
+		if kind != 'L' || req.Op != "frames" || len(data) == 0 || data[0] != '{' {
+			return json.Unmarshal(data, out)
+		}
+		var page protocol.ListPage[daemon.FileEntry]
+		if err := json.Unmarshal(data, &page); err != nil {
+			return err
+		}
+		entries := out.(*[]daemon.FileEntry)
+		if len(*entries)+len(page.Entries) > req.Limit+1 || page.More && len(page.Entries) == 0 {
+			return errors.New("invalid guest list page")
+		}
+		*entries = append(*entries, page.Entries...)
+		if !page.More {
+			return nil
+		}
 	}
-	if reply != kind+32 {
-		return errors.New("unexpected guest response")
-	}
-	return json.Unmarshal(data, out)
 }
 
 type guestStream struct {
@@ -235,11 +288,27 @@ func (b *Backend) StatFile(ctx context.Context, id, path string) (daemon.FileEnt
 	return b.statWrittenFile(ctx, id, path)
 }
 func (b *Backend) guestList(ctx context.Context, g *guestSession, path, after string, limit int) ([]daemon.FileEntry, error) {
-	var entries []daemon.FileEntry
-	err := g.call(ctx, 'L', protocol.Request{Path: path, After: after, Limit: limit}, &entries)
+	entries := []daemon.FileEntry{}
+	err := g.call(ctx, 'L', protocol.Request{Op: "frames", Path: path, After: after, Limit: limit}, &entries)
 	return entries, err
 }
 
-func (b *Backend) RestoreGuest(id string, protected bool, rt string) {
+func (b *Backend) effectiveRuntime(ctx context.Context, id, requested string) (string, error) {
+	if requested != "" {
+		return requested, nil
+	}
+	container, err := b.api.ContainerInspect(ctx, id)
+	if err != nil {
+		return "", fmt.Errorf("inspect Docker-selected runtime: %w", err)
+	}
+	return container.HostConfig.Runtime, nil
+}
+
+func (b *Backend) RestoreGuest(ctx context.Context, id string, protected bool, requested string) error {
+	rt, err := b.effectiveRuntime(ctx, id, requested)
+	if err != nil {
+		return err
+	}
 	b.guests.Store(id, &guestSession{b: b, id: id, runtime: rt, protected: protected, lock: make(chan struct{}, 1)})
+	return nil
 }

@@ -39,6 +39,7 @@ type storedSandbox struct {
 	Executions   []string          `json:"executions"`
 }
 type storedExecution struct {
+	OutputTail  bool      `json:"output_tail,omitzero"`
 	Version     int       `json:"version"`
 	Execution   Execution `json:"execution"`
 	Key         string    `json:"key"`
@@ -236,7 +237,7 @@ func (s *Sandboxes) saveExecution(ex *execution, snapshot Execution, events []Ev
 		return nil
 	}
 	snapshot.Stdout, snapshot.Stderr = "", ""
-	return s.journal.write(ex.sandboxID+"-"+ex.id+".json", storedExecution{1, snapshot, ex.key, ex.envDigest, ex.envCount, ex.stdinDigest, ex.timeoutMS, events, ex.outputLost})
+	return s.journal.write(ex.sandboxID+"-"+ex.id+".json", storedExecution{Version: 1, Execution: snapshot, Key: ex.key, EnvDigest: ex.envDigest, EnvCount: ex.envCount, StdinDigest: ex.stdinDigest, TimeoutMS: ex.timeoutMS, Events: events, OutputLost: ex.outputLost, OutputTail: ex.log.keepTail})
 }
 
 func (s *Sandboxes) Recover(ctx context.Context, j *Journal, backend RecoveryBackend) error {
@@ -262,11 +263,6 @@ func (s *Sandboxes) Recover(ctx context.Context, j *Journal, backend RecoveryBac
 			}
 			if len(value.Events) > MaxOutputEvents+2 {
 				return errors.New("excess recovery events")
-			}
-			for i, ev := range value.Events {
-				if ev.ID != uint64(i+1) || len(ev.Data) > MaxEventDataBytes {
-					return errors.New("invalid recovery cursor")
-				}
 			}
 			executions[ex.SandboxID] = append(executions[ex.SandboxID], value)
 		} else {
@@ -345,6 +341,7 @@ func (s *Sandboxes) Recover(ctx context.Context, j *Journal, backend RecoveryBac
 			ex.persist = func(snapshot Execution, events []Event) error { return s.saveExecution(ex, snapshot, events) }
 			ex.forget = func() error { return s.forgetExecution(sb, ex) }
 			ex.outputLost = item.OutputLost || v.State == ExecRunning
+			ex.log.keepTail = item.OutputTail
 			ex.log.truncated = v.OutputTruncated
 			for _, ev := range item.Events {
 				ex.log.events = append(ex.log.events, ev)
@@ -397,8 +394,12 @@ func (s *Sandboxes) Recover(ctx context.Context, j *Journal, backend RecoveryBac
 			}
 		}
 		if !unsafe && sb.agentMode == "guest" {
-			if restorer, ok := backend.(interface{ RestoreGuest(string, bool, string) }); ok {
-				restorer.RestoreGuest(sb.container, sb.protected, sb.opts.runtime)
+			if restorer, ok := backend.(interface {
+				RestoreGuest(context.Context, string, bool, string) error
+			}); ok {
+				if err := restorer.RestoreGuest(ctx, sb.container, sb.protected, sb.opts.runtime); err != nil {
+					return err
+				}
 			}
 		}
 		if !unsafe {
@@ -508,8 +509,12 @@ func validateStoredExecution(value storedExecution) error {
 		return errors.New("invalid recovered invocation")
 	}
 	bytes, completed := 0, false
+	firstID := uint64(1)
+	if value.OutputTail && len(value.Events) > 0 && value.Events[0].Type == EventTruncated && v.OutputTruncated {
+		firstID = value.Events[0].ID
+	}
 	for i, ev := range value.Events {
-		if completed || ev.ID != uint64(i+1) {
+		if completed || ev.ID == 0 || ev.ID != firstID+uint64(i) || len(ev.Data) > MaxEventDataBytes {
 			return errors.New("invalid recovered event order")
 		}
 		switch ev.Type {

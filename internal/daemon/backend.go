@@ -65,6 +65,7 @@ type ContainerSpec struct {
 }
 
 type ExecSpec struct {
+	OutputTail  bool
 	ExecutionID string
 	Command     []string
 	Env         []string

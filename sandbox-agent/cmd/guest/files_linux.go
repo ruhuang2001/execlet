@@ -83,3 +83,15 @@ func list(path, after string, limit int) ([]protocol.FileEntry, error) {
 	}
 	return entries, nil
 }
+
+func writeListFrames(w io.Writer, entries []protocol.FileEntry, more bool) error {
+	err := protocol.Write(w, 'l', protocol.ListPage[protocol.FileEntry]{Entries: entries, More: more})
+	if !errors.Is(err, protocol.ErrFrameTooLarge) || len(entries) <= 1 {
+		return err
+	}
+	mid := len(entries) / 2
+	if err := writeListFrames(w, entries[:mid], true); err != nil {
+		return err
+	}
+	return writeListFrames(w, entries[mid:], more)
+}

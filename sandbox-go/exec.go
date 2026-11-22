@@ -28,6 +28,9 @@ func (c *Client) StartExecution(ctx context.Context, sandboxID string, req Execu
 		return nil, &Error{Code: "canceled", Message: "sandbox: request canceled", Cause: ctx.Err()}
 	}
 	var required []string
+	if req.OutputTail {
+		required = append(required, "execution.output-tail.v1")
+	}
 	if req.TimeoutMS != nil {
 		req.TimeoutMS = new(*req.TimeoutMS)
 		if req.TimeoutSeconds != nil || *req.TimeoutMS < 0 || *req.TimeoutMS > 9223372036854 {

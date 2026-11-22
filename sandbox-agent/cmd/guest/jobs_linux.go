@@ -100,7 +100,7 @@ func (s *server) dispatch(kind byte, r protocol.Request) (protocol.Result, error
 	case "start", "forget":
 	case "read":
 		result.Stdout, result.Next = j.stdout.read(r.Offset)
-		result.Stderr, _ = j.stderr.read(r.ErrOffset)
+		result.Stderr, result.ErrNext = j.stderr.read(r.ErrOffset)
 	case "close", "kill", "term":
 		if !j.done {
 			var err error
@@ -134,6 +134,7 @@ func (s *server) start(r protocol.Request, terminal bool) (*job, error) {
 	cmd.Env = append(cmd.Env, r.Env...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Credential: &syscall.Credential{Uid: id.UID, Gid: id.GID, Groups: id.Groups}}
 	j := &job{}
+	j.stdout.rolling, j.stderr.rolling = r.OutputTail, r.OutputTail
 	var readDone chan struct{}
 	if terminal {
 		j.stdout.rolling = true

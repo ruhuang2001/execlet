@@ -260,7 +260,51 @@ def run(args, tmp, report):
         ), claimed
         for sid in pair:
             kill(sid)
-        pool()
+        original = pool()[0]
+        alternate = docker("image", "inspect", "--format", "{{.Id}}", args.image)
+        assert alternate != digest
+
+        def publish_templates(templates):
+            rules["templates"] = templates
+            staged = policy.with_suffix(".tmp")
+            staged.write_text(json.dumps(rules))
+            staged.replace(policy)
+
+        publish_templates({"bench": alternate, "previous": digest})
+
+        def replacement():
+            ids = ready()
+            if len(ids) != 1 or ids[0] == original or ready_count() != 1:
+                return None
+            return (
+                ids[0]
+                if docker("inspect", "--format", "{{.Image}}", ids[0]) == alternate
+                else None
+            )
+
+        switched = until(replacement)
+        sid = create("template:bench")
+        assert (
+            docker("inspect", "--format", "{{.Id}}", "tiny-sandbox-" + sid) == switched
+        )
+        command(sid)
+        kill(sid)
+        publish_templates({"previous": digest})
+        until(lambda: ready_count() == 0 and not ready())
+        server.kill()
+        server.wait(timeout=20)
+        server = start()
+        assert ready_count() == 0
+        publish_templates({"bench": digest})
+        after_restore = pool()[0]
+        report["alias_rollover"] = {
+            "old_digest_still_allowed": digest,
+            "old_ready": original,
+            "new_digest": alternate,
+            "claimed_after_switch": switched,
+            "ready_while_alias_missing_after_restart": 0,
+            "restored_ready": after_restore,
+        }
         server.terminate()
         server.wait(timeout=20)
         report["recovery"] = {

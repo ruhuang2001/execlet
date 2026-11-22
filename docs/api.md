@@ -319,6 +319,8 @@ No body. `200` Sandbox. Idempotent per the transition table.
 
 ### `DELETE /v1/sandboxes/{sandbox_id}`
 
+The optional query parameter `purge=true` requests permanent cleanup. Check for `sandbox.purge.v1` before sending it. A successful call confirms removal of the container and its local history. Subsequent listing excludes the ID and lookup returns 404. Ordinary deletion retains its history.
+
 `200` Sandbox in state `killed`, once the container is confirmed gone. Repeating deletion is idempotent and returns the stored killed record.
 
 A removal the runtime refuses is `502 backend_error` with `unconfirmed container removal: <container>`: the sandbox is killed and the removal is retried in the background, but removal is unconfirmed, so answering `200` would claim cleanup that has not happened. Repeating the delete continues to report the error until the background retry confirms removal.
@@ -594,6 +596,10 @@ cleanup with the same owner label is the fallback.
 ### `GET /v1/sandboxes/{sandbox_id}/files/stat?path=...`
 
 Return a single FileEntry for an absolute path, including the link target for a symbolic link.
+
+## Tail retention
+
+Set `output_tail: true` when starting an execution to keep the most recent output within the 1 MiB and event-count limits. Clients first check for `execution.output-tail.v1`. Reusing an idempotency key requires the same retention mode. Each eviction drops complete oldest events to preserve character boundaries. A replay from a cursor that predates the window starts with a `truncated` marker. Retained events keep their original IDs across reconnect and durable recovery. The default mode keeps the initial output up to the same limits.
 
 ## Interactive terminals
 

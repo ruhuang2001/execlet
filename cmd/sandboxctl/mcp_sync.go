@@ -93,7 +93,7 @@ func (s *sandboxTools) ignoreRules() ([]ignoreRule, error) {
 		return nil, err
 	}
 	if len(data) > 1<<20 {
-		return nil, errors.New("payload_too_large: root .gitignore exceeds 1 MiB")
+		return nil, toolError("payload_too_large", "root .gitignore exceeds 1 MiB")
 	}
 	var rules []ignoreRule
 	for line := range strings.SplitSeq(string(data), "\n") {
@@ -176,7 +176,7 @@ func (s *sandboxTools) scan(ctx context.Context, previous map[string]string, res
 	if d.uploaded != 0 {
 		if _, err := filearchive.Parse(d.archive.Bytes()); err != nil {
 			if e, ok := errors.AsType[*filearchive.Error](err); ok && e.TooLarge {
-				return nil, fmt.Errorf("payload_too_large: %w", err)
+				return nil, toolError("payload_too_large", err.Error())
 			}
 			return nil, err
 		}
@@ -198,7 +198,7 @@ func (s *sandboxTools) addWorkspaceFile(d *workspaceDelta, w *tar.Writer, name, 
 		return fmt.Errorf("workspace file changed type during sync: %s", name)
 	}
 	if info.Size() > filearchive.MaxExtractedBytes {
-		return errors.New("payload_too_large: workspace file exceeds 16 MiB extracted limit")
+		return toolError("payload_too_large", "workspace file exceeds 16 MiB extracted limit")
 	}
 	digest := sha256.New()
 	data, err := io.ReadAll(io.LimitReader(io.TeeReader(f, digest), filearchive.MaxExtractedBytes+1))
@@ -217,10 +217,10 @@ func (s *sandboxTools) addWorkspaceFile(d *workspaceDelta, w *tar.Writer, name, 
 	d.total += int64(len(data))
 	d.uploaded++
 	if d.total > filearchive.MaxExtractedBytes {
-		return errors.New("payload_too_large: changed files exceed 16 MiB extracted limit")
+		return toolError("payload_too_large", "changed files exceed 16 MiB extracted limit")
 	}
 	if d.uploaded > filearchive.MaxEntries {
-		return errors.New("payload_too_large: changed files exceed 4096 archive members")
+		return toolError("payload_too_large", "changed files exceed 4096 archive members")
 	}
 	mode := int64(0644)
 	if info.Mode()&0111 != 0 {
@@ -236,15 +236,19 @@ func (s *sandboxTools) addWorkspaceFile(d *workspaceDelta, w *tar.Writer, name, 
 		d.dirs[dir] = true
 	}
 	if d.archive.Len() > filearchive.MaxBytes {
-		return errors.New("payload_too_large: archive exceeds 32 MiB encoded limit")
+		return toolError("payload_too_large", "archive exceeds 32 MiB encoded limit")
 	}
 	return nil
 }
 
 func (s *sandboxTools) syncWorkspace(ctx context.Context, in syncInput) (toolOutput, error) {
-	previous, err := s.loadManifest(in.SandboxID)
-	if err != nil {
-		return toolOutput{}, err
+	previous := map[string]string{}
+	if !in.Reset {
+		var err error
+		previous, err = s.loadManifest(in.SandboxID)
+		if err != nil {
+			return toolOutput{}, err
+		}
 	}
 	d, err := s.scan(ctx, previous, in.Reset)
 	if err != nil {

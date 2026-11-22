@@ -19,6 +19,7 @@ type guestProcess struct {
 	done           chan struct{}
 	result         protocol.Result
 	err            error
+	lostOutput     bool
 }
 
 func (b *Backend) execGuest(ctx context.Context, g *guestSession, spec daemon.ExecSpec) (daemon.Process, error) {
@@ -26,7 +27,7 @@ func (b *Backend) execGuest(ctx context.Context, g *guestSession, spec daemon.Ex
 	if id == "" {
 		id = rand.Text()
 	}
-	req := protocol.Request{ID: id, Op: "start", Command: spec.Command, Env: spec.Env, Dir: spec.Dir, TimeoutMS: *spec.TimeoutMS}
+	req := protocol.Request{ID: id, Op: "start", OutputTail: spec.OutputTail, Command: spec.Command, Env: spec.Env, Dir: spec.Dir, TimeoutMS: *spec.TimeoutMS}
 	var result protocol.Result
 	if err := g.call(ctx, 'C', req, &result); err != nil {
 		var known *daemon.Error
@@ -65,8 +66,11 @@ func (p *guestProcess) follow() {
 		}
 		_, _ = p.stdout.Write(result.Stdout)
 		_, _ = p.stderr.Write(result.Stderr)
-		req.Offset += int64(len(result.Stdout))
-		req.ErrOffset += int64(len(result.Stderr))
+		outEnd := req.Offset + int64(len(result.Stdout))
+		errEnd := req.ErrOffset + int64(len(result.Stderr))
+		p.lostOutput = p.lostOutput || result.Next > outEnd || result.ErrNext > errEnd
+		req.Offset = max(outEnd, result.Next)
+		req.ErrOffset = max(errEnd, result.ErrNext)
 		if result.Done && len(result.Stdout) == 0 && len(result.Stderr) == 0 {
 			p.result = result
 			_ = p.g.call(context.Background(), 'C', protocol.Request{ID: p.id, Op: "forget"}, &result)
@@ -80,11 +84,12 @@ func (p *guestProcess) follow() {
 		}
 	}
 }
-func (p *guestProcess) Stdout() io.Reader { return p.stdout }
-func (p *guestProcess) Stderr() io.Reader { return p.stderr }
-func (p *guestProcess) PID() int          { return p.pid }
-func (p *guestProcess) TimedOut() bool    { <-p.done; return p.result.Reason == "timeout" }
-func (p *guestProcess) Killed() bool      { <-p.done; return p.result.Reason == "canceled" }
+func (p *guestProcess) Stdout() io.Reader     { return p.stdout }
+func (p *guestProcess) Stderr() io.Reader     { return p.stderr }
+func (p *guestProcess) OutputTruncated() bool { <-p.done; return p.lostOutput }
+func (p *guestProcess) PID() int              { return p.pid }
+func (p *guestProcess) TimedOut() bool        { <-p.done; return p.result.Reason == "timeout" }
+func (p *guestProcess) Killed() bool          { <-p.done; return p.result.Reason == "canceled" }
 func (p *guestProcess) Wait() (int, error) {
 	<-p.done
 	if p.err != nil {

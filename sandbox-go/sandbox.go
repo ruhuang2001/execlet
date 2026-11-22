@@ -59,6 +59,13 @@ func (c *Client) KillSandbox(ctx context.Context, sandboxID string) (*Sandbox, e
 	return c.sandboxOp(ctx, http.MethodDelete, sandboxID, "")
 }
 
+func (c *Client) DestroySandbox(ctx context.Context, id string) (*Sandbox, error) {
+	if err := c.RequireCapabilities(ctx, "sandbox.purge.v1"); err != nil {
+		return nil, err
+	}
+	return c.sandboxOp(ctx, http.MethodDelete, id, "?purge=true")
+}
+
 func (c *Client) sandboxOp(ctx context.Context, method, sandboxID, suffix string) (*Sandbox, error) {
 	resp, err := c.do(ctx, request{
 		method:     method,

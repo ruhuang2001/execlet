@@ -92,11 +92,14 @@ func (b *Backend) Create(ctx context.Context, spec daemon.ContainerSpec) (string
 		},
 	}
 
+	archive, deliveryErr := b.guestImage(ctx, &cfg)
 	id, err := b.api.ContainerCreate(ctx, spec.Name, cfg)
 	if err != nil && dockerapi.IsNoSuchImage(err) {
 		if pullErr := b.api.PullImage(ctx, spec.Image); pullErr != nil {
 			return "", fmt.Errorf("dockerbackend: pull %s: %w", spec.Image, pullErr)
 		}
+		cfg.Image = spec.Image
+		archive, deliveryErr = b.guestImage(ctx, &cfg)
 		id, err = b.api.ContainerCreate(ctx, spec.Name, cfg)
 	}
 	if dockerapi.IsConflict(err) && spec.Name != "" {
@@ -118,9 +121,12 @@ func (b *Backend) Create(ctx context.Context, spec daemon.ContainerSpec) (string
 		return "", createErr
 	}
 
-	var deliveryErr error
-	if b.guestMode == "auto" {
-		deliveryErr = b.deliverGuest(ctx, id)
+	spec.Runtime, err = b.effectiveRuntime(ctx, id, spec.Runtime)
+	if err != nil {
+		return id, err
+	}
+	if archive != nil {
+		deliveryErr = errors.Join(deliveryErr, b.api.ArchivePut(ctx, id, "/", archive))
 	}
 	if err := b.api.ContainerStart(ctx, id); err != nil {
 		startErr := fmt.Errorf("dockerbackend: start container: %w", err)

@@ -127,8 +127,10 @@ func (s *Sandboxes) openTerminal(ctx context.Context, sandboxID string, spec Exe
 	if err := b.OpenTerminal(ctx, sb.container, id, spec, cmp.Or(size.Rows, 24), cmp.Or(size.Cols, 80)); err != nil {
 		cleanup, stop := backendCtx(context.WithoutCancel(ctx))
 		defer stop()
-		if closeErr := b.CloseTerminal(cleanup, sb.container, id); closeErr != nil && CodeOf(closeErr) != CodeNotFound && CodeOf(err) != CodeUnavailable {
-			_ = s.terminateLocked(cleanup, sb, KillEvicted)
+		if CodeOf(err) != CodeUnavailable && CodeOf(err) != CodeInvalidState {
+			if closeErr := b.CloseTerminal(cleanup, sb.container, id); closeErr != nil && CodeOf(closeErr) != CodeNotFound {
+				_ = s.terminateLocked(cleanup, sb, KillEvicted)
+			}
 		}
 		delete(sb.terminals, id)
 		if saveErr := s.saveSandboxLocked(sb); saveErr != nil {

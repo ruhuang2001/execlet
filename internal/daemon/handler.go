@@ -169,7 +169,17 @@ func (h *Handler) updateSandbox(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) deleteSandbox(w http.ResponseWriter, r *http.Request) {
-	sb, err := h.store.Delete(r.Context(), r.PathValue("sandbox_id"))
+	op := h.store.Delete
+	if value, ok := r.URL.Query()["purge"]; ok {
+		if len(value) != 1 || (value[0] != "true" && value[0] != "false") {
+			writeError(w, http.StatusBadRequest, string(CodeInvalidRequest), "purge must be true or false")
+			return
+		}
+		if value[0] == "true" {
+			op = h.store.Destroy
+		}
+	}
+	sb, err := op(r.Context(), r.PathValue("sandbox_id"))
 	if err != nil {
 		writeDaemonError(r.Context(), w, err)
 		return

@@ -21,6 +21,7 @@ type Identity struct {
 	Home   string
 }
 type Request struct {
+	OutputTail bool `json:",omitzero"`
 	ID         string
 	Op         string
 	Path       string
@@ -37,6 +38,7 @@ type Request struct {
 	Rows, Cols uint16
 }
 type Result struct {
+	ErrNext  int64 `json:",omitzero"`
 	Version  int
 	PID      int
 	Done     bool
@@ -60,6 +62,20 @@ type FileEntry struct {
 	Group         string    `json:"group,omitempty"`
 	SymlinkTarget string    `json:"symlink_target,omitempty"`
 }
+type ListPage[T any] struct {
+	Entries []T  `json:"entries"`
+	More    bool `json:"more,omitzero"`
+}
+
+var ErrFrameTooLarge = errors.New("guest frame exceeds 1 MiB")
+
+func ResponseType(kind byte) byte {
+	if kind == 'K' {
+		return 'c'
+	}
+	return kind + 32
+}
+
 type Error struct{ Code, Message string }
 
 func (e *Error) Error() string { return e.Message }
@@ -70,7 +86,7 @@ func Write(w io.Writer, kind byte, v any) error {
 		return err
 	}
 	if len(data) > MaxFrame {
-		return errors.New("guest frame exceeds 1 MiB")
+		return ErrFrameTooLarge
 	}
 	frame := make([]byte, 5, len(data)+5)
 	frame[0] = kind
@@ -85,7 +101,7 @@ func Read(r io.Reader) (byte, []byte, error) {
 	}
 	n := binary.BigEndian.Uint32(head[1:])
 	if n > MaxFrame {
-		return 0, nil, errors.New("guest frame exceeds 1 MiB")
+		return 0, nil, ErrFrameTooLarge
 	}
 	data := make([]byte, n)
 	_, err := io.ReadFull(r, data)

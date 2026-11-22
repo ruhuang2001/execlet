@@ -151,6 +151,7 @@ class UpdateSandboxRequest(_Request):
 
 @dataclass(kw_only=True)
 class ExecuteRequest(_Request):
+    output_tail: bool | None = None
     command: list[str]
     idempotency_key: str = ""
     timeout_seconds: int | None = None

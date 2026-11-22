@@ -31,7 +31,7 @@ func (s *Sandboxes) backgroundCommands() bool {
 }
 
 func (h *Handler) capabilities(w http.ResponseWriter, _ *http.Request) {
-	flags := []string{"execution.env-cwd.v1", "files.archive.v1", "files.list.v1", "execution.stdin.v1", "execution.concurrent.v1", "sandbox.runtime.v1"}
+	flags := []string{"execution.env-cwd.v1", "files.archive.v1", "files.list.v1", "execution.stdin.v1", "execution.concurrent.v1", "sandbox.runtime.v1", "execution.output-tail.v1", "sandbox.purge.v1"}
 	if h.store.backgroundCommands() {
 		flags = append(flags, "e2b.background.v1")
 	}
@@ -92,6 +92,9 @@ func (s *Sandboxes) killManaged(ctx context.Context, sb *sandbox, ex *execution)
 	}
 	sb.mu.Unlock()
 	signaled, signalErr := managed.KillManaged()
+	if CodeOf(signalErr) == CodeInvalidState {
+		return CommandKill{}, signalErr
+	}
 	cleanup := context.WithoutCancel(ctx)
 	if signalErr == nil && s.waitDone(cleanup, ex.done, s.cancelDeadline) {
 		return CommandKill{Execution: ex.snapshot(), Signaled: signaled}, nil

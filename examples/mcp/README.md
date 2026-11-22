@@ -33,7 +33,7 @@ Try this request in a project with a failing pytest test.
 
 `sync_workspace` uploads to `/tmp/tiny-sandbox-workspace`. Commands default to that directory after the first sync. Before that they use the image working directory. Host edits drive the next sync. After Cursor restarts, use the existing sandbox ID with the same workspace, daemon, credentials and allowed images and networks. Incremental sync resumes from the saved manifest. A tool call renews the sandbox’s lifetime, which defaults to 1,800 seconds. Set `--sandbox-ttl` to change it. After a disconnect the daemon reclaims remaining sandboxes when their lifetime expires.
 
-Run `python3 scripts/e2e-mcp.py` to exercise the same stdio tools with the official client. The script checks out the real Python SDK in a temporary Git clone and introduces a deadline-conversion regression and writes the tool transcript, failing and passing test output, renewed deadlines, and cleanup evidence into `artifacts/mcp-e2e/acceptance.json`.
+Run `python3 scripts/e2e-mcp.py` to exercise the same stdio tools with the official client. The script tests a deadline-conversion regression in a temporary checkout of the Python SDK. It also fetches pinned jsonschema-go and MCP Go SDK repositories on the host and verifies their files inside an offline sandbox. Tool calls, pytest output, renewed deadlines and cleanup evidence are recorded in `artifacts/mcp-e2e/acceptance.json`.
 
 ### Amp acceptance
 

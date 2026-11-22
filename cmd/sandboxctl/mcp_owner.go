@@ -20,7 +20,9 @@ import (
 	sandbox "github.com/ruhuang2001/tiny-sandbox/sandbox-go"
 )
 
-var errUnknownSandbox = errors.New("sandbox_not_running: sandbox does not belong to this workspace and MCP configuration")
+var errSandboxGone = toolError("sandbox_not_running", "sandbox has expired or was destroyed")
+
+var errUnknownSandbox = toolError("sandbox_not_running", "sandbox does not belong to this workspace and MCP configuration")
 
 func (s *sandboxTools) ownerScope(in *invocation) (string, error) {
 	workspace, err := filepath.Abs(s.workspace.Name())
@@ -138,16 +140,22 @@ func (s *sandboxTools) renew(ctx context.Context, id string) error {
 		sb, err = s.client.GetSandbox(ctx, id)
 	}
 	if err == nil && sb.State == sandbox.StateKilled {
-		_, err = s.client.KillSandbox(ctx, id)
+		_, err = s.client.DestroySandbox(ctx, id)
 		if err == nil {
 			err = sandbox.ErrNotFound
 		}
 	}
 	if errors.Is(err, sandbox.ErrNotFound) {
-		return errors.Join(errors.New("sandbox_not_running: sandbox has expired or was destroyed"), s.forgetReceipt(id))
+		if cleanupErr := s.forgetReceipt(id); cleanupErr != nil {
+			return cleanupErr
+		}
+		return errSandboxGone
 	}
 	if err != nil {
-		return err
+		if isConnectionRefused(err) || ctx.Err() != nil {
+			return err
+		}
+		return toolError("sandbox_not_running", "cannot renew sandbox: "+err.Error())
 	}
-	return fmt.Errorf("sandbox_not_running: sandbox is %s", sb.State)
+	return toolError("sandbox_not_running", "sandbox is "+string(sb.State))
 }

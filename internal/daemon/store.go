@@ -546,6 +546,38 @@ func (s *Sandboxes) Delete(ctx context.Context, id string) (Sandbox, error) {
 	return sb.snapshot(), nil
 }
 
+func (s *Sandboxes) Destroy(ctx context.Context, id string) (Sandbox, error) {
+	sb, err := s.lookup(id)
+	if err != nil {
+		return Sandbox{}, err
+	}
+	sb.mu.Lock()
+	pending := sb.state == StatePending
+	sb.mu.Unlock()
+	if pending {
+		return Sandbox{}, errorf(CodeInvalidState, "sandbox creation is pending")
+	}
+	result, err := s.Delete(ctx, id)
+	if err != nil {
+		return result, err
+	}
+	sb.mu.Lock()
+	pendingWork := make([]<-chan struct{}, 0, len(sb.running))
+	for _, ex := range sb.running {
+		pendingWork = append(pendingWork, ex.done)
+	}
+	sb.mu.Unlock()
+	for _, done := range pendingWork {
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return result, errorf(CodeUnavailable, "sandbox cleanup is pending")
+		}
+	}
+	s.forget(sb)
+	return result, s.durableReady()
+}
+
 func (s *Sandboxes) unconfirmedRemoval(containerID string) error {
 	return &Error{
 		Code:    CodeBackendError,

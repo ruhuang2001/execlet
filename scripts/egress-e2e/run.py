@@ -1,5 +1,6 @@
 """Run a sandboxd and an authenticated HTTPS fixture on an internal Docker network."""
 
+import hashlib
 import json
 import os
 import secrets
@@ -70,6 +71,34 @@ def main():
                 ),
             ),
         )
+        wheel_source = command(
+            "docker",
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            IMAGE,
+            "python3",
+            "-c",
+            "import pathlib,ensurepip;print(next((pathlib.Path(ensurepip.__file__).parent/'_bundled').glob('pip-*.whl')))",
+        )
+        wheel = work / Path(wheel_source).name
+        with wheel.open("wb") as package:
+            subprocess.run(
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--network",
+                    "none",
+                    IMAGE,
+                    "cat",
+                    wheel_source,
+                ],
+                check=True,
+                stdout=package,
+            )
+        digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
         (work / "policy.json").write_text(json.dumps(policy))
         subnet = "11.250." + str(1 + secrets.randbelow(250))
         command(
@@ -213,6 +242,25 @@ print(json.dumps(dict(index=fetch('https://packages.fixture.test/index'),
                 )
                 == "none"
             )
+            install = """import json, pathlib, subprocess, sys, tempfile
+with tempfile.TemporaryDirectory() as tmp:
+    dest=pathlib.Path(tmp)
+    ca=dest/'fixture.pem'
+    ca.write_text(CERTIFICATE)
+    subprocess.run([sys.executable,'-m','pip','--disable-pip-version-check','--no-cache-dir','--cert',str(ca),
+        'install','--no-index','--no-deps','--target',str(dest/'site'),WHEEL_URL],stdout=sys.stderr,check=True)
+    from importlib.metadata import distributions
+    dist,=(d for d in distributions(path=[str(dest/'site')]) if d.metadata['Name']=='pip')
+    print(json.dumps({'name':dist.metadata['Name'],'version':dist.version}))
+""".replace("CERTIFICATE", repr((work / "ca.pem").read_text())).replace(
+                "WHEEL_URL",
+                repr(
+                    "https://packages.fixture.test/" + wheel.name + "#sha256=" + digest
+                ),
+            )
+            result["installed_dependency"] = execute(install)
+            assert result["installed_dependency"]["version"] == wheel.name.split("-")[1]
+            result["wheel_sha256"] = digest
             api("DELETE", "/v1/sandboxes/" + ident)
             unprivileged = api(
                 "POST", "/v1/sandboxes", {"image": "alpine:3.21", "network": "filtered"}

@@ -82,6 +82,13 @@ done
 curl -fsS "$SANDBOX_DOMAIN/healthz" >"$OUT/healthz.json" 2>&1
 check "healthz" "health endpoint answers" "$(grep -c '"status":"ok"' "$OUT/healthz.json")" "1"
 
+python3 -B "$ROOT/scripts/e2e-cli-cleanup.py" "$BIN/sandboxctl" "$SANDBOX_DOMAIN" "$OUT/cli-cleanup" >"$OUT/cli-cleanup.log" 2>&1
+check "cli-cleanup" "command outcome and cleanup diagnostics; see $OUT/cli-cleanup.log" "$?" "0"
+
+(cd "$ROOT" && go test -race -tags docker ./internal/dockerbackend -run '^TestRealCreateNameConflict$' -count=1 -v) >"$OUT/container-name-conflict.log" 2>&1
+check "container-name-conflict" "verified fixture ownership and replacement; see $OUT/container-name-conflict.log" "$?" "0"
+contains "container-name-conflict ran" "test ran without skipping" "$OUT/container-name-conflict.log" "--- PASS: TestRealCreateNameConflict"
+
 python3 "$ROOT/scripts/e2e-env/run.py" "$SANDBOX_DOMAIN" "$OUT/env-contract.json" >"$OUT/env-contract.log" 2>&1
 check "env-contract" "bounds, replay identity, secrecy and isolation; see $OUT/env-contract.log" "$?" "0"
 

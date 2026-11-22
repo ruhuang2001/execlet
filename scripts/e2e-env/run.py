@@ -29,15 +29,15 @@ def request(method, path, body=None, expected=200, timeout=15):
     return json.loads(raw)
 
 
-def completed(result):
+def completed(result, expected_exit=0, executions=None):
     deadline = time.monotonic() + 10
     while result["state"] != "completed":
         remaining = deadline - time.monotonic()
         require(remaining > 0, "execution completion deadline exceeded")
-        result = request("GET", path + "/" + result["id"], timeout=remaining)
+        result = request("GET", (executions or path) + "/" + result["id"], timeout=remaining)
         if result["state"] != "completed":
             time.sleep(min(.02, max(0, deadline - time.monotonic())))
-    require(result["exit_code"] == 0, "execution did not exit successfully")
+    require(result["exit_code"] == expected_exit, f"execution exit code differs from {expected_exit}")
     return result
 
 
@@ -60,6 +60,47 @@ def start(name, env=None, expected=201, key=None, cwd=None):
         result = completed(result)
     report["checks"].append({"name": name, "status": expected, "id": result.get("id")})
     return result
+
+
+def equals_command(image):
+    sandbox_id = request("POST", "/v1/sandboxes", {"image": image, "network": "none"}, 201)["id"]
+    executions = "/v1/sandboxes/" + sandbox_id + "/executions"
+    try:
+        def run(command, expected_exit=0, **options):
+            result = request("POST", executions, {"command": command, **options}, 201)
+            return completed(result, expected_exit, executions)
+
+        run(["/bin/ln", "-s", "/usr/local/bin/python3", "/tmp/py=probe"])
+        run(["/bin/ln", "-s", "/usr/local/bin/python3", "/tmp/-py=probe"])
+        env = {"IFS": "space*?", "SHLVL": "73", "PWD": "/logical", "MY-VAR": "example",
+               "CONFIG.KEY": "literal", "PATH": "/tmp", "PRIVATE_TEST_VALUE": "synthetic-only"}
+        probe = (
+            "import os, sys; "
+            "assert [os.environ[k] for k in ('IFS','SHLVL','PWD','MY-VAR','CONFIG.KEY')] "
+            "== ['space*?', '73', '/logical', 'example', 'literal']; "
+            "assert os.getcwd() == '/tmp'; "
+            "assert open('/proc/self/cmdline','rb').read().split(bytes([0]))[0].decode() == sys.argv[1]; "
+            "assert sys.argv[2:] == ['', 'literal $ words', 'a=b']; "
+            "assert sys.stdin.read() == 'input data'; print('ok')"
+        )
+        for executable in ("py=probe", "./py=probe", "/tmp/py=probe", "-py=probe"):
+            done = run([executable, "-c", probe, executable, "", "literal $ words", "a=b"],
+                       env=env, cwd="/tmp", stdin="input data")
+            require(done["stdout"] == "ok\n" and not done["stderr"], "equals command output differed")
+        if image.endswith("-slim"):
+            run(["/bin/mv", "/usr/bin/nice", "/tmp/unused-nice"])
+            simple_env = {"IFS": "fallback", "PWD": "/logical", "SHLVL": "73", "PATH": "/tmp"}
+            probe = ("import os; assert [os.environ[k] for k in ('IFS','PWD','SHLVL')] "
+                     "== ['fallback','/logical','73']; print('ok')")
+            minimal = run(["py=probe", "-c", probe], env=simple_env, cwd="/tmp")
+            require(minimal["stdout"] == "ok\n" and not minimal["stderr"],
+                    "minimal image rewrote shell variables")
+        missing = run(["/tmp/missing=command"], 127, env={"IFS": "dummy"})
+        require(not missing["stdout"] and env["PRIVATE_TEST_VALUE"] not in missing["stderr"],
+                "missing equals command exposed environment")
+        report["checks"].append({"name": "equals-command", "image": image, "status": "passed"})
+    finally:
+        request("DELETE", "/v1/sandboxes/" + sandbox_id)
 
 
 try:
@@ -95,6 +136,8 @@ try:
     probe = request("POST", path, {"command": ["sh", "-c", 'test ! -e /tmp/injected && test -z "' + '$' + '{SECRET+x}"']}, 201)
     completed(probe)
     report["checks"].append({"name": "secrecy-isolation-no-injection", "status": "passed"})
+    for image in ("python:3.12-alpine", "python:3.11-slim"):
+        equals_command(image)
     report["passed"] = True
 finally:
     try:

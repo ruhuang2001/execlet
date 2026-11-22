@@ -32,7 +32,7 @@ unknown paths or unsupported methods may use plain text:
 | 409 | `busy` | the sandbox execution slots are full | no |
 | 409 | `idempotency_conflict` | idempotency key reused with a different `command`, `cwd`, `env`, or `stdin` | no |
 | 413 | `payload_too_large` | JSON request body, file upload, directory scan, or tar transfer exceeds a limit | no |
-| 429 | `rate_limited` | a create would exceed the live-sandbox limit; see [limits](#limits) | yes |
+| 429 | `rate_limited` | a create would exceed the sandbox admission limit; see [limits](#limits) | yes |
 | 500 | `internal` | unexpected server error | yes |
 | 502 | `backend_error` | the container runtime failed | yes |
 | 503 | `unavailable` | server shutting down or not ready | yes |
@@ -255,6 +255,9 @@ unavailable. Readiness checks connectivity, not image availability or capacity.
 
 ### `POST /v1/sandboxes`
 
+Creation returns `409 invalid_state` when Docker reports a name collision and the existing container cannot be safely reclaimed.
+
+
 Request (all fields optional):
 
 ```json
@@ -332,7 +335,7 @@ A removal the runtime refuses is `502 backend_error` with `unconfirmed container
 
   The environment is applied through the `env` utility, so accepted names such as `MY-VAR` and `CONFIG.KEY` are not filtered by the wrapper shell. An image must provide `env` at `/usr/bin/env` or `/bin/env`; without one the execution completes with `exit_code: 126` and `sandbox: this image has no env utility, so the requested environment cannot be applied` on stderr rather than silently dropping entries. Both paths exist in the images this project uses (Alpine, Debian, the official Python images) and in `postgres:16`.
 
-  One case is exempt: when `command[0]` contains `=`, the command goes through an extra shell, because `env` would otherwise read that path as another variable assignment and run nothing. A shell rewrites `IFS`, `PWD`, and `SHLVL` on startup, so those three names carry the shell's values instead of the requested ones for that execution. Every other execution passes all names through unchanged.
+  When an executable name contains `=`, the Linux wrapper uses BusyBox or coreutils `nice -n 0` to execute the literal argv at the inherited priority. This also preserves explicit `IFS`, `PWD`, and `SHLVL`. Minimal images without that utility can apply writable POSIX shell variable names directly. Other names on such an image require a native launcher and produce exit 126 if the environment cannot be applied.
 - `cwd` is optional and sets the directory the command runs in. Omitted or empty uses the image's working directory. It must be absolute and at most 4096 bytes; otherwise `400 invalid_request`. A directory that does not exist or is not a directory does not fail the start: the execution completes with `exit_code: 126` and `sandbox: cwd is not a usable directory: <path>` on stderr, which keeps it distinguishable from a missing command (`127`).
 - `201` with the new Execution (`state: running`).
 - State validation precedes idempotency lookup: a killed or pending sandbox rejects the start, including a replay; a paused sandbox resumes first.
@@ -526,7 +529,7 @@ data: {"id":"exe_456","state":"completed","exit_code":0,"termination_reason":"ex
 | Output events per execution | 4096 | same as above |
 | Open event streams per sandbox | 32 | additional streams receive `429 rate_limited` until a slot is released |
 | Executions retained per sandbox | 200 | eligible completed records are dropped with their output and idempotency keys; all active executions and the most recently completed one are protected. `404 not_found` afterwards |
-| Live sandboxes | 64 | `POST /v1/sandboxes` returns `429 rate_limited` and starts no container. A killed sandbox does not count |
+| Sandbox admission slots | 64 | Creation, live sandboxes and containers awaiting confirmed removal each hold a slot. At capacity `POST /v1/sandboxes` returns `429 rate_limited` before contacting the runtime. Confirmation of removal frees the slot. |
 | Retained sandbox records | 64 killed sandboxes | the oldest killed record is dropped whole, including its execution history. `404 not_found` afterwards. Live sandboxes are never dropped |
 | Retained output, all sandboxes | 64 MiB target | eligible completed records are dropped, oldest sandbox first. All active executions and each sandbox's most recently completed one survive, so protected output can exceed this target |
 | JSON request body | 1 MiB (execution starts: 8 MiB) | `413 payload_too_large` |

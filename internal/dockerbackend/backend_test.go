@@ -197,21 +197,24 @@ func TestCreateDoesNotPullAnImageThatExists(t *testing.T) {
 func TestCreateRetriesAfterNameConflict(t *testing.T) {
 	f := newFakeDaemon(t)
 	f.mu.Lock()
-	f.nameTaken = "tiny-sandbox-sbx_1"
+	leftover := strings.Repeat("1", 64)
+	labels := map[string]string{daemon.OwnerLabelKey: "test", daemon.SandboxIDLabelKey: "sbx_1"}
+	f.containers[leftover] = &fakeContainer{id: leftover, state: "exited", labels: labels}
+	f.byName["tiny-sandbox-sbx_1"] = leftover
 	f.mu.Unlock()
 
 	b := f.backend(t)
 	id, err := b.Create(context.Background(), daemon.ContainerSpec{
-		Image: "alpine:3.20", MemoryMB: 64, Name: "tiny-sandbox-sbx_1",
+		Image: "alpine:3.20", MemoryMB: 64, Name: "tiny-sandbox-sbx_1", Labels: labels,
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if id == "" || id == "ctr_leftover" {
+	if id == "" || id == leftover {
 		t.Fatalf("id = %q, want a fresh container", id)
 	}
 	removed := f.removedContainers()
-	if len(removed) != 1 || removed[0] != "ctr_leftover" {
+	if len(removed) != 1 || removed[0] != leftover {
 		t.Errorf("removed %v, want the leftover that held the name", removed)
 	}
 }

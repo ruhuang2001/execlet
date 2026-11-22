@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"runtime"
 	"slices"
 	"strconv"
@@ -88,23 +89,88 @@ func (b *Backend) Create(ctx context.Context, spec daemon.ContainerSpec) (string
 		}
 		id, err = b.api.ContainerCreate(ctx, spec.Name, cfg)
 	}
-	if err != nil && dockerapi.IsConflict(err) && spec.Name != "" {
-		if rmErr := b.api.ContainerRemove(ctx, spec.Name); rmErr == nil {
-			id, err = b.api.ContainerCreate(ctx, spec.Name, cfg)
+	if dockerapi.IsConflict(err) && spec.Name != "" {
+		if reclaimErr := b.reclaimStoppedContainer(ctx, spec); reclaimErr != nil {
+			return "", &daemon.Error{Code: daemon.CodeInvalidState, Message: "sandbox container name is in use", Err: errors.Join(err, reclaimErr)}
 		}
+		id, err = b.api.ContainerCreate(ctx, spec.Name, cfg)
+	}
+	if dockerapi.IsConflict(err) {
+		return "", &daemon.Error{Code: daemon.CodeInvalidState, Message: "sandbox container name is in use", Err: err}
 	}
 	if err != nil {
-		return "", fmt.Errorf("dockerbackend: create %s: %w", spec.Image, err)
+		createErr := fmt.Errorf("dockerbackend: create %s: %w", spec.Image, err)
+		status, ok := errors.AsType[*dockerapi.StatusError](err)
+		sandboxID, owner := spec.Labels[daemon.SandboxIDLabelKey], spec.Labels[daemon.OwnerLabelKey]
+		if (!ok || status.Status >= http.StatusInternalServerError) && sandboxID != "" && owner != "" && spec.Name == "tiny-sandbox-"+sandboxID {
+			return pendingCreatePrefix + sandboxID + ":" + owner, createErr
+		}
+		return "", createErr
 	}
 
 	if err := b.api.ContainerStart(ctx, id); err != nil {
-		_ = b.api.ContainerRemove(context.WithoutCancel(ctx), id)
-		return "", fmt.Errorf("dockerbackend: start container: %w", err)
+		startErr := fmt.Errorf("dockerbackend: start container: %w", err)
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), daemon.BackendCallTimeout)
+		defer cancel()
+		if rmErr := b.Remove(cleanupCtx, id); rmErr != nil && !errors.Is(rmErr, daemon.ErrNotFound) {
+			return id, errors.Join(startErr, fmt.Errorf("removing unstarted container: %w", rmErr))
+		}
+		return "", startErr
 	}
 	return id, nil
 }
 
+const pendingCreatePrefix = "pending-create:"
+
+func (b *Backend) inspectSandbox(ctx context.Context, sandboxID, owner string) (dockerapi.ContainerInspect, error) {
+	name := "tiny-sandbox-" + sandboxID
+	c, err := b.api.ContainerInspect(ctx, name)
+	if err != nil {
+		return c, err
+	}
+	if c.Name != "/"+name || c.Config.Labels[daemon.OwnerLabelKey] != owner || c.Config.Labels[daemon.SandboxIDLabelKey] != sandboxID {
+		return c, daemon.ErrNotFound
+	}
+	if _, err := hex.DecodeString(c.ID); err != nil || len(c.ID) != 64 {
+		return c, errors.New("dockerbackend: inspect returned an invalid container ID")
+	}
+	return c, nil
+}
+
+func (b *Backend) reclaimStoppedContainer(ctx context.Context, spec daemon.ContainerSpec) error {
+	owner, sandboxID := spec.Labels[daemon.OwnerLabelKey], spec.Labels[daemon.SandboxIDLabelKey]
+	if owner == "" || sandboxID == "" || spec.Name != "tiny-sandbox-"+sandboxID {
+		return errors.New("missing sandbox identity")
+	}
+	c, err := b.inspectSandbox(ctx, sandboxID, owner)
+	if dockerapi.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if c.State.Status != "exited" && c.State.Status != "dead" {
+		return errors.New("conflicting container is in use")
+	}
+	err = b.api.ContainerRemoveStopped(ctx, c.ID)
+	if dockerapi.IsNotFound(err) {
+		return nil
+	}
+	return err
+}
+
 func (b *Backend) Remove(ctx context.Context, containerID string) error {
+	if pending, ok := strings.CutPrefix(containerID, pendingCreatePrefix); ok {
+		sandboxID, owner, valid := strings.Cut(pending, ":")
+		if !valid || sandboxID == "" || owner == "" {
+			return errors.New("invalid pending create identity")
+		}
+		c, err := b.inspectSandbox(ctx, sandboxID, owner)
+		if err != nil {
+			return notFound(err, "find unconfirmed container %s", sandboxID)
+		}
+		containerID = c.ID
+	}
 	err := b.api.ContainerRemove(ctx, containerID)
 	if err == nil || dockerapi.IsNotFound(err) {
 		b.cleanup.forget(containerID)
@@ -462,30 +528,55 @@ func pollDelay(step int) time.Duration {
 const execWrapper = `printf %s $$ > "$0" || exit 125
 if [ -n "$1" ]; then cd -P -- "$1" 2>/dev/null || { printf 'sandbox: cwd is not a usable directory: %s\n' "$1" >&2; exit 126; }; fi
 if [ "$2" -eq 0 ]; then shift 3; exec "$@"; fi
-shift 3
+if [ "$3" = 1 ]; then
+ shift 3
+ if [ -x /bin/busybox ] && { [ /bin/nice -ef /bin/busybox ] || [ /usr/bin/nice -ef /bin/busybox ] || /bin/busybox nice -n 0 /bin/sh -c 'exit 0' 2>/dev/null; }; then
+  set -- busybox "${tiny_sandbox_entry+tiny_sandbox_entry=$tiny_sandbox_entry}" "$@"
+ elif [ -x /usr/bin/nice ]; then
+  set -- /usr/bin/nice "${tiny_sandbox_entry+tiny_sandbox_entry=$tiny_sandbox_entry}" "$@"
+ elif [ -x /bin/nice ]; then
+  set -- /bin/nice "${tiny_sandbox_entry+tiny_sandbox_entry=$tiny_sandbox_entry}" "$@"
+ else
+  shift
+  while [ "$1" != command ]; do
+   case "${1%%=*}" in
+    ''|[0-9]*|*[!a-zA-Z0-9_]*) printf 'sandbox: this image needs nice to apply this environment to the command\n' >&2; exit 126 ;;
+   esac
+   command export "$1" 2>/dev/null || exit 126
+   shift
+  done
+  shift
+  exec "$@"
+ fi
+ for tiny_sandbox_entry do
+  case "$tiny_sandbox_entry" in
+   busybox) shift "$(($3+4))"; set -- /bin/busybox nice -n 0 "$@" ;;
+   /bin/nice|/usr/bin/nice) shift "$(($3+4))"; set -- "$tiny_sandbox_entry" -n 0 -- "$@" ;;
+   command) break ;;
+   *=*) set -- "$tiny_sandbox_entry" "$@" ;;
+  esac
+ done
+ unset tiny_sandbox_entry
+else
+ shift 3
+fi
 if [ -x /usr/bin/env ]; then exec /usr/bin/env -- "$@"; fi
 if [ -x /bin/env ]; then exec /bin/env -- "$@"; fi
 printf 'sandbox: this image has no env utility, so the requested environment cannot be applied\n' >&2
 exit 126`
 
-var commandSeparator = []string{"/bin/sh", "-c", `exec "$@"`, "sandbox"}
-
-func needsCommandSeparator(command []string) bool {
-	return len(command) > 0 && strings.Contains(command[0], "=")
-}
-
 func wrapCommand(pidPath, dir string, env, command []string) []string {
-	separated := len(env) > 0 && needsCommandSeparator(command)
-	flag := "0"
-	if separated {
-		flag = "1"
-	}
-
-	argv := make([]string, 0, 7+len(commandSeparator)+len(env)+len(command))
-	argv = append(argv, "/bin/sh", "-c", execWrapper, pidPath, dir, strconv.Itoa(len(env)), flag)
-	argv = append(argv, env...)
-	if separated {
-		argv = append(argv, commandSeparator...)
+	count := strconv.Itoa(len(env))
+	argv := []string{"/bin/sh", "-c", execWrapper, pidPath, dir, count}
+	if len(env) > 0 && strings.Contains(command[0], "=") {
+		argv = append(argv, "1", count)
+		for _, entry := range slices.Backward(env) {
+			argv = append(argv, entry)
+		}
+		argv = append(argv, "command")
+	} else {
+		argv = append(argv, "0")
+		argv = append(argv, env...)
 	}
 	return append(argv, command...)
 }

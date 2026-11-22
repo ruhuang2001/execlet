@@ -31,7 +31,7 @@ image/network or explicit unlimited CPU returns `400 invalid_request`. Omitted
 network selects the first allowed mode; omitted CPU reserves the smaller of
 one CPU and the total CPU budget. Memory/PID defaults remain 512 MiB/1024, so
 set smaller values explicitly when the total budget requires them. Native
-live-sandbox limits also apply.
+sandbox admission limits also apply.
 
 The allowlist compares exact image strings. Prefer immutable digests: allowing
 a mutable tag does not pin its content. Before admitting a container, the
@@ -40,8 +40,10 @@ and PID limits inside the guest. Unsupported controllers, unreadable probes
 or mismatched settings fail closed and trigger removal. Images must supply
 `sh`, `cat`, `ls` and readable cgroup-v2 files for these probes.
 
-A failed create or delete does not free its reservation until removal is
-confirmed. A record may already say `killed` while its container still exists;
+The default 64-slot admission limit includes every creation in progress, live
+sandbox and container awaiting confirmed cleanup. This limit applies with or
+without a deployment policy. A failed create that left a container, or a failed
+delete, holds its slot until the runtime confirms removal. A record may already say `killed` while its container still exists;
 the reaper retries removal and `/metrics` exposes the backlog. Changing the
 policy requires a restart and recovery rechecks adopted containers.
 

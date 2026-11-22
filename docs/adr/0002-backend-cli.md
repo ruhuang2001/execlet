@@ -12,6 +12,8 @@ An Engine error retains its status and a bounded message, including a plain-text
 
 Each sandbox owns a container that stays alive across executions. Engine create reports a missing image on a clean host. The backend pulls on that specific 404 and retries create. Digest references take precedence over tags, and a colon in the registry host and port belongs to the repository. Pulls can report errors inside an HTTP 200 progress stream. The client consumes the stream, accepts ordinary text progress, and fails on a JSON error record or a stream read failure. A failed start triggers removal of the newly created container even after caller cancellation.
 
+On a Docker name conflict, inspect the exact name and verify the immutable sandbox ID and owner labels. Only an exited or dead container with both matching labels is eligible for replacement. Remove by its full Docker ID without force so a concurrent restart or name reuse preserves the active container. Legacy containers without the identity label remain eligible for the existing owner sweep.
+
 Liveness lists containers with stopped entries included. Inspect previously reported a transient missing object for a container that still existed. Docker matches ID filters by prefix, so the backend compares the returned full ID before declaring a match. Owner filters accept key/value pairs and Docker combines label constraints. A sweep finds owned containers even after a restart.
 
 ## Container limits
@@ -32,13 +34,15 @@ The stdout/stderr observer finishes before Wait polls for Docker's recorded exit
 
 ## Exec wrapper
 
-The ordinary wrapper takes the PID path in shell argument zero, followed by the working directory, environment count, a separator flag, the environment entries, an optional separator, and the command argv. An empty directory and zero count preserve this layout. Supplying data as positional arguments keeps it out of shell syntax. The PID is written first so cancellation can still find the process when directory setup fails.
+The ordinary wrapper takes the PID path in shell argument zero, followed by the working directory, environment count, a flag selecting the environment handoff, and the command payload. An empty directory and zero count preserve this layout. Supplying data as positional arguments keeps it out of shell syntax. The PID is written first so cancellation can still find the process when directory setup fails.
 
 The wrapper changes directory with physical path resolution. With a symlink and a following `..`, the parent belongs to the symlink's target. A nonexistent component before `..` must fail. Docker's exec WorkingDir would turn an unusable directory into a startup error with status 127 and a message on stdout, also used by a missing command. The wrapper reports the directory error with exit 126 and a diagnostic on stderr.
 
 The Engine receives requested environment entries in the exec configuration. For ordinary execs the wrapper also supplies them to the target with an absolutely addressed env utility, since the request may replace PATH. Shell startup can drop names such as `MY-VAR` and `CONFIG.KEY` or rewrite IFS, PWD and SHLVL. Keeping wrapper state in positional arguments also protects variables exported by the image, including short names such as `n` and `e`.
 
-The `--` operand ends option parsing in env, which permits variable names starting with a dash. Assignment parsing continues afterward. When argv[0] contains an equals sign and environment entries are present, an extra command separator prevents env from treating the executable path as another assignment and printing the environment. The flag records whether this separator is present. Inferring it from the command would incorrectly strip matching argv from legitimate programs. Only this case introduces another shell.
+The `--` operand ends option parsing in env, which permits variable names starting with a dash. Assignment parsing continues afterward. When argv[0] contains an equals sign and environment entries are present, the wrapper places a native zero-adjustment nice invocation between env and the command. It keeps the original PID, priority, environment, stdin and argv through exec. BusyBox takes the operand directly after its adjustment. Coreutils accepts an explicit end-of-options marker for command names starting with a dash.
+
+The special payload supplies the entry count, the entries in reverse order, a literal command marker and the original command. The shell prepends each entry to the selected launcher without turning user data into shell source. It restores a preexisting image variable if its name matches the loop variable. On images without a native launcher, the shell can export writable shell variable names directly.
 
 Real-image checks exercise filesystem resolution, replacement PATH, arbitrary accepted names and assignments in command paths. The image-variable check exports names from an outer launcher before entering the wrapper and checks the returned environment contains the expected entries. Empty output or a shifted test argv would otherwise allow a false pass.
 

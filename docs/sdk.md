@@ -117,9 +117,11 @@ other image variable stays visible, and a later execution does not inherit it.
 Accepted names reach the process unchanged, including names a shell would
 reject such as `MY-VAR`, so the image must provide `env` at `/usr/bin/env` or
 `/bin/env`; without one the execution ends with `ExitCode` 126 and a marker on
-stderr. The one exception is a `Command[0]` that contains `=`: it runs through
-an extra shell, which resets `IFS`, `PWD`, and `SHLVL` to its own values. The
-server never echoes `Env` back, because it may carry credentials.
+stderr. Executables whose names contain `=` receive explicit `IFS`, `PWD`,
+and `SHLVL` values. The Docker backend supports all accepted environment names
+on its BusyBox and coreutils images. Custom minimal images have additional launcher requirements. The server
+keeps environment values out of its responses because they may carry credentials.
+[Image requirements](api.md)
 `Execution.Cwd` is nullable and repeats the directory only when the request set
 one.
 

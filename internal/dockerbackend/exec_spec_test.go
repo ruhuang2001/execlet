@@ -158,7 +158,7 @@ func TestExecWithNoCwdKeepsTheArgumentShape(t *testing.T) {
 }
 
 func TestUnwrapDoesNotMisreadALegitimateCommand(t *testing.T) {
-	command := append(slices.Clone(commandSeparator), "echo", "hi")
+	command := []string{"command", "echo", "hi"}
 	cmd := append([]string{"/bin/sh", "-c", execWrapper, "/run/pid", "/work", "1", "0", "A=1"}, command...)
 
 	_, dir, env, actual, ok := unwrap(cmd)

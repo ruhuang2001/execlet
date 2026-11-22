@@ -24,3 +24,14 @@ Without owned copies the replay conflicts and returns cancel_unconfirmed.
 The live test uses a transport fault after a real HTTP response, not a fake server.
 
 - Caller mutates TimeoutSeconds to -1 after accepted start: recovery must use its original snapshot and cancel the accepted execution.
+
+## Executable names containing an equals sign
+
+An env assignment can be confused with the executable, or a second shell can
+change the environment before the executable starts. Run a native Python
+interpreter under an equals-containing name on Alpine and Debian. Check shell
+variables and nonidentifier names, the executable's argv as seen by Linux,
+inherited input, physical cwd, custom PATH lookup, and the exact output.
+A Debian guest without nice must still restore ordinary shell variables. A
+missing executable must return 127 with empty stdout. Use synthetic values and
+leave request bodies and environment values out of the JSON report.

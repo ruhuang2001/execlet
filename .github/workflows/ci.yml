@@ -257,15 +257,16 @@ jobs:
           ref: ${{ inputs.ref || github.ref }}
           fetch-depth: 0
       - uses: actions/setup-python@v5
-        if: hashFiles('scripts/comment-lint/check.py') != ''
+        if: inputs.ref == '' || hashFiles('scripts/comment-lint/check.py') != ''
         with:
           python-version: '3.12'
       - name: enforce the comment ratchet
-        if: hashFiles('scripts/comment-lint/check.py') != ''
+        if: inputs.ref == '' || hashFiles('scripts/comment-lint/check.py') != ''
         env:
-          COMMENT_BASE: ${{ inputs.ref && github.sha || github.event.pull_request.base.sha || github.event.before }}
+          COMMENT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HISTORICAL_REF: ${{ inputs.ref }}
         run: |
-          if [ -n "${{ inputs.ref }}" ]; then COMMENT_BASE=$(git rev-parse HEAD^); fi
+          if [ -n "$HISTORICAL_REF" ]; then COMMENT_BASE=$(git rev-parse HEAD^); fi
           make PYTHON=python comment-lint comment-lint-e2e
       - uses: actions/upload-artifact@v4
         if: hashFiles('artifacts/comment-lint/e2e.json') != ''

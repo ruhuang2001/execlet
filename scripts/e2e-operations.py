@@ -166,8 +166,6 @@ def main():
             sample = [('sample', 'file', 3, uid, gid)]
             listing('readable directory uses guest metadata', '/tmp/list-ok', sample, False)
             listing('unreadable empty directory uses archive', '/tmp/list-empty', [], True)
-            # Administer only this disposable container's tools. stat is present
-            # but rejects the format flag, unlike the missing-binary case.
             cli('exec', '-u', '0', container, 'sh', '-ec',
                 "printf '#!/bin/sh\\nexit 2\\n' >/usr/local/bin/stat; chmod 755 /usr/local/bin/stat")
             assert cli('exec', container, 'sh', '-ec', 'command -v stat') == '/usr/local/bin/stat'

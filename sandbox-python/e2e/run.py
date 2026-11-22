@@ -122,7 +122,6 @@ class Suite:
         return self.proxy.requests(name, method, suffix)
 
     def pool_process(self, case):
-        # Fork in a clean interpreter, not in this threaded proxy process.
         result = subprocess.run([sys.executable, '-I', str(Path(__file__).with_name('pool_process.py')), case],
                                 env=dict(os.environ, SANDBOX_DOMAIN=self.domain, SANDBOX_API_KEY=self.key),
                                 capture_output=True, text=True, timeout=20)

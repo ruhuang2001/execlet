@@ -150,3 +150,27 @@ using an already-local image, commands on reused containers and time to first
 stdout. It does not measure image pulls, cross-host capacity, sustained load,
 p99 SLOs or a speedup over the previous release. Compare repeated runs on the
 same hardware/image before making performance claims.
+
+`baseline.json` includes a Python command with an intentional 50 ms sleep and
+uses a Docker fault proxy. For short-command measurements use the separate
+`short-latency.json` workload, which runs in normal CI or on its own:
+
+```sh
+python3 scripts/e2e-operations.py --server bin/sandboxd --image "$IMAGE" \
+  --benchmark-only --samples 60 --out artifacts/latency-60
+```
+
+The Python SDK connects directly to a fresh local daemon with policy enabled,
+no journal and the real Docker socket. Each serial round creates a sandbox,
+runs `/bin/true` and `/bin/echo ok` (alternating order), then deletes it. It
+discards one warmup round. Each retained row records milliseconds for create
+to ready, each command to terminal result, `echo` to first stdout callback,
+delete, and the whole round through delete. Per-column summaries use the median
+and nearest-rank P95; aggregate the paired whole-round samples rather than
+adding percentiles. These are client-observed times, not pure Docker exec time.
+
+Keep `environment.json` (image ID, source HEAD, server checksum, Docker and
+Python versions), `policy.json`, the raw rounds and `cleanup.json` together.
+Use the same build flags and an idle host for comparisons: CI uses coverage
+instrumentation and its small sample is a semantics/cleanup check, not a
+latency threshold. Neither workload measures cold pulls or pool hits.

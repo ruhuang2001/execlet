@@ -16,6 +16,7 @@ import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / 'e2b-compatibility'))
 from local import DockerFault
+from latency_baseline import measure
 
 
 def main():
@@ -24,7 +25,10 @@ def main():
     parser.add_argument('--image', required=True)
     parser.add_argument('--out', required=True)
     parser.add_argument('--samples', type=int, default=5)
+    parser.add_argument('--benchmark-only', action='store_true', help='run only the direct short-command workload')
     args = parser.parse_args()
+    if not __debug__:
+        parser.error('assertions must be enabled')
     assert args.samples >= 3
     out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=False)
@@ -43,7 +47,7 @@ def main():
     policy.write_text(json.dumps(rules))
     report, processes, logs = [], [], []
     server = None
-    proxy = DockerFault(out / 'docker.sock')
+    proxy = None if args.benchmark_only else DockerFault(out / 'docker.sock')
 
     def check(name, passed, evidence=None):
         report.append(dict(name=name, passed=bool(passed), evidence=evidence))
@@ -74,12 +78,13 @@ def main():
         finally:
             conn.close()
 
-    def start(extra=(), success=True):
+    def start(extra=(), success=True, direct=False):
         nonlocal server
         log = (out / ('server-%d.log' % len(processes))).open('w')
         logs.append(log)
         server = subprocess.Popen([binary, '-addr', '127.0.0.1:' + str(port),
-            '-owner', owner, '-docker', proxy.path, *extra], env=env, stdout=log, stderr=log)
+            '-owner', owner, '-docker', docker.removeprefix('unix://') if direct else proxy.path, *extra],
+            env=env, stdout=log, stderr=log)
         processes.append(server)
         if not success:
             check('invalid configuration refuses startup', server.wait(timeout=10) != 0)
@@ -101,11 +106,17 @@ def main():
             server.kill() if crash else server.terminate()
             server.wait(timeout=30)
 
+    spec = dict(image=args.image, memory_mb=64, pids_limit=64, nano_cpus=500_000_000,
+                network='none', timeout_seconds=120, idle_timeout_seconds=0)
+
     def create(**overrides):
-        request = dict(image=args.image, memory_mb=64, pids_limit=64, nano_cpus=500_000_000,
-                       network='none', timeout_seconds=120, idle_timeout_seconds=0)
-        request.update(overrides)
-        return http('/v1/sandboxes', 'POST', request)
+        return http('/v1/sandboxes', 'POST', {**spec, **overrides})
+
+    def short_benchmark():
+        start(['-policy', str(policy)], direct=True)
+        data = measure('http://127.0.0.1:' + str(port), token, spec, args.samples)
+        check('short-command workload released every container before shutdown', not owned())
+        (out / 'short-latency.json').write_text(json.dumps(data, indent=2) + '\n')
 
     def begin(sid, command, key=''):
         status, value = http('/v1/sandboxes/' + sid + '/executions', 'POST',
@@ -230,7 +241,12 @@ def main():
         check('pinned local image', cli('image', 'inspect', args.image, '--format', '{{.Id}}') == args.image)
         (out / 'environment.json').write_text(json.dumps(dict(image=args.image,
             docker=json.loads(cli('version', '--format', '{{json .}}')),
+            python=sys.version, git_head=subprocess.check_output(['git', 'rev-parse', 'HEAD'],
+                cwd=Path(__file__).resolve().parent, text=True).strip(),
             server_sha256=hashlib.sha256(Path(binary).read_bytes()).hexdigest()), indent=2))
+        if args.benchmark_only:
+            short_benchmark()
+            return
         for durable in [False, True]:
             for managed in [False, True]:
                 for fault in ['drop', 'stall']:
@@ -452,6 +468,8 @@ def main():
                                  ('tiny_sandbox_http_seconds', 'histogram'),
                                  ('tiny_sandbox_cleanup_failures_total', 'counter'),
                                  ('tiny_sandbox_live', 'gauge')]))
+        stop()
+        short_benchmark()
     finally:
         for proc in processes:
             if proc.poll() is None:
@@ -463,7 +481,8 @@ def main():
                     proc.wait(timeout=5)
         for log in logs:
             log.close()
-        proxy.close()
+        if proxy:
+            proxy.close()
         remaining = owned()
         if remaining:
             cli('rm', '-f', *remaining)

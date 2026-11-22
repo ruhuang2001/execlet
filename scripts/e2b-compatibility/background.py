@@ -251,6 +251,10 @@ def transfer(ctx, target, mode='success'):
     owner = ctx.worker
     info = job.start(wait=0)
     job.ready()
+    def prefix_retained():
+        snapshot = execution(ctx, job.sid, info['execution_id'])
+        return (snapshot['stdout'], snapshot['stderr']) == PRE
+    assert ctx.wait_until(prefix_retained, 5), 'pre-attachment output never reached the daemon'
     ctx.ok('handle_disconnect', 'detach', handle='h')
     if mode == 'late':
         job.release()

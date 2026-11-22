@@ -242,8 +242,6 @@ func (s *sandboxTools) addWorkspaceFile(d *workspaceDelta, w *tar.Writer, name, 
 }
 
 func (s *sandboxTools) syncWorkspace(ctx context.Context, in syncInput) (toolOutput, error) {
-	s.syncMu.Lock()
-	defer s.syncMu.Unlock()
 	previous, err := s.loadManifest(in.SandboxID)
 	if err != nil {
 		return toolOutput{}, err

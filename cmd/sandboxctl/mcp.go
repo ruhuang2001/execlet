@@ -7,12 +7,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
+	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -28,8 +27,7 @@ type sandboxTools struct {
 	cache            string
 	images, networks []string
 	ttl              int
-	syncMu           sync.Mutex
-	owned            sync.Map
+	scope            string
 }
 
 func (in *invocation) mcpServer(args []string) int {
@@ -76,6 +74,10 @@ func (in *invocation) mcpServer(args []string) int {
 	}
 	tools.cache = filepath.Join(home, ".cache", "tiny-sandbox", "mcp")
 	tools.client, err = in.client()
+	if err != nil {
+		return in.fail(err)
+	}
+	tools.scope, err = tools.ownerScope(in)
 	if err != nil {
 		return in.fail(err)
 	}
@@ -153,18 +155,18 @@ func (s *sandboxTools) add[In interface{ sandboxID() string }](server *mcp.Serve
 		if !filepath.IsLocal(id) || id == "." || filepath.Base(id) != id || strings.ContainsAny(id, "/\\") {
 			return respond(toolOutput{}, errors.New("invalid_request: invalid sandbox ID"))
 		}
-		if _, ok := s.owned.Load(id); !ok {
-			return respond(toolOutput{}, errors.New("sandbox_not_running: unknown sandbox for this MCP session"))
-		}
-		sb, err := s.client.UpdateSandbox(ctx, id, sandbox.UpdateSandboxRequest{TimeoutSeconds: &s.ttl})
+		receipt, err := s.openReceipt(ctx, id)
 		if err != nil {
-			if errors.Is(err, sandbox.ErrNotFound) || errors.Is(err, sandbox.ErrInvalidState) {
-				err = &sandbox.Error{Code: "sandbox_not_running", Message: err.Error()}
-			}
 			return respond(toolOutput{}, err)
 		}
-		if sb.State != sandbox.StateRunning {
-			return respond(toolOutput{}, errors.New("sandbox_not_running: sandbox is not running"))
+		defer func() { _ = receipt.Close() }()
+		if err := s.renew(ctx, id); err != nil {
+			return respond(toolOutput{}, err)
+		}
+		if name != "sync_workspace" && name != "destroy_sandbox" {
+			if err := syscall.Flock(int(receipt.Fd()), syscall.LOCK_UN); err != nil {
+				return respond(toolOutput{}, err)
+			}
 		}
 		out, err := handle(ctx, in)
 		return respond(out, err)
@@ -193,7 +195,12 @@ func (s *sandboxTools) create(ctx context.Context, in createInput) (toolOutput, 
 	if err != nil {
 		return toolOutput{}, err
 	}
-	s.owned.Store(sb.ID, true)
+	if err := s.saveReceipt(sb.ID); err != nil {
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		_, killErr := s.client.KillSandbox(cleanup, sb.ID)
+		return toolOutput{}, errors.Join(fmt.Errorf("cannot save ownership receipt for %s: %w", sb.ID, err), killErr)
+	}
 	return toolOutput{"Created " + sb.ID + " with network " + sb.Network, map[string]any{"sandbox_id": sb.ID, "network": sb.Network, "expires_at": sb.ExpiresAt, "protected": sb.Protected}}, nil
 }
 
@@ -214,15 +221,12 @@ func (s *sandboxTools) writeTool(ctx context.Context, in writeInput) (toolOutput
 }
 
 func (s *sandboxTools) destroyTool(ctx context.Context, in sandboxInput) (toolOutput, error) {
-	s.syncMu.Lock()
-	defer s.syncMu.Unlock()
 	sb, err := s.client.KillSandbox(ctx, in.SandboxID)
 	if err != nil {
 		return toolOutput{}, err
 	}
-	if err := os.Remove(s.manifestPath(in.SandboxID)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	if err := s.forgetReceipt(sb.ID); err != nil {
 		return toolOutput{}, err
 	}
-	s.owned.Delete(sb.ID)
 	return toolOutput{"Destroyed " + sb.ID, map[string]any{"state": sb.State}}, nil
 }

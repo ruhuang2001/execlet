@@ -67,3 +67,7 @@ Check Python compilation, TypeScript against the pinned SDK declarations,
 partial, mismatched and missing reports. Exercise guest fixtures in real
 Docker when available. Live reference calls require --allow-cloud and an
 E2B_API_KEY; installation and --list never create cloud resources.
+
+## Concurrent local cases
+
+A local matrix can finish cases out of order. Each case must retain a unique owner, output directory, worker process group and daemon endpoint. A restart or old-server case must stay reachable through its existing fault proxy. The parent records each completed row atomically in selection order. Case deadlines include subprocess startup and start only when a slot is available. Interrupting the runner must stop scheduling, reap active process groups and record their cleanup. Live cloud runs use one slot.

@@ -11,6 +11,10 @@ on:
         type: string
         default: ''
 
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
@@ -301,6 +305,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: coverage-unit
+          if-no-files-found: error
           path: ${{ runner.temp }}/cov-unit
           retention-days: 3
 
@@ -357,7 +362,6 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
-    needs: [test, e2b-compatibility]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -378,27 +382,12 @@ jobs:
         run: bash scripts/e2e.sh artifacts/e2e
       - name: observability and readiness with real Docker
         run: bash scripts/e2e-observability.sh artifacts/observability-e2e
-      - name: detect operations coverage in the tested revision
-        id: operations
-        run: |
-          if test -f scripts/e2e-operations.py; then echo 'present=true' >> "$GITHUB_OUTPUT"; fi
-      - uses: actions/download-artifact@v4
-        if: steps.operations.outputs.present == 'true'
+      - uses: actions/upload-artifact@v4
         with:
-          name: coverage-operations
-          path: artifacts/operations-coverage
-      - name: merge coverage and enforce the gate
-        run: |
-          mkdir -p "$RUNNER_TEMP/cov-unit"
-          go test -race -covermode=atomic -coverpkg=./... ./... \
-            -args -test.gocoverdir="$RUNNER_TEMP/cov-unit"
-          e2e_coverage=artifacts/e2e/coverage
-          if test -f scripts/e2e-operations.py; then
-            mkdir -p artifacts/combined-e2e-coverage
-            go tool covdata merge -i=artifacts/e2e/coverage,artifacts/operations-coverage -o=artifacts/combined-e2e-coverage
-            e2e_coverage=artifacts/combined-e2e-coverage
-          fi
-          bash scripts/coverage.sh "$RUNNER_TEMP/cov-unit" "$e2e_coverage" 70
+          name: coverage-e2e
+          path: artifacts/e2e/coverage/
+          if-no-files-found: error
+          retention-days: 3
       - name: no containers remain
         run: |
           remaining=$(docker ps -aq --filter 'label=tiny-sandbox.owner' | wc -l | tr -d ' ')
@@ -410,6 +399,40 @@ jobs:
           name: e2e-artifacts
           path: artifacts/
           retention-days: 7
+
+  coverage:
+    runs-on: ubuntu-latest
+    needs: [test, e2e, e2b-compatibility]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: coverage-unit
+          path: artifacts/unit
+      - uses: actions/download-artifact@v4
+        with:
+          name: coverage-e2e
+          path: artifacts/e2e
+      - uses: actions/download-artifact@v4
+        if: hashFiles('scripts/e2e-operations.py') != ''
+        with:
+          name: coverage-operations
+          path: artifacts/operations
+      - name: merge coverage and enforce the gate
+        run: |
+          e2e=artifacts/e2e
+          if test -f scripts/e2e-operations.py; then
+            mkdir -p artifacts/combined
+            go tool covdata merge -i=artifacts/e2e,artifacts/operations -o=artifacts/combined
+            e2e=artifacts/combined
+          fi
+          bash scripts/coverage.sh artifacts/unit "$e2e" 70
 
   python-sdk:
     runs-on: ubuntu-latest

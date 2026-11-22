@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import json
 import os
@@ -237,7 +238,51 @@ def one_case(args):
     return 0 if record['status'] == 'passed' else 2 if record['status'] == 'not_run' else 1
 
 
+def run_case(provider, out, env, language, case, stopped):
+    if stopped.is_set():
+        return {'status':'not_run', 'reason':'not dispatched'}
+    directory = out / f'{language}-{case}'
+    directory.mkdir()
+    owner = 'e2b-contract-' + uuid.uuid4().hex
+    childenv = dict(env, CONTRACT_OWNED=str(directory / 'owned.jsonl'), CONTRACT_OWNER=owner)
+    command = [sys.executable, str(HERE / 'runner.py'), '_case', '--provider',provider, '--language',language,
+               '--case',case,'--out',str(directory), '--profile', PROFILE]
+    row = {'status':'failed'}
+    with (directory / 'runner.log').open('w') as log:
+        child = subprocess.Popen(command, env=childenv, stdout=log, stderr=log, start_new_session=True)
+        try:
+            deadline = time.monotonic() + CASES[case]['budget'] + 25
+            while child.poll() is None:
+                if stopped.wait(.2):
+                    raise InterruptedError('case interrupted')
+                if time.monotonic() >= deadline:
+                    raise TimeoutError('case watchdog expired')
+            if (directory / 'case.json').exists():
+                row.update(json.loads((directory / 'case.json').read_text()))
+                if row['status'] == 'passed':
+                    row.pop('reason', None)
+            else:
+                row.update(status='failed', reason='missing worker result')
+            if child.returncode not in (0, 1, 2):
+                row.update(status='failed', reason=f'case process crashed: {child.returncode}')
+        except (TimeoutError, InterruptedError) as exc:
+            row.update(status='failed', reason=str(exc))
+        finally:
+            try:
+                os.killpg(child.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            child.wait()
+            row['cleanup'] = cleanup(provider, directory, childenv, owner)
+            if not row['cleanup']['confirmed']:
+                row.update(status='failed', reason='cleanup unconfirmed')
+    return row
+
+
 def run(args):
+    jobs = args.jobs or (3 if args.provider == 'tiny' else 1)
+    if args.provider == 'e2b' and jobs != 1:
+        raise ValueError('live E2B Cloud runs require --jobs 1')
     selected = list(CASES) if args.cases == 'all' else args.cases.split(',')
     languages = args.languages.split(',')
     if len(set(selected)) != len(selected) or not set(selected) <= CASES.keys():
@@ -268,7 +313,7 @@ def run(args):
         env['CONTRACT_MODULE'] = args.module
     rows = {f'{lang}:{case}':{'status':'not_run', 'reason':'not dispatched'} for lang in languages for case in selected}
     report = {'schema':1, 'provider':args.provider, 'baseline':MANIFEST['baseline'], 'digest':digest(),
-              'profile':PROFILE, 'runtime_revision':REFERENCE.get('runtime_revision'),
+              'profile':PROFILE, 'jobs':jobs, 'runtime_revision':REFERENCE.get('runtime_revision'),
               'languages':languages, 'selected':selected, 'started':time.time(), 'complete':False, 'rows':rows,
               'source':subprocess.check_output(['git','rev-parse','HEAD'], cwd=ROOT, text=True).strip(),
               'dirty':subprocess.check_output(['git','status','--porcelain'], cwd=ROOT, text=True).splitlines()}
@@ -329,40 +374,25 @@ def run(args):
         for row in rows.values():
             row.update(status=status, reason=str(e))
         save(out / 'report.json', report); print(status + ': ' + str(e)); return 2 if status == 'not_run' else 1
-    for language in languages:
-        for case in selected:
-            directory = out / f'{language}-{case}'
-            directory.mkdir()
-            owner = 'e2b-contract-' + uuid.uuid4().hex
-            childenv = dict(env, CONTRACT_OWNED=str(directory / 'owned.jsonl'), CONTRACT_OWNER=owner)
-            command = [sys.executable, str(HERE / 'runner.py'), '_case', '--provider',args.provider, '--language',language,
-                       '--case',case,'--out',str(directory), '--profile', PROFILE]
-            row = rows[f'{language}:{case}']
-            with (directory / 'runner.log').open('w') as log:
-                child = subprocess.Popen(command, env=childenv, stdout=log, stderr=log, start_new_session=True)
+    stopped = threading.Event()
+    previous = {sig: signal.signal(sig, lambda *_: stopped.set()) for sig in (signal.SIGINT, signal.SIGTERM)}
+    try:
+        with ThreadPoolExecutor(max_workers=jobs) as pool:
+            pending = {pool.submit(run_case, args.provider, out, env, lang, case, stopped): f'{lang}:{case}'
+                       for lang in languages for case in selected}
+            for finished in as_completed(pending):
+                key = pending[finished]
                 try:
-                    child.wait(timeout=CASES[case]['budget'] + 25)
-                    if (directory / 'case.json').exists():
-                        row.update(json.loads((directory / 'case.json').read_text()))
-                        if row['status'] == 'passed':
-                            row.pop('reason', None)
-                    else:
-                        row.update(status='failed', reason='missing worker result')
-                    if child.returncode not in (0, 1, 2):
-                        row.update(status='failed', reason=f'case process crashed: {child.returncode}')
-                except subprocess.TimeoutExpired:
-                    row.update(status='failed', reason='case watchdog expired')
-                finally:
-                    try:
-                        os.killpg(child.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                    child.wait()
-                    row['cleanup'] = cleanup(args.provider, directory, childenv, owner)
-                    if not row['cleanup']['confirmed']:
-                        row.update(status='failed', reason='cleanup unconfirmed')
-            print(f'{language} {case}: {row["status"]}', flush=True)
-            save(out / 'report.json', report)
+                    rows[key] = finished.result()
+                except Exception as exc:
+                    rows[key] = {'status':'failed', 'reason':f'{type(exc).__name__}: {exc}'}
+                print(f'{key}: {rows[key]["status"]}', flush=True)
+                save(out / 'report.json', report)
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+    if stopped.is_set():
+        return 1
     report['complete'] = True
     report['finished'] = time.time()
     save(out / 'report.json', report)
@@ -477,6 +507,7 @@ def main():
     p.add_argument('--out', required=True)
     p.add_argument('--languages', default=','.join(LANGUAGES))
     p.add_argument('--cases', default='all')
+    p.add_argument('--jobs', type=int, choices=range(1, 5), help='concurrent cases (local default 3, cloud 1)')
     p.add_argument('--python', default=str(HERE / '.venv/bin/python'))
     p.add_argument('--allow-cloud', action='store_true')
     p.add_argument('--image')

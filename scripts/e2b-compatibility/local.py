@@ -180,12 +180,11 @@ class Local:
         if not owner.startswith('e2b-contract-'):
             raise ValueError('refusing an owner label this runner did not mint')
         self.out, self.owner, self.server_path, self.image = Path(out), owner, server, image
-        self.port = self._free_port()
+        self.port = None
         self.api_key = secrets.token_hex(24)
         self.process = None
         self.faults = None
         self.docker = None
-        self._started = False
 
     @staticmethod
     def _free_port():
@@ -198,28 +197,37 @@ class Local:
         return self.faults.domain if self.faults else f'http://127.0.0.1:{self.port}'
 
     def start(self):
-        if not self._started:
-            self._started = True
+        if self.docker is None:
             self.docker = DockerFault(self.out / 'docker.sock')
-            self.faults = PROXY.FaultProxy(self.port, self.out / 'proxy.jsonl')
-        log = (self.out / 'sandboxd.log').open('w')
-        self.process = subprocess.Popen(
-            [self.server_path, '-addr', f'127.0.0.1:{self.port}', '-docker', self.docker.path,
-             '-owner', self.owner],
-            env={**os.environ, 'SANDBOX_API_KEY': self.api_key}, stdout=log, stderr=log)
-        import http.client
-        for _ in range(150):
-            if self.process.poll() is not None:
-                raise RuntimeError('sandboxd exited during startup; see sandboxd.log')
-            try:
+        logfile = self.out / 'sandboxd.log'
+        for attempt in range(3):
+            self.port = self._free_port()
+            with logfile.open('w') as log:
+                self.process = subprocess.Popen(
+                    [self.server_path, '-addr', f'127.0.0.1:{self.port}', '-docker', self.docker.path,
+                     '-owner', self.owner], env={**os.environ, 'SANDBOX_API_KEY': self.api_key},
+                    stdout=log, stderr=log)
+            for _ in range(150):
+                if self.process.poll() is not None:
+                    if attempt < 2 and 'address already in use' in logfile.read_text():
+                        break
+                    raise RuntimeError('sandboxd exited during startup; see sandboxd.log')
                 conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=2)
-                conn.request('GET', '/healthz')
-                if conn.getresponse().status == 200:
+                try:
+                    conn.request('GET', '/v1/sandboxes', headers={'Authorization': 'Bearer ' + self.api_key})
+                    if conn.getresponse().status == 200:
+                        if self.faults is None:
+                            self.faults = PROXY.FaultProxy(self.port, self.out / 'proxy.jsonl')
+                        else:
+                            self.faults.upstream_port = self.port
+                        return
+                except (OSError, http.client.HTTPException):
+                    pass
+                finally:
                     conn.close()
-                    return
-            except OSError:
                 time.sleep(.1)
-        raise RuntimeError('sandboxd never became healthy')
+            else:
+                raise RuntimeError('sandboxd never became healthy')
 
     def environment(self, language):
         """Adapter connection configuration. Native names, no E2B cloud fallback."""

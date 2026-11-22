@@ -102,6 +102,8 @@ PYTHON=python3.15 bash scripts/e2b-compatibility/installed.sh artifacts/e2b-bg "
   --profile background
 ```
 
+Local runs share three case slots across the selected languages. Pass `--jobs 1` for serial execution or `--jobs 4` for four slots. Each case has its own Docker owner label, daemon and artifact directory. The report lists rows in selection order and is updated as each case finishes. Cloud runs use one slot.
+
 This runs **40 cases × 2 languages**: the original 19, with A05/A12/A14/A16/W03
 expectations overlaid, plus B01–B20 and W04. The default remains the original
 19-case profile. A failed installed-type check is recorded in

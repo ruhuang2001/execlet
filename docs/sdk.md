@@ -121,7 +121,7 @@ stderr. Executables whose names contain `=` receive explicit `IFS`, `PWD`,
 and `SHLVL` values. The Docker backend supports all accepted environment names
 on its BusyBox and coreutils images. Custom minimal images have additional launcher requirements. The server
 keeps environment values out of its responses because they may carry credentials.
-[Image requirements](api.md)
+[Image requirements](api.md#post-v1sandboxessandbox_idexecutions)
 `Execution.Cwd` is nullable and repeats the directory only when the request set
 one.
 

@@ -32,7 +32,7 @@ unknown paths or unsupported methods may use plain text:
 | 409 | `busy` | the sandbox execution slots are full | no |
 | 409 | `idempotency_conflict` | idempotency key reused with a different `command`, `cwd`, `env`, or `stdin` | no |
 | 413 | `payload_too_large` | JSON request body, file upload, directory scan, or tar transfer exceeds a limit | no |
-| 429 | `rate_limited` | a create would exceed the sandbox admission limit; see [limits](#limits) | yes |
+| 429 | `rate_limited` | sandbox slots, deployment resource budgets or event-stream slots are exhausted | yes |
 | 500 | `internal` | unexpected server error | yes |
 | 502 | `backend_error` | the container runtime failed | yes |
 | 503 | `unavailable` | server shutting down or not ready | yes |
@@ -256,7 +256,6 @@ unavailable. Readiness checks connectivity, not image availability or capacity.
 ### `POST /v1/sandboxes`
 
 Creation returns `409 invalid_state` when Docker reports a name collision and the existing container cannot be safely reclaimed.
-
 
 Request (all fields optional):
 

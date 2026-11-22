@@ -36,6 +36,7 @@ type fakeDaemon struct {
 	creates      []dockerapi.ContainerConfig
 	createNames  []string
 	removed      []string
+	removalURIs  []string
 	kills        []string
 	execCommands [][]string
 	execEnvs     [][]string
@@ -226,6 +227,7 @@ func (f *fakeDaemon) containerOp(w http.ResponseWriter, r *http.Request, tail st
 		w.WriteHeader(204)
 	case action == "" && r.Method == http.MethodDelete:
 		f.removed = append(f.removed, id)
+		f.removalURIs = append(f.removalURIs, r.URL.RequestURI())
 		for name, owner := range f.byName {
 			if owner == id {
 				delete(f.byName, name)

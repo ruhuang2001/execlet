@@ -217,6 +217,12 @@ func TestCreateRetriesAfterNameConflict(t *testing.T) {
 	if len(removed) != 1 || removed[0] != leftover {
 		t.Errorf("removed %v, want the leftover that held the name", removed)
 	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	wantURI := "/v1.52/containers/" + leftover + "?v=1"
+	if !slices.Equal(f.removalURIs, []string{wantURI}) {
+		t.Errorf("removal requests = %v, want %s", f.removalURIs, wantURI)
+	}
 }
 
 func TestLivenessMatchesExactID(t *testing.T) {

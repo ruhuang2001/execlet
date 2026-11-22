@@ -1,7 +1,7 @@
+from contextlib import ExitStack
 import json
 import os
 from pathlib import Path
-import re
 import signal
 import subprocess
 import sys
@@ -18,7 +18,6 @@ def main(binary, domain, out):
         raise ValueError("cli cleanup E2E requires a local HTTP daemon")
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
-    proxy = FaultProxy(source.port or 80, out / "requests.jsonl")
     report = []
     path = "/v1/sandboxes/[^/]+"
     headers = {}
@@ -39,35 +38,46 @@ def main(binary, domain, out):
             faults.append(Fault("POST", path + "/executions/[^/]+/cancel", "status", status=403))
         if cleanup:
             faults.append(Fault("DELETE", path, cleanup, status=403))
+        proxy = FaultProxy(source.port or 80, out / f"{name}.jsonl")
+        proxy.server.daemon_threads = False
         proxy.arm(name, *faults)
         args = [binary, "--domain", proxy.domain, "run"]
         if not interrupted:
             args.append("--rm")
         cmd = ["sleep", "30"] if interrupted else ["sh", "-c", f"printf result; exit {command_exit}"]
-        with subprocess.Popen([*args, "--", *cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                              text=True) as process:
+        with ExitStack() as cleanup_actions:
             try:
-                if interrupted:
-                    if not start.accepted.wait(20):
-                        raise TimeoutError("start did not reach the daemon")
-                    process.send_signal(signal.SIGINT)
-                stdout, stderr = process.communicate(timeout=25)
+                with subprocess.Popen([*args, "--", *cmd], stdout=subprocess.PIPE,
+                                      stderr=subprocess.PIPE, text=True) as process:
+                    try:
+                        if interrupted:
+                            if not start.accepted.wait(20):
+                                raise TimeoutError("start did not reach the daemon")
+                            process.send_signal(signal.SIGINT)
+                        stdout, stderr = process.communicate(timeout=25)
+                    finally:
+                        if interrupted:
+                            start.release.set()
+                        if process.poll() is None:
+                            process.kill()
+                            process.communicate()
             finally:
-                if interrupted:
-                    start.release.set()
-                if process.poll() is None:
-                    process.kill()
-        match = re.search(r"^sandbox: (sbx_[a-zA-Z0-9]+) \(created;", stderr, re.MULTILINE)
-        if not match:
-            raise RuntimeError(stderr)
-        sid = match.group(1)
-        try:
+                proxy.close()
+                created = {r["response_id"] for r in proxy.requests(name, "POST")
+                           if r["path"] == "/v1/sandboxes" and r.get("status") == 201 and r.get("response_id")}
+                for sid in created:
+                    cleanup_actions.callback(direct, sid, "DELETE")
+            if len(created) != 1:
+                raise AssertionError(f"{name}: expected one sandbox, got {created}")
+            sid, = created
             state = direct(sid, "GET")["state"]
             expected_exit = (1 if uncertain else 130) if interrupted else command_exit
             warning = [line for line in stderr.splitlines() if "cleanup unconfirmed" in line]
-            valid_warning = len(warning) == 1 and sid in warning[0] if cleanup else not warning
+            expected_warning = f"sandboxctl: cleanup unconfirmed for {sid}:"
+            valid_warning = len(warning) == 1 and warning[0].startswith(expected_warning) if cleanup else not warning
             primary = ("could not be canceled" if uncertain else "execution canceled") if interrupted else f"exit {command_exit}"
-            passed = (process.returncode == expected_exit and primary in stderr and valid_warning
+            passed = (f"sandbox: {sid} (created;" in stderr and process.returncode == expected_exit
+                      and primary in stderr and valid_warning
                       and stdout == ("" if interrupted else "result")
                       and state == ("running" if cleanup == "status" else "killed"))
             report.append(dict(name=name, sandbox_id=sid, exit_code=process.returncode, stdout=stdout,
@@ -75,18 +85,13 @@ def main(binary, domain, out):
             (out / "report.json").write_text(json.dumps(report, indent=2) + "\n")
             if not passed:
                 raise AssertionError(report[-1])
-        finally:
-            direct(sid, "DELETE")
 
-    try:
-        run("confirmed", 0, None)
-        run("refused-after-success", 0, "status")
-        run("refused-after-nonzero", 37, "status")
-        run("nonterminal-acknowledgement", 37, "running_snapshot")
-        run("interrupted-start", 0, "status", interrupted=True)
-        run("uncertain-start", 0, "status", interrupted=True, uncertain=True)
-    finally:
-        proxy.close()
+    run("confirmed", 0, None)
+    run("refused-after-success", 0, "status")
+    run("refused-after-nonzero", 37, "status")
+    run("nonterminal-acknowledgement", 37, "running_snapshot")
+    run("interrupted-start", 0, "status", interrupted=True)
+    run("uncertain-start", 0, "status", interrupted=True, uncertain=True)
 
 
 if __name__ == "__main__":

@@ -34,6 +34,11 @@ async function consumer(client = new Client(), signal?: AbortSignal) {
   describe(await client.execStream(sandbox.id, ['true'], () => {}, options));
   await client.writeFile(sandbox.id, '/tmp/file', new Uint8Array([0, 255]), options);
   const bytes: Uint8Array = await client.readFile(sandbox.id, '/tmp/file', options);
+  for (const entry of (await client.listFiles(sandbox.id, '/tmp', options)).entries) {
+    entry.type satisfies string;
+    entry.uid satisfies number;
+    entry.gid satisfies number;
+  }
   const future: Sandbox['state'] = 'future_state';
   const retryable: boolean = new SandboxError('transport', 'failed').retryable;
   void [bytes, future, retryable, placedCwd];

@@ -134,7 +134,8 @@ use `timeout_ms` (including explicit zero), mutually exclusive with
 `timeout_seconds`. Execution responses can include a confirmed guest `pid`.
 `streamExecution` accepts `lastEventId` to start after an attach watermark.
 Existing native defaults, seconds-based deadlines and graceful `/cancel` behavior
-are unchanged; native calls do not automatically require the E2B capability gate.
+are unchanged. Managed starts, attach and kill require `e2b.background.v1`;
+basic native operations do not require discovery.
 
 ### Local adapter regressions
 

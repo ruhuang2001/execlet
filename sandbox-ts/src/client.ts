@@ -1,5 +1,5 @@
 import { checkSignal, SandboxError } from './errors.js';
-import { Transport } from './http.js';
+import { sleep, Transport } from './http.js';
 import { consume, streamEvents } from './stream.js';
 import type {
   FileList, ListFilesOptions, ClientConfig, CompletedExecution, CreateSandboxRequest, Event, EventHandler,
@@ -61,8 +61,8 @@ export class Client {
         }
         this.capabilities = [...response.capabilities];
       } catch (cause) {
-        if (!(cause instanceof SandboxError) || [401, 403].includes(cause.statusCode) ||
-            (cause.code !== 'decode' && ![404, 405, 501].includes(cause.statusCode))) throw cause;
+        if (!(cause instanceof SandboxError) || !([404, 405, 501].includes(cause.statusCode) ||
+            (cause.statusCode === 0 && cause.code === 'decode'))) throw cause;
         throw new SandboxError('incompatible_server', 'server does not advertise required capabilities', { cause });
       }
     }
@@ -187,6 +187,7 @@ export class Client {
       if (typeof result?.signaled !== 'boolean' || result.execution?.state !== 'completed' ||
           result.execution.id !== executionID || result.execution.sandbox_id !== sandboxID ||
           typeof result.execution.termination_reason !== 'string' || !result.execution.termination_reason ||
+          (result.signaled && result.execution.termination_reason !== 'canceled') ||
           !(result.execution.exit_code === null || Number.isInteger(result.execution.exit_code))) {
         throw new SandboxError('backend_error', 'sandbox: kill termination was not confirmed', { execution: identity });
       }
@@ -230,21 +231,37 @@ export class Client {
     return executionOutcome(await this.streamExecution(sandboxID, started.id, onEvent, options));
   }
 
-  listFiles(sandboxID: string, path: string, options: ListFilesOptions = {}): Promise<FileList> {
+  async listFiles(sandboxID: string, path: string, options: ListFilesOptions = {}): Promise<FileList> {
     const query = new URLSearchParams({ path });
     if (options.limit !== undefined) query.set('limit', String(options.limit));
     if (options.cursor !== undefined) query.set('cursor', options.cursor);
-    return this.transport.json('GET', sandboxPath(sandboxID) + '/files/list?' + query, true, options.signal);
+    await this.requireCapabilities(['files.list.v1'], options);
+    const page = await this.transport.json<FileList>('GET', sandboxPath(sandboxID) + '/files/list?' + query, true, options.signal);
+    if (!Array.isArray(page?.entries) || (page.next_cursor !== undefined && typeof page.next_cursor !== 'string')) {
+      throw new SandboxError('decode', 'invalid file list');
+    }
+    for (const entry of page.entries) {
+      if (!entry || typeof entry.name !== 'string' || !Number.isInteger(entry.size) || !Number.isInteger(entry.mode) ||
+          typeof entry.mtime !== 'string' || typeof entry.is_dir !== 'boolean' || typeof entry.type !== 'string' ||
+          !Number.isInteger(entry.uid) || !Number.isInteger(entry.gid) ||
+          [entry.owner, entry.group, entry.symlink_target].some(v => v !== undefined && typeof v !== 'string')) {
+        throw new SandboxError('decode', 'invalid file list entry');
+      }
+    }
+    return page;
   }
 
-  readArchive(sandboxID: string, path: string, options: RequestOptions = {}): Promise<Uint8Array> {
+  async readArchive(sandboxID: string, path: string, options: RequestOptions = {}): Promise<Uint8Array> {
+    await this.requireCapabilities(['files.archive.v1'], options);
     return this.transport.request('GET', sandboxPath(sandboxID) + '/files/archive?path=' + encodeURIComponent(path), true, options.signal);
   }
 
   /** One attempt: extraction is not atomic and cannot safely replay ambiguous uploads. */
   async writeArchive(sandboxID: string, path: string, data: Uint8Array, options: RequestOptions = {}): Promise<void> {
+    const bytes = new Uint8Array(data);
+    await this.requireCapabilities(['files.archive.v1'], options);
     await this.transport.request('PUT', sandboxPath(sandboxID) + '/files/archive?path=' + encodeURIComponent(path), false,
-      options.signal, data);
+      options.signal, bytes);
   }
 
   readFile(sandboxID: string, path: string, options: RequestOptions = {}): Promise<Uint8Array> {
@@ -265,12 +282,30 @@ export class Client {
       undefined : { id: executionID, sandbox_id: sandboxID };
     const key = request?.idempotency_key;
     try {
-      if (request) execution = await this.start(sandboxID, request, controller.signal);
+      if (request) {
+        const recovered = await this.start(sandboxID, request, controller.signal);
+        if (typeof recovered?.id !== 'string' || !recovered.id || recovered.sandbox_id !== sandboxID) {
+          throw new Error('recovered start did not confirm execution identity');
+        }
+        execution = recovered;
+      }
       if (!execution) throw new Error('no execution identity');
-      const canceledExecution = await this.cancelExecution(sandboxID, execution.id, { signal: controller.signal });
-      execution = canceledExecution;
-      if (canceledExecution.state !== 'completed') {
-        throw new Error('server cancellation response is not terminal');
+      const expectedID = execution.id;
+      let snapshot = await this.transport.json<Execution>('POST', executionPath(sandboxID, expectedID) + '/cancel', false, controller.signal);
+      for (;;) {
+        if (snapshot?.id !== expectedID || snapshot.sandbox_id !== sandboxID) {
+          throw new Error('cancellation snapshot identifies another execution');
+        }
+        execution = snapshot;
+        if (snapshot.state !== 'running') break;
+        await sleep(50, controller.signal);
+        snapshot = await this.getExecution(sandboxID, expectedID, { signal: controller.signal });
+      }
+      const reason = snapshot.termination_reason;
+      const knownReasons = ['canceled', 'timeout', 'oom', 'evicted', 'exited'];
+      if (snapshot.state !== 'completed' || typeof reason !== 'string' || !knownReasons.includes(reason) ||
+          (reason === 'exited' && !Number.isInteger(snapshot.exit_code))) {
+        throw new Error('server cancellation response did not confirm terminal outcome');
       }
       return new SandboxError('canceled', 'sandbox: caller aborted; remote execution is terminal', {
         execution, cause, ...(key ? { idempotencyKey: key } : {}),

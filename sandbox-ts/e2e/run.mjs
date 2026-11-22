@@ -514,13 +514,15 @@ try {
     assert.equal((await direct.getExecution(sb.id, ex.id)).state, 'completed');
   });
 
-  await run('nonterminal cancel response remains unconfirmed', async () => {
+  await run('running cancel acknowledgement is confirmed by GET', async () => {
     const sb = await create();
     const controller = new AbortController();
     proxy.configure(scenario, record => record.path.endsWith('/cancel') ? { name: 'nonterminal-cancel-snapshot', transformJSON: value => ({ ...value, state: 'running', finished_at: null }) } : {});
     const ex = await client.startExecution(sb.id, { command: ['sh', '-c', 'echo ready; sleep 30'] });
-    const error = await rejected(client.streamExecution(sb.id, ex.id, event => { evidence(event); controller.abort(); }, { signal: controller.signal }), 'cancel_unconfirmed');
+    const error = await rejected(client.streamExecution(sb.id, ex.id, event => { evidence(event); controller.abort(); }, { signal: controller.signal }), 'canceled');
     assert.equal(error.execution.id, ex.id);
+    assert.equal(error.execution.state, 'completed');
+    assert.ok(proxy.requests().some(r => r.method === 'GET' && r.path.endsWith('/executions/' + ex.id)));
     assert.equal(cancelRequests().length, 1);
   });
 

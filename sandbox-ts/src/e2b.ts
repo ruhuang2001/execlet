@@ -571,6 +571,7 @@ class Files {
     const payload = typeof data === 'string' ? new TextEncoder().encode(data) : new Uint8Array(data);
     if (payload.length > 10 << 20) throw new AdapterError('file exceeds 10 MiB', { code: 'payload_too_large' });
     return request(this.requestTimeout, async signal => {
+      await this.call(() => this.native.requireCapabilities(['files.list.v1'], { signal }), signal);
       await this.call(() => this.native.writeFile(this.id, target, payload, { signal }), signal);
       const split = target.lastIndexOf('/');
       const parent = target.slice(0, split) || '/';

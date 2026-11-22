@@ -113,11 +113,9 @@ policies still apply.
 The [shared SDK contract](sdk.md) lists their limits and behavior, including
 exit code 126 for a cwd that is not a usable directory. Idempotency compares
 command, env, cwd and stdin, and the server never echoes env. Execution.cwd repeats
-the requested directory, is null when the request set none, and is absent on a
-server older than this contract, which ignores both fields without an error;
-nothing reveals an ignored env. Such a server also leaves them out of the
-idempotency comparison, so replaying a key with a different env or cwd returns
-the earlier execution instead of idempotency_conflict. exec and execStream take
+the requested directory and is null when the request set none. Older servers
+can silently ignore env/cwd on raw HTTP requests, so the client requires
+`execution.env-cwd.v1` before sending them. exec and execStream take
 only a command, as in Go. To set env or cwd, put them on the request to
 startExecution, then stream the returned execution:
 
@@ -150,10 +148,15 @@ With a configured limit above one, an unexplained exit 137 is `unknown`: `exec` 
 
 ## Files
 
+Listing requires `files.list.v1`; both archive methods require `files.archive.v1`.
+Ordinary `readFile` and `writeFile` skip capability discovery.
+
 `client.listFiles(sandboxID, path, { limit: 100, cursor, signal })` returns a `FileList`
 page with `entries` and optional `next_cursor`. Pass `next_cursor` as the next call’s
 `cursor`. Entries describe immediate children with name, size, mode, modification time,
-and directory status. Follow the returned cursor until it is empty or absent. Pages are
+and directory status. `type`, `uid` and `gid` are required; `owner`, `group` and
+`symlink_target` may be absent. Malformed known fields reject with `decode`;
+future fields and type strings are retained. Follow the returned cursor until it is empty or absent. Pages are
 name-ordered, not a filesystem snapshot. The default page size is 100, with a maximum of
 1000; bounded scans can fail with HTTP 413. See [directory listing](api.md#directory-listing) for cursor and metadata semantics.
 
@@ -241,15 +244,18 @@ start and stream when composing them. The E2B facade uses this opt-in; native
 `exec` and `execStream` keep their existing cancellation behavior.
 
 An aborted in-flight start triggers a fresh five-second deadline: repeat the
-start with the same key, learn the ID, then cancel it. Failed or nonterminal
+start with the same key, verify the sandbox and execution ID, then cancel it. Unconfirmed
 recovery returns cancel_unconfirmed with idempotencyKey and any known snapshot
 or IDs, allowing later reconciliation. Keys expire with server retention; do
 not replay an ancient key as if it were permanent.
 
 Aborting an active stream starts cancellation with a fresh five-second deadline,
 even while an iterator is suspended after an event or an async callback waits.
-The next consumer observation reports cleanup. A canceled error requires a
-cancel snapshot with state completed; otherwise the error is cancel_unconfirmed.
+The next consumer observation reports cleanup. After one cancel, a matching
+`running` acknowledgement triggers only `getExecution` polling under the same
+deadline, never another cancel or kill. The sandbox and execution IDs must match
+on every snapshot. Only `completed` with a known terminal reason other than
+`unknown` (and an integer exit code for `exited`) confirms cancellation.
 The attached execution may have exited naturally before cleanup; inspect its
 actual reason. HTTP 200 alone never confirms termination.
 
@@ -267,7 +273,7 @@ and credentials. Basic legacy calls skip discovery. Downgrade during a session
 and mixed-version load balancers remain unsupported. Future wire termination
 reasons map to the explicit `unknown` outcome so switches remain exhaustive.
 
-Native `attachCommand` returns the execution and atomic event watermark;
+Native `resolveCommand` returns the execution and atomic event watermark;
 `killExecution` sends one immediate managed kill without retrying uncertain
 acknowledgements. `@tiny-sandbox/sdk/e2b` exports `CommandHandle` for background
 run/connect/wait/disconnect/kill; see the [package examples](../sandbox-ts/README.md)

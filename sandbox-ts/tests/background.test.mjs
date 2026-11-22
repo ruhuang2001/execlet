@@ -9,6 +9,7 @@ import { Sandbox, AdapterError, AuthenticationError, InvalidArgumentError,
 
 const sid = 'sandbox-one', eid = 'execution-one', pid = 42;
 const base = '/v1/sandboxes/' + sid, exec = base + '/executions/' + eid;
+const flags = ['e2b.background.v1', 'execution.env-cwd.v1', 'execution.stdin.v1', 'execution.concurrent.v1', 'files.list.v1', 'files.archive.v1'];
 const image = 'sha256:' + 'a'.repeat(64);
 const sandbox = { id: sid, state: 'running', expires_at: '2027-01-01T00:00:00Z' };
 const running = { id: eid, sandbox_id: sid, pid, command: ['true'], state: 'running',
@@ -72,7 +73,7 @@ function fixture(t, route = () => undefined) {
     if (response !== undefined) return response;
     if (call.path === '/v1/sandboxes' && call.method === 'POST') return json(sandbox, 201);
     if (call.path === base && ['GET', 'PATCH'].includes(call.method)) return json(sandbox);
-    if (call.path === '/v1/capabilities') return json({ capabilities: ['e2b.background.v1', 'execution.env-cwd.v1', 'execution.stdin.v1', 'execution.concurrent.v1'] });
+    if (call.path === '/v1/capabilities') return json({ capabilities: flags });
     if (call.path === base + '/executions' && call.method === 'POST') return json(running, 201);
     if (call.path === base + '/commands/' + pid) return json({ execution: running, last_event_id: 0 });
     if (call.path === exec + '/events') return sse(complete(1));
@@ -84,6 +85,17 @@ function fixture(t, route = () => undefined) {
 const commandCalls = calls => calls.filter(c => c.path.includes('/executions') || c.path.includes('/commands/'));
 const signals = calls => calls.filter(c => c.path.endsWith('/cancel') || c.path.endsWith('/kill'));
 
+test('E2B write leaves existing data intact without list support', async t => {
+  let contents = 'original';
+  const { create } = fixture(t, c => {
+    if (c.path === '/v1/capabilities') return json({ capabilities: [] });
+    if (c.method === 'PUT') { contents = 'overwritten'; return new Response(null, { status: 204 }); }
+  });
+  const sb = await create();
+  assert.equal((await rejected(sb.files.write('/work/file', 'replacement'))).code, 'incompatible_server');
+  assert.equal(contents, 'original');
+});
+
 test('native additive fields fail before mutation on old servers; basic execution still works', async t => {
   const { calls } = fixture(t, c => c.path === '/v1/capabilities' ? failure('not_found', 404) : undefined);
   const native = new Client({ domain: 'http://sdk.test', maxRetries: -1 });
@@ -94,6 +106,9 @@ test('native additive fields fail before mutation on old servers; basic executio
       extra => () => native.startExecution(sid, { command: ['true'], ...extra })),
     () => native.resolveCommand(sid, pid),
     () => native.killExecution(sid, eid),
+    () => native.listFiles(sid, '/'),
+    () => native.readArchive(sid, '/'),
+    () => native.writeArchive(sid, '/', new Uint8Array()),
   ];
   for (const operation of operations) {
     const before = calls.length;
@@ -507,7 +522,7 @@ test('premature EOF exhausts bounded recovery, not a successful empty result', a
 test('native capability/attach/kill APIs validate new fields and retain existing defaults', async t => {
   const { calls } = fixture(t);
   const native = new Client({ domain: 'http://sdk.test', apiKey: 'native-key' });
-  assert.deepEqual(await native.getCapabilities(), { capabilities: ['e2b.background.v1', 'execution.env-cwd.v1', 'execution.stdin.v1', 'execution.concurrent.v1'] });
+  assert.deepEqual(await native.getCapabilities(), { capabilities: flags });
   assert.equal(calls[0].headers.get('Authorization'), 'Bearer native-key');
   assert.equal((await native.resolveCommand(sid, pid)).execution.pid, pid);
   assert.equal((await native.killExecution(sid, eid)).signaled, true);
@@ -632,4 +647,78 @@ test('supported maximum deadline never overflows timers and no-option handles re
   assert.throws(() => handle.kill({ requestTimeoutMs: 10 }), InvalidArgumentError);
   assert(await rejected(handle.disconnect({ signal: new AbortController().signal })) instanceof InvalidArgumentError);
   assert.equal(calls.length, before); await handle.disconnect();
+});
+
+test('native abort rejects unknown terminal cancellation outcome as cancel_unconfirmed', async t => {
+  let cancelReason = 'unknown';
+  fixture(t, c => {
+    if (c.path.endsWith('/events')) return live(c.signal).response;
+    if (c.path.endsWith('/cancel')) return json(done({ termination_reason: cancelReason, exit_code: null }));
+    if (c.path.endsWith('/kill')) return json({ execution: done({ termination_reason: 'exited', exit_code: 0 }), signaled: true });
+  });
+  const native = new Client({ domain: 'http://sdk.test', apiKey: 'key-one', maxRetries: -1 });
+  for (const reason of ['unknown', 'future_reason']) {
+    cancelReason = reason;
+    const controller = new AbortController();
+    controller.abort();
+    const error = await rejected(native.streamExecution(sid, eid, () => {}, { signal: controller.signal }));
+    assert.equal(error.code, 'cancel_unconfirmed');
+  }
+  const killErr = await rejected(native.killExecution(sid, eid));
+  assert.equal(killErr.code, 'backend_error');
+});
+
+test('automatic cancellation polls only matching running snapshots, without resending a signal', async t => {
+  let ack, polls;
+  const { calls } = fixture(t, c => {
+    if (c.path === exec + '/cancel') return ack;
+    if (c.path === exec && c.method === 'GET') return json(polls.shift());
+  });
+  const native = new Client({ domain: 'http://sdk.test' });
+  for (const [reply, observed, code, gets] of [
+    [json(running), [running, done()], 'canceled', 2],
+    [json({ ...running, id: 'other' }), [done()], 'cancel_unconfirmed', 0],
+    [json(running), [{ ...running, sandbox_id: 'other' }, done()], 'cancel_unconfirmed', 1],
+    [failure('unavailable', 503), [], 'cancel_unconfirmed', 0],
+  ]) {
+    ack = reply; polls = observed;
+    const before = calls.length;
+    const error = await rejected(native.streamExecution(sid, eid, () => {}, { signal: AbortSignal.abort() }));
+    assert.equal(error.code, code);
+    assert.equal(error.execution.id, eid); assert.equal(error.execution.sandbox_id, sid);
+    assert.deepEqual(calls.slice(before).map(c => [c.method, c.path]),
+      [['POST', exec + '/cancel'], ...Array(gets).fill(['GET', exec])]);
+  }
+});
+
+test('an ambiguous start never signals an execution recovered from another sandbox', async t => {
+  const controller = new AbortController();
+  const { calls } = fixture(t, c => {
+    if (c.path !== base + '/executions') return;
+    if (!controller.signal.aborted) {
+      controller.abort();
+      throw new Error('lost start');
+    }
+    return json({ ...running, sandbox_id: 'other' });
+  });
+  const native = new Client({ domain: 'http://sdk.test' });
+  const error = await rejected(native.startExecution(sid, { command: ['true'], idempotency_key: 'original' }, { signal: controller.signal }));
+  assert.equal(error.code, 'cancel_unconfirmed');
+  assert.equal(error.idempotencyKey, 'original');
+  assert.deepEqual(calls.map(c => [c.path, c.body.idempotency_key]), Array(2).fill([base + '/executions', 'original']));
+});
+
+test('file list requires typed metadata, retains unknown fields and accepts zero IDs', async t => {
+  const entry = { name: 'child', size: 1, mode: 420, mtime: '2026-11-18T00:00:00Z',
+    is_dir: false, type: 'future_kind', uid: 0, gid: 0, future: { x: 1 } };
+  let page = { entries: [entry], revision: 3 };
+  fixture(t, c => c.path.endsWith('/files/list') ? json(page) : undefined);
+  const native = new Client({ domain: 'http://sdk.test' });
+  assert.deepEqual(await native.listFiles(sid, '/'), page);
+  const malformed = [{ entries: null }, { entries: [], next_cursor: 1 }];
+  for (const [key, wrong] of [['type', 0], ['uid', true], ['gid', null], ['owner', 0]]) {
+    malformed.push({ entries: [{ ...entry, [key]: wrong }] });
+    if (key !== 'owner') malformed.push({ entries: [{ ...entry, [key]: undefined }] });
+  }
+  for (page of malformed) assert.equal((await rejected(native.listFiles(sid, '/'))).code, 'decode');
 });

@@ -124,7 +124,22 @@ export interface ClientConfig {
   fetch?: typeof globalThis.fetch;
 }
 
+export type FileEntryType = OpenString<'file' | 'dir' | 'symlink' | 'other'>;
+
 /** Metadata of an immediate child; POSIX permission bits and UTC RFC3339 mtime. */
-export interface FileEntry { name: string; size: number; mode: number; mtime: string; is_dir: boolean }
-export interface FileList { entries: FileEntry[]; next_cursor?: string }
+export interface FileEntry {
+  name: string;
+  size: number;
+  mode: number;
+  mtime: string;
+  is_dir: boolean;
+  type: FileEntryType;
+  uid: number;
+  gid: number;
+  owner?: string;
+  group?: string;
+  symlink_target?: string;
+  [field: string]: unknown;
+}
+export interface FileList { entries: FileEntry[]; next_cursor?: string; [field: string]: unknown }
 export interface ListFilesOptions extends RequestOptions { limit?: number; cursor?: string }

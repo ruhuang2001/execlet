@@ -286,7 +286,10 @@ func TestExecRunsWrappedCommandAndDemuxes(t *testing.T) {
 		t.Fatalf("create: %v", err)
 	}
 
-	f.setProgram(func(string, []string) (string, string, int) {
+	f.setProgram(func(_ string, cmd []string) (string, string, int) {
+		if cmd[0] == "/bin/rm" {
+			return "", "", 0
+		}
 		return "out\n", "err\n", 3
 	})
 
@@ -545,6 +548,107 @@ func TestParsePidRejectsNonNumeric(t *testing.T) {
 	if pid, err := parsePid([]byte(" 4242\n")); err != nil || pid != "4242" {
 		t.Errorf("parsePid(4242) = %q, %v", pid, err)
 	}
+}
+
+func TestManagedWaitCleansPidFilesWhenOutcomeReadFails(t *testing.T) {
+	f := newFakeDaemon(t)
+	b := f.backend(t)
+	id, err := b.Create(context.Background(), daemon.ContainerSpec{Image: "alpine:3.20", MemoryMB: 64})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	var rmArgs []string
+	f.setProgram(func(_ string, cmd []string) (string, string, int) {
+		if len(cmd) >= 2 && cmd[0] == "cat" && !strings.HasSuffix(cmd[1], ".result") {
+			return `{"pid":4242}`, "", 0
+		}
+		if len(cmd) >= 2 && cmd[0] == "cat" && strings.HasSuffix(cmd[1], ".result") {
+			return "", "No such file", 1
+		}
+		if len(cmd) > 5 && cmd[2] == cleanupStagedScript {
+			rmArgs = slices.Clone(cmd[5:])
+			return "", "", 0
+		}
+		return "", "", 0
+	})
+
+	timeoutMS := int64(5000)
+	proc, err := b.Exec(context.Background(), id, daemon.ExecSpec{
+		Command:   []string{"true"},
+		TimeoutMS: &timeoutMS,
+	})
+	if err != nil {
+		t.Fatalf("exec managed: %v", err)
+	}
+	if _, err := proc.Wait(); err == nil {
+		t.Fatal("Wait succeeded without .result file, want error")
+	}
+	p := proc.(*process).pidPath
+	if !slices.Equal(rmArgs, []string{p, p + ".result", p + ".sock", p + ".tmp", p + ".result.tmp"}) {
+		t.Fatalf("cleanup after confirmed managed exit and unreadable outcome targeted %q", rmArgs)
+	}
+}
+
+func TestDeferredPidCleanupPreservesRunningAndReapsExited(t *testing.T) {
+	f := newFakeDaemon(t)
+	b := f.backend(t)
+	id, err := b.Create(context.Background(), daemon.ContainerSpec{Image: "alpine:3.20", MemoryMB: 64})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	var rmTargets []string
+	f.setProgram(func(_ string, cmd []string) (string, string, int) {
+		if len(cmd) >= 4 && cmd[0] == "/bin/rm" && strings.HasPrefix(cmd[3], PidDir+"/") {
+			rmTargets = append(rmTargets, cmd[3:]...)
+		}
+		return "", "", 0
+	})
+
+	f.mu.Lock()
+	f.failInspect = true
+	f.mu.Unlock()
+
+	proc, err := b.Exec(context.Background(), id, daemon.ExecSpec{Command: []string{"true"}})
+	if err != nil {
+		t.Fatalf("exec: %v", err)
+	}
+	if _, err := proc.Wait(); err == nil {
+		t.Fatal("Wait succeeded while ExecInspect failed")
+	}
+	// While inspect fails or reports running, control files must NOT be deleted.
+	f.mu.Lock()
+	if len(rmTargets) != 0 {
+		f.mu.Unlock()
+		t.Fatalf("premature PID cleanup while exec state is unconfirmed: %v", rmTargets)
+	}
+
+	f.failInspect = false
+	for _, ex := range f.execs {
+		ex.running = true
+	}
+	f.mu.Unlock()
+	files := proc.(*process).execFiles
+	if b.retryFiles(files) {
+		t.Fatal("retry considered the still-running exec cleaned up")
+	}
+
+	f.mu.Lock()
+	if len(rmTargets) != 0 {
+		f.mu.Unlock()
+		t.Fatalf("premature PID cleanup while exec is still running: %v", rmTargets)
+	}
+	for _, ex := range f.execs {
+		ex.running = false
+	}
+	f.mu.Unlock()
+	// No second Wait or command drives this retry.
+	waitFor(t, "autonomous cleanup", func() bool {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return slices.Contains(rmTargets, files.pidPath)
+	})
 }
 
 // waitFor is a small helper for tests that wait on a condition.

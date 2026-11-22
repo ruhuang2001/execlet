@@ -43,9 +43,10 @@ type fakeDaemon struct {
 	execEnvs     [][]string
 
 	// Scenario switches.
-	failStart bool
-	nameTaken string
-	noPidFile bool
+	failStart   bool
+	failInspect bool
+	nameTaken   string
+	noPidFile   bool
 	// missingImages makes create answer 404 "No such image" until the image is
 	// pulled, which is what a clean host does.
 	missingImages map[string]bool
@@ -470,6 +471,10 @@ func (f *fakeDaemon) execStart(w http.ResponseWriter, _ *http.Request, execID st
 func (f *fakeDaemon) execInspect(w http.ResponseWriter, _ *http.Request, execID string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failInspect {
+		writeError(w, 500, "simulated inspect failure")
+		return
+	}
 	ex := f.execs[execID]
 	if ex == nil {
 		writeError(w, 404, "No such exec: "+execID)

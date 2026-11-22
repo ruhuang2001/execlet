@@ -47,10 +47,15 @@ type Container struct {
 // process exits.
 type ExecInspect struct {
 	ID          string `json:"ID"`
-	Running     bool   `json:"Running"`
+	Running     *bool  `json:"Running"` // missing/null is not confirmation of exit
 	ExitCode    *int   `json:"ExitCode"`
 	Pid         int    `json:"Pid"`
 	ContainerID string `json:"ContainerID"`
+}
+
+// Stopped distinguishes a confirmed exit from a not-yet-started exec with a null exit code.
+func (e ExecInspect) Stopped(execID string) bool {
+	return e.ID == execID && e.Running != nil && !*e.Running && e.ExitCode != nil
 }
 
 // ExecConfig is the body of an exec create. Env is additive to the container's

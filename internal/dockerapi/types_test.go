@@ -5,6 +5,26 @@ import (
 	"testing"
 )
 
+func TestExecInspectConfirmsExactStoppedExec(t *testing.T) {
+	for payload, want := range map[string]bool{
+		`{}`:                        false,
+		`{"ID":"a","Running":null}`: false,
+		`{"ID":"a","Running":true}`: false,
+		`{"ID":"other","Running":false,"ExitCode":0}`: false,
+		`{"ID":"a","Running":false}`:                  false,
+		`{"ID":"a","Running":false,"ExitCode":null}`:  false,
+		`{"ID":"a","Running":false,"ExitCode":0}`:     true,
+	} {
+		var state ExecInspect
+		if err := json.Unmarshal([]byte(payload), &state); err != nil {
+			t.Fatal(err)
+		}
+		if got := state.Stopped("a"); got != want {
+			t.Errorf("Stopped(%s) = %t, want %t", payload, got, want)
+		}
+	}
+}
+
 // The Engine API ignores a field it does not recognize, so a mistyped JSON
 // name is not an error: it is a limit that silently does nothing. The fake
 // daemon decodes into the same struct, which would round-trip any spelling.

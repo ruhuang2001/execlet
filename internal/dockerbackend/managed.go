@@ -54,7 +54,7 @@ func (p *process) Killed() bool { return p.managedKilled }
 func (p *process) readManagedOutcome(ctx context.Context) error {
 	p.signalMu.Lock()
 	defer p.signalMu.Unlock()
-	data, err := p.b.capture(ctx, p.containerID, []string{"cat", p.pidPath + ".result"})
+	data, err := p.b.captureControl(ctx, p.containerID, []string{"cat", p.pidPath + ".result"})
 	if err != nil {
 		return err
 	}
@@ -67,14 +67,13 @@ func (p *process) readManagedOutcome(ctx context.Context) error {
 	p.managedTimeout = result.Reason == "timeout"
 	p.managedKilled = result.Reason == "canceled"
 	p.exited = true
-	_, _ = p.b.capture(ctx, p.containerID, []string{"rm", "-f", p.pidPath + ".result"})
 	return nil
 }
 
 func (p *process) readManagedPID(ctx context.Context) error {
 	ended := false
-	for {
-		data, err := p.b.capture(ctx, p.containerID, []string{"cat", p.pidPath})
+	for step := 0; ; step++ {
+		data, err := p.b.captureControl(ctx, p.containerID, []string{"cat", p.pidPath})
 		if err == nil {
 			var identity struct {
 				PID int `json:"pid"`
@@ -98,7 +97,7 @@ func (p *process) readManagedPID(ctx context.Context) error {
 			// The first cat may precede publication while the process exits
 			// before its response arrives. Read again after this barrier.
 			ended = true
-		case <-time.After(10 * time.Millisecond):
+		case <-time.After(pollDelay(step)):
 		}
 	}
 }
@@ -122,7 +121,7 @@ func (p *process) signalManaged(sig daemon.Signal) (bool, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	data, err := p.b.capture(ctx, p.containerID, []string{"python3", "-I", "-c", supervisor, "signal", p.pidPath, p.controlToken, action})
+	data, err := p.b.captureControl(ctx, p.containerID, []string{"python3", "-I", "-c", supervisor, "signal", p.pidPath, p.controlToken, action})
 	if err != nil {
 		return false, fmt.Errorf("managed signal unconfirmed for PID %s: %w", strconv.Itoa(p.guestPID), err)
 	}

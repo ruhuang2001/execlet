@@ -23,6 +23,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -69,10 +71,12 @@ var sandboxSecurityOpt = []string{"no-new-privileges"}
 
 // Backend is a daemon.Backend over a Docker daemon.
 type Backend struct {
-	api *dockerapi.Client
+	api        *dockerapi.Client
+	cgroupRoot string // host fast path only for a Linux Unix-socket backend
 
-	mu  sync.Mutex
-	seq uint64
+	mu      sync.Mutex
+	seq     uint64
+	cleanup cleanupQueue
 }
 
 var _ daemon.Backend = (*Backend)(nil)
@@ -87,7 +91,11 @@ func Dial(ctx context.Context, socketPath string) (*Backend, error) {
 	if err != nil {
 		return nil, err
 	}
-	return New(api), nil
+	b := New(api)
+	if runtime.GOOS == "linux" {
+		b.cgroupRoot = "/sys/fs/cgroup"
+	}
+	return b, nil
 }
 
 // Ping reports whether Docker answers its health probe.
@@ -155,6 +163,9 @@ func (b *Backend) Create(ctx context.Context, spec daemon.ContainerSpec) (string
 // Remove force-removes the container and everything running in it.
 func (b *Backend) Remove(ctx context.Context, containerID string) error {
 	err := b.api.ContainerRemove(ctx, containerID)
+	if err == nil || dockerapi.IsNotFound(err) {
+		b.cleanup.forget(containerID)
+	}
 	return notFound(err, "container %s", containerID)
 }
 
@@ -211,7 +222,7 @@ func (b *Backend) RemoveOwned(ctx context.Context, labelKey, owner string) (int,
 	removed := 0
 	var errs []error
 	for _, c := range list {
-		if err := b.api.ContainerRemove(ctx, c.ID); err != nil {
+		if err := b.Remove(ctx, c.ID); err != nil {
 			errs = append(errs, err)
 			continue
 		}
@@ -245,24 +256,18 @@ func (b *Backend) Exec(ctx context.Context, containerID string, spec daemon.Exec
 	if len(spec.Command) == 0 {
 		return nil, errors.New("dockerbackend: empty command")
 	}
+	if spec.TimeoutMS != nil && spec.Stdin != "" {
+		return nil, errors.New("managed commands do not support stdin")
+	}
 	pidPath := b.nextPidPath()
 	stdinDir, err := b.stageStdin(ctx, containerID, spec.Stdin)
 	if err != nil {
 		return nil, err
 	}
-	started := false
-	defer func() {
-		if !started {
-			b.cleanupStdin(containerID, stdinDir)
-		}
-	}()
 	wrapped := wrapCommand(pidPath, spec.Dir, spec.Env, spec.Command)
 	execEnv := spec.Env
 	controlToken := ""
 	if spec.TimeoutMS != nil {
-		if spec.Stdin != "" {
-			return nil, errors.New("managed commands do not support stdin")
-		}
 		controlToken = strings.TrimPrefix(b.nextPidPath(), PidDir+"/")
 		wrapped, stdinDir, err = b.managedCommand(ctx, containerID, pidPath, controlToken, spec)
 		if err != nil {
@@ -279,6 +284,7 @@ func (b *Backend) Exec(ctx context.Context, containerID string, spec daemon.Exec
 		Env: execEnv,
 	})
 	if err != nil {
+		b.cleanupStdin(containerID, stdinDir)
 		return nil, fmt.Errorf("dockerbackend: exec create: %w", err)
 	}
 	// Only the handshake inherits the start budget. Once headers arrive, the
@@ -296,6 +302,8 @@ func (b *Backend) Exec(ctx context.Context, containerID string, spec daemon.Exec
 	}
 	if err != nil {
 		stopStream()
+		// The wrapper may still start. Leave its files to container removal
+		// (ErrStartUnconfirmed retires the sandbox), not a racing rm.
 		return nil, fmt.Errorf("dockerbackend: exec start: %w", errors.Join(daemon.ErrStartUnconfirmed, err))
 	}
 
@@ -303,10 +311,7 @@ func (b *Backend) Exec(ctx context.Context, containerID string, spec daemon.Exec
 	errW := newBufferedStream()
 	p := &process{
 		b:            b,
-		containerID:  containerID,
-		execID:       execID,
-		pidPath:      pidPath,
-		stdinDir:     stdinDir,
+		execFiles:    &execFiles{containerID: containerID, execID: execID, pidPath: pidPath, stdinDir: stdinDir, managed: controlToken != ""},
 		controlToken: controlToken,
 		stdout:       outW,
 		stderr:       errW,
@@ -328,27 +333,20 @@ func (b *Backend) Exec(ctx context.Context, containerID string, spec daemon.Exec
 			// ExecStart was accepted. Keep its observer and original supervisor
 			// deadline alive; the caller retains the invocation but cannot
 			// advertise a handle whose guest identity was never confirmed.
-			started = true
 			return p, err
 		}
 	}
-	started = true
 	return p, nil
 }
 
-// OOMKillCount reads the container cgroup's cumulative oom_kill counter. The
-// file is read from inside the container because the cgroup layout is the
-// container's, and a host path would differ across cgroups versions and
-// remote daemons.
-//
-// When the cgroup read fails, inspect decides: a container that has run out
-// of memory cannot start another process, so exec itself fails right after
-// the kill that matters most. The daemon's OOMKilled flag carries the same
-// fact and survives that state. It is reported as 1 rather than a count: the
-// caller only compares it with a baseline, and a value above any real
-// baseline is all the comparison needs.
+// OOMKillCount prefers the exact container's local v2 counter. If unavailable,
+// read from inside the container (v2 or v1). If even exec fails, Docker's
+// OOMKilled flag is the last remaining evidence.
 func (b *Backend) OOMKillCount(ctx context.Context, containerID string) (int64, error) {
-	out, err := b.capture(ctx, containerID, []string{"/bin/sh", "-c", dockerapi.OOMScript})
+	if n, ok := localOOMKillCount(b.cgroupRoot, containerID); ok {
+		return n, nil
+	}
+	out, err := b.captureControl(ctx, containerID, []string{"/bin/sh", "-c", dockerapi.OOMScript})
 	if err == nil {
 		return dockerapi.ParseOOMKill(out)
 	}
@@ -479,6 +477,18 @@ func (b *Backend) capture(ctx context.Context, containerID string, command []str
 }
 
 func (b *Backend) captureAs(ctx context.Context, containerID, user string, command []string) ([]byte, error) {
+	return b.captureExec(ctx, containerID, user, command, 0)
+}
+
+// Control helpers have tiny responses but their binaries and output are
+// guest-controlled. Bound the entire framed stream, including stderr.
+func (b *Backend) captureControl(ctx context.Context, containerID string, command []string) ([]byte, error) {
+	return b.captureExec(ctx, containerID, "", command, 64<<10)
+}
+
+var errCaptureLimit = errors.New("dockerbackend: helper output limit exceeded")
+
+func (b *Backend) captureExec(ctx context.Context, containerID, user string, command []string, limit int64) ([]byte, error) {
 	execID, err := b.api.ExecCreate(ctx, containerID, dockerapi.ExecConfig{Cmd: command, User: user})
 	if err != nil {
 		return nil, err
@@ -489,27 +499,48 @@ func (b *Backend) captureAs(ctx context.Context, containerID, user string, comma
 	}
 	defer func() { _ = stream.Close() }()
 
+	var reader io.Reader = stream
+	bounded := &io.LimitedReader{R: stream, N: limit + 1}
+	if limit > 0 {
+		reader = bounded
+	}
 	var stdout, stderr bytes.Buffer
-	if err := dockerapi.Demux(stream, &stdout, &stderr); err != nil {
+	err = dockerapi.Demux(reader, &stdout, &stderr)
+	if limit > 0 && bounded.N == 0 {
+		return nil, errCaptureLimit
+	}
+	if err != nil {
 		return nil, err
 	}
 	inspect, err := b.waitInspect(ctx, execID)
 	if err != nil {
 		return nil, err
 	}
+	if limit > 0 && inspect.ExitCode == nil {
+		return nil, errors.New("dockerbackend: control helper exit status unconfirmed")
+	}
 	if inspect.ExitCode != nil && *inspect.ExitCode != 0 {
-		return nil, fmt.Errorf("internal exec exited %d: %s", *inspect.ExitCode, strings.TrimSpace(stderr.String()))
+		return nil, &execExitError{code: *inspect.ExitCode, stderr: strings.TrimSpace(stderr.String())}
 	}
 	return stdout.Bytes(), nil
+}
+
+type execExitError struct {
+	code   int
+	stderr string
+}
+
+func (e *execExitError) Error() string {
+	return fmt.Sprintf("internal exec exited %d: %s", e.code, e.stderr)
 }
 
 // waitInspect polls until the exec is no longer running and returns its final
 // state.
 func (b *Backend) waitInspect(ctx context.Context, execID string) (dockerapi.ExecInspect, error) {
 	deadline := time.Now().Add(10 * time.Second)
-	for {
+	for step := 0; ; step++ {
 		inspect, err := b.api.ExecInspect(ctx, execID)
-		if err == nil && !inspect.Running {
+		if err == nil && inspect.Stopped(execID) {
 			return inspect, nil
 		}
 		if time.Now().After(deadline) {
@@ -521,9 +552,14 @@ func (b *Backend) waitInspect(ctx context.Context, execID string) (dockerapi.Exe
 		select {
 		case <-ctx.Done():
 			return dockerapi.ExecInspect{}, ctx.Err()
-		case <-time.After(20 * time.Millisecond):
+		case <-time.After(pollDelay(step)):
 		}
 	}
+}
+
+func pollDelay(step int) time.Duration {
+	delay := time.Millisecond << min(step, 5)
+	return min(delay, 20*time.Millisecond)
 }
 
 // execWrapper records the process group leader's PID, changes directory, and

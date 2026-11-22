@@ -41,8 +41,13 @@ Review coverage extension (before harness changes):
   records before/after owned-container state and the real process result.
 
 No malicious staging-replacement result is claimed by this gate; it does not
-currently intercept the staging handshake. Runtime-failure cleanup remains
-bounded best effort, distinct from successful wrapper unlink before execution.
+currently intercept the staging handshake. After a confirmed exit, PID and
+staged stdin files are removed together. A failed removal is retried without
+waiting for the next command. If inspection is inconclusive, retry inspection
+before unlinking files a live command may still need. If Docker still has no
+record of the exec after a minute, leave its files for container removal
+without treating the missing record as proof of exit. If the start itself is
+unconfirmed and has no observer, retire the container instead of replaying it.
 
 The raw HTTP/CLI gate retains privacy-start/get/list JSON, privacy-sse.sse,
 raw request status/byte-count/hash records, raw-results.json, exact CLI input

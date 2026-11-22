@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"path"
-	"strings"
 	"sync"
 	"time"
 
@@ -15,11 +13,8 @@ import (
 // process is one execution's process: a Docker exec inside the sandbox
 // container.
 type process struct {
+	*execFiles
 	b            *Backend
-	containerID  string
-	execID       string
-	pidPath      string
-	stdinDir     string
 	controlToken string
 	guestPID     int
 
@@ -27,9 +22,6 @@ type process struct {
 	stderr *bufferedStream
 	done   chan struct{} // closed when the output stream has ended
 
-	signalMu       sync.Mutex
-	exited         bool
-	pidCleaned     bool
 	mu             sync.Mutex
 	demuxErr       error
 	managedTimeout bool
@@ -55,20 +47,20 @@ func (p *process) Stderr() io.Reader { return p.stderr }
 // recording the exit code.
 func (p *process) Wait() (int, error) {
 	<-p.done
-	defer p.b.cleanupStdin(p.containerID, p.stdinDir)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	inspect, err := p.b.waitInspect(ctx, p.execID)
 	if err != nil {
+		p.b.deferCleanup(p.execFiles)
 		return -1, err
 	}
+	defer p.b.cleanupAfterExit(p.execFiles)
 	if p.controlToken != "" {
 		if err := p.readManagedOutcome(ctx); err != nil {
 			return -1, err
 		}
 	}
-	p.cleanupPID()
 	if inspect.ExitCode == nil {
 		return -1, nil
 	}
@@ -104,45 +96,11 @@ func (p *process) Signal(sig daemon.Signal) error {
 	defer cancel()
 	// busybox kill does not accept "--", so the PID is passed as a separate
 	// validated operand and the signal as the option.
-	if _, err := p.b.capture(ctx, p.containerID, []string{"/bin/sh", "-c", "kill -" + name + " -" + pid}); err != nil {
+	if _, err := p.b.captureControl(ctx, p.containerID, []string{"/bin/sh", "-c", "kill -" + name + " -" + pid}); err != nil {
 		// The group may already be gone, which is the state this call wants.
 		return err
 	}
 	return nil
-}
-
-// cleanupPID runs only after waitInspect confirms the exec stopped. The signal
-// lock prevents unlinking a PID while a cancellation helper is using it.
-func (p *process) cleanupPID() {
-	p.signalMu.Lock()
-	defer p.signalMu.Unlock()
-	if p.pidCleaned {
-		return
-	}
-	p.exited = true
-	name := path.Base(p.pidPath)
-	if path.Dir(p.pidPath) != PidDir || name == "." || name == ".." || name == "" {
-		return
-	}
-	if strings.ContainsAny(name, "/\\\x00") {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	for attempt := range 3 {
-		if _, err := p.b.capture(ctx, p.containerID, []string{"/bin/rm", "-f", "--", p.pidPath}); err == nil {
-			p.pidCleaned = true
-			return
-		}
-		if attempt == 2 || ctx.Err() != nil {
-			return
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(20 * time.Millisecond):
-		}
-	}
 }
 
 // pid reads the wrapper's PID file, retrying while the exec is still starting.
@@ -155,9 +113,9 @@ func (p *process) cleanupPID() {
 func (p *process) pid(limit time.Duration) (string, error) {
 	deadline := time.Now().Add(limit)
 	script := "cat " + p.pidPath + " 2>/dev/null"
-	for {
+	for step := 0; ; step++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		data, err := p.b.capture(ctx, p.containerID, []string{"/bin/sh", "-c", script})
+		data, err := p.b.captureControl(ctx, p.containerID, []string{"/bin/sh", "-c", script})
 		cancel()
 		if err == nil && len(data) > 0 {
 			return parsePid(data)
@@ -168,6 +126,6 @@ func (p *process) pid(limit time.Duration) (string, error) {
 			}
 			return "", fmt.Errorf("dockerbackend: pid file %s stayed empty for %v", p.pidPath, limit)
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(pollDelay(step))
 	}
 }

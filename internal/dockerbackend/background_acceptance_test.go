@@ -38,7 +38,7 @@ func TestBackgroundSignalLifetime(t *testing.T) {
 				if len(cmd) == 8 && cmd[0] == "python3" && cmd[3] == supervisor && cmd[4] == "start" {
 					return "", "", 0
 				}
-				if (len(cmd) == 5 && cmd[3] == "stdin-stage") || (len(cmd) == 4 && cmd[0] == "/bin/rm") {
+				if (len(cmd) == 5 && cmd[3] == "stdin-stage") || (len(cmd) >= 4 && cmd[0] == "/bin/rm") {
 					return "", "", 0
 				}
 				managed := len(cmd) == 8 && cmd[0] == "python3" && cmd[3] == supervisor && cmd[4] == "signal"

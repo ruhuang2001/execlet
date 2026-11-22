@@ -44,7 +44,7 @@ def live_members(pid):
                 fields = entry.read().rsplit(') ', 1)[1].split()
             if int(fields[2]) == pid and fields[0] not in ('Z', 'X'):
                 members.append(fields[0])
-        except (FileNotFoundError, ProcessLookupError):
+        except (OSError, ValueError, IndexError):
             pass
     return members
 
@@ -86,7 +86,10 @@ def supervise(path, token, config):
             os.setsid()
             os.write(writer, b'1')
             os.close(writer)
-            os.dup2(os.open('/dev/null', os.O_RDONLY), 0)
+            devnull = os.open('/dev/null', os.O_RDONLY)
+            os.dup2(devnull, 0)
+            if devnull > 2:
+                os.close(devnull)
             if config.get('cwd'):
                 try:
                     os.chdir(config['cwd'])

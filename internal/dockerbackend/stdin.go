@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/ruhuang2001/tiny-sandbox/internal/dockerapi"
 )
@@ -20,7 +19,7 @@ func (b *Backend) stageStdin(ctx context.Context, containerID, input string) (st
 	dir := "/tmp/tiny-sandbox-stdin." + rand.Text()
 	// Keep a cleanup target even when the directory was created but the
 	// creation response is lost. mkdir never reuses an existing directory.
-	_, err := b.capture(ctx, containerID, []string{"/bin/sh", "-c",
+	_, err := b.captureControl(ctx, containerID, []string{"/bin/sh", "-c",
 		`test -x /bin/mkdir && test -x /bin/rm && test -x /bin/rmdir || exit 125; umask 077; /bin/mkdir -m 700 -- "$1"`, "stdin-stage", dir})
 	if err != nil {
 		b.cleanupStdin(containerID, dir)
@@ -65,15 +64,10 @@ shift
 	return append(out, argv[4:]...)
 }
 
-// cleanupStdin is also used if exec creation or startup fails before the
-// wrapper runs. rm removes a replacement symlink itself, never its target.
-// The exact random private directory has no user content. Cleanup is bounded
-// and best effort; container removal is the final fallback if the runtime fails.
+// No command can be using fd0 yet on a staging or ExecCreate failure.
 func (b *Backend) cleanupStdin(containerID, dir string) {
 	if dir == "" || !validStdinDir(dir) {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	_, _ = b.capture(ctx, containerID, []string{"/bin/rm", "-rf", "--", dir})
+	b.cleanupAfterExit(&execFiles{containerID: containerID, stdinDir: dir})
 }

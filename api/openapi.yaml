@@ -893,7 +893,8 @@ components:
     RateLimited:
       description: >-
         429 rate_limited: all sandbox admission slots are reserved, including
-        containers awaiting cleanup, or a sandbox has reached its open event-stream
+        containers awaiting cleanup, a deployment resource budget is exhausted,
+        or a sandbox has reached its open event-stream
         limit. Retry when capacity becomes available.
       headers:
         Retry-After:

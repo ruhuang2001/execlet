@@ -6,9 +6,9 @@ The audit covers 3,326 physical comment lines in 172 files at the pre-cleanup re
 
 | Classification | Whole lines | Shared with code | Total lines |
 | --- | ---: | ---: | ---: |
-| Tautology | 765 | 42 | 807 |
-| Stale | 377 | 3 | 380 |
-| Decision Record | 2,025 | 65 | 2,090 |
+| Tautology | 760 | 42 | 802 |
+| Stale | 381 | 3 | 384 |
+| Decision Record | 2,026 | 65 | 2,091 |
 | Excuse | 13 | 0 | 13 |
 | Directive | 35 | 1 | 36 |
 | **Total** | **3,215** | **111** | **3,326** |
@@ -63,7 +63,7 @@ Line numbers below refer to the linked pre-cleanup files. Each range is inclusiv
 | Pre-cleanup file | Tautology | Stale | Decision Record | Excuse | Directive |
 | --- | --- | --- | --- | --- | --- |
 | [internal/daemon/admit_race_test.go](https://github.com/ruhuang2001/tiny-sandbox/blob/0622cb2c369abe4374684ada7c67191e87780e87/internal/daemon/admit_race_test.go) | 38–39 | — | 11–14 | — | — |
-| [internal/daemon/backend.go](https://github.com/ruhuang2001/tiny-sandbox/blob/0622cb2c369abe4374684ada7c67191e87780e87/internal/daemon/backend.go) | 10–11, 14–15, 42, 44, 46–47, 49, 53, 58, 74, 82, 84–85, 87–88, 96, 118–124, 139–140, 142–143, 145, 147, 157, 171, 173 | 90–92, 159–161 | 32–38, 78–80, 98–100, 102–105, 107–110, 112, 114, 132–137, 149–155, 163–164, 166–167, 169 | — | — |
+| [internal/daemon/backend.go](https://github.com/ruhuang2001/tiny-sandbox/blob/0622cb2c369abe4374684ada7c67191e87780e87/internal/daemon/backend.go) | 10–11, 14–15, 42, 44, 46–47, 49, 53, 58, 74, 82, 84–85, 87–88, 96, 118–119, 139–140, 142–143, 145, 147, 157, 171, 173 | 90–92, 120–122, 137, 159–161 | 32–38, 78–80, 98–100, 102–105, 107–110, 112, 114, 123–124, 132–136, 149–155, 163–164, 166–167, 169 | — | — |
 | [internal/daemon/cancel_test.go](https://github.com/ruhuang2001/tiny-sandbox/blob/0622cb2c369abe4374684ada7c67191e87780e87/internal/daemon/cancel_test.go) | 210 | 11–14, 173–174 | 199–202 | — | — |
 | [internal/daemon/classify.go](https://github.com/ruhuang2001/tiny-sandbox/blob/0622cb2c369abe4374684ada7c67191e87780e87/internal/daemon/classify.go) | 8–9, 15, 17, 129–130 | 27–31, 36–46, 76–89 | 19–20, 22–24, 61–63, 123–125, 134–136 | — | — |
 | [internal/daemon/classify_test.go](https://github.com/ruhuang2001/tiny-sandbox/blob/0622cb2c369abe4374684ada7c67191e87780e87/internal/daemon/classify_test.go) | 13–14, 45, 52–53, 67–69, 105, 108–110, 210, 212 | 175–180, 224–227 | 137–139, 205–207, 245–246 | — | — |

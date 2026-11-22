@@ -10,9 +10,9 @@ The HTTP and Docker JSON codecs use Go's legacy wire options to preserve field-n
 
 ## Container backend contract
 
-The daemon calls backend methods concurrently. A backend returns the running container's ID from create, applies the requested PID limit at creation, and addresses later operations by that exact ID. A stable container name is a recovery hint. Missing objects expose `ErrNotFound` where the operation returns an error. Pause and resume cover every process in the container.
+The daemon calls backend methods concurrently. A backend returns the running container's ID from create, applies the requested PID limit at creation, and addresses later operations by that exact ID. A stable container name is a recovery hint. Docker removal, pause and unpause map a missing container to `ErrNotFound`. The liveness probe reports a missing container as a state. Pause and resume cover every process in the container.
 
-Pass execution argv intact and apply the requested environment entries over the image environment. An empty working directory uses the image default. If a requested directory is unusable, return an observable process with a diagnostic on stderr and a nonzero exit. Recording a process preserves the execution history and cancellation path. Signal the process group, including descendants. Wait for the process tree to exit and expose its exit status, using -1 when the runtime cannot report one. Output readers reach EOF on completion. [Backend interface](../../internal/daemon/backend.go)
+Pass execution argv intact and apply the requested environment entries over the image environment. An empty working directory uses the image default. If a requested directory is unusable, return an observable process with a diagnostic on stderr and a nonzero exit. Recording a process preserves the execution history and cancellation path. Signals target the execution’s process group. Docker’s ordinary `Wait` waits for the output pump to finish, then inspects the tracked exec until it stops. It returns that exec’s exit status, or -1 if Docker cannot supply it. Completion establishes the state of that exec. Descendants that have closed or redirected their output can outlive it. [Backend interface](../../internal/daemon/backend.go)
 
 ## Execution identity
 

@@ -88,23 +88,37 @@ def workflow_shell(pair):
     return SHELLS.get(command)
 
 
-def python_arguments(command):
+def python_source(command):
     if not command or command.type != "command":
-        return None
+        return None, None
     args = list(command.children_by_field_name("argument"))
     name = command.child_by_field_name("name").text.strip(b"'\x22")
     if name.split(b"/")[-1] == b"sandboxctl" and args and args[0].text == b"run":
         separator = next((i for i, arg in enumerate(args) if arg.text == b"--"), len(args))
         args = args[separator + 1:]
         if not args:
-            return None
+            return None, None
         name = args.pop(0).text.strip(b"'\x22")
+        if name == b"code" and len(args) == 1:
+            return "code", args[0]
     if (name.split(b"/")[-1] not in {b"python", b"python3"}
             and name not in {b"$PYTHON", b"${PYTHON:-python3}"}):
-        return None
-    while args and re.fullmatch(rb"-[bBEIOqSsux]+", args[0].text):
-        args.pop(0)
-    return args
+        return None, None
+    while args:
+        flag = args[0].text
+        if flag == b"-c" and len(args) >= 2:
+            return "code", args[1]
+        if flag == b"-":
+            return "stdin", None
+        if flag in {b"-X", b"-W", b"--check-hash-based-pycs"} and len(args) >= 2:
+            args = args[2:]
+        elif flag.startswith((b"-X", b"-W")) and len(flag) > 2:
+            args = args[1:]
+        elif re.fullmatch(rb"-[bBdEiIOPqRsStuvx]+", flag):
+            args = args[1:]
+        else:
+            return None, None
+    return "stdin", None
 
 
 def unlabelled_example(source):
@@ -192,9 +206,8 @@ def scan(path, data):
                                   directive=is_directive(lang, value, row, col)))
                 return
             if lang == "bash" and kind == "command":
-                args = python_arguments(node)
-                if args and len(args) >= 2 and args[0].text == b"-c":
-                    program = args[1]
+                mode, program = python_source(node)
+                if mode == "code":
                     if program.type == "raw_string":
                         body("python", program, 1, 1)
                     elif program.type == "string" and all(c.type == "string_content" for c in program.named_children):
@@ -209,9 +222,9 @@ def scan(path, data):
                 fields = {child.type: child for child in node.named_children}
                 if command and command.text == b"cat" and "pipeline" in fields:
                     command = fields["pipeline"].named_children[0]
-                args = python_arguments(command)
+                mode, _ = python_source(command)
                 payload = fields.get("heredoc_body")
-                if (args is not None and (not args or args[0].text == b"-") and payload
+                if (mode == "stdin" and payload
                         and all(c.type == "heredoc_content" for c in payload.named_children)):
                     body("python", payload)
             if lang == "markdown" and kind in {"fenced_code_block", "indented_code_block"}:

@@ -112,6 +112,18 @@ with tempfile.TemporaryDirectory() as tmp:
             "python3 3<<'PY'\n# data on another fd\nPY\n"
             "ruby - <<'PY'\n# unrelated\nPY\n",
             ["# direct stdin", "# configured Python", "# piped program", "# guest code", "# quoted code"]),
+        "python-options.sh": (
+            "python3 -X dev -W ignore -c 'print(1) # separate options'\n"
+            "python3 -Xdev -Wignore -c 'print(2) # attached options'\n"
+            "python3 -W ignore -m trace -c '# module argument'\n"
+            "python3 -X dev script.py -c '# script argument'\n"
+            "sandboxctl run -- code 'print(\"# quoted\") # shorthand'\n"
+            '"$BIN/sandboxctl" run --rm -- code "print(2) # wrapped shorthand"\n'
+            "sandboxctl run -- code 'print(\"# just data\")'\n"
+            "sandboxctl run -- code 'print(3) # invalid arity' extra\n"
+            "sandboxctl run -- printf '%s' code '# printed argument'\n"
+            "code '# different program'\n",
+            ["# separate options", "# attached options", "# shorthand", "# wrapped shorthand"]),
         "complex.py": (
             "name = 'hello'\ntext = f\"\"\"{name}: # fixture\n# data\n\"\"\"\n"
             "box = f\"\"\"{(1  # expression\n)}\"\"\"\n# eof",

@@ -78,21 +78,8 @@ func executionResult(ex *sandbox.Execution, in getInput) toolOutput {
 	if stderrRequest == nil {
 		stderrRequest = in.Offset
 	}
-	sharedLimit := int64(mcpPage)
-	if in.Offset != nil && in.StdoutOffset == nil && in.StderrOffset == nil {
-		for _, stream := range []struct {
-			text string
-			base int64
-		}{{ex.Stdout, ex.StdoutOffset}, {ex.Stderr, ex.StderrOffset}} {
-			pos := max(0, *in.Offset-stream.base)
-			if pos < int64(len(stream.text))-mcpPage && !utf8.RuneStart(stream.text[pos+mcpPage]) {
-				sharedLimit -= utf8.UTFMax - 1
-				break
-			}
-		}
-	}
-	stdout, so, sn, sc, sl := outputWindow(ex.Stdout, ex.StdoutOffset, stdoutRequest, sharedLimit)
-	stderr, eo, en, ec, el := outputWindow(ex.Stderr, ex.StderrOffset, stderrRequest, sharedLimit)
+	stdout, so, sn, sc, sl := outputWindow(ex.Stdout, ex.StdoutOffset, stdoutRequest)
+	stderr, eo, en, ec, el := outputWindow(ex.Stderr, ex.StderrOffset, stderrRequest)
 	truncated := sc || ec
 	next := max(sn, en)
 	switch {
@@ -104,6 +91,11 @@ func executionResult(ex *sandbox.Execution, in getInput) toolOutput {
 		next = sn
 	case ec:
 		next = en
+	}
+	if truncated && in.Offset != nil && in.StdoutOffset == nil && in.StderrOffset == nil {
+		stdout = stdout[:runeBoundary(stdout, int(max(0, next-so)))]
+		stderr = stderr[:runeBoundary(stderr, int(max(0, next-eo)))]
+		sn, en = so+int64(len(stdout)), eo+int64(len(stderr))
 	}
 	out["stdout"], out["stderr"] = stdout, stderr
 	out["stdout_start_offset"], out["stderr_start_offset"] = so, eo
@@ -138,7 +130,7 @@ func runeBoundary(s string, offset int) int {
 	return offset
 }
 
-func outputWindow(stream string, base int64, request *int64, limit int64) (text string, start, next int64, clipped, lost bool) {
+func outputWindow(stream string, base int64, request *int64) (text string, start, next int64, clipped, lost bool) {
 	if request == nil {
 		from := runeBoundary(stream, max(0, len(stream)-mcpPage))
 		next = base + int64(len(stream))
@@ -148,12 +140,9 @@ func outputWindow(stream string, base int64, request *int64, limit int64) (text 
 		return stream[from:], base + int64(from), next, from > 0, false
 	}
 	from := runeBoundary(stream, int(min(int64(len(stream)), max(0, *request-base))))
-	to := runeBoundary(stream, min(len(stream), from+int(limit)))
-	if to-from > mcpPage {
-		to = from + mcpPage
-		for !utf8.RuneStart(stream[to]) {
-			to--
-		}
+	to := min(len(stream), from+mcpPage)
+	for to < len(stream) && !utf8.RuneStart(stream[to]) {
+		to--
 	}
 	return stream[from:to], base + int64(from), base + int64(to), to < len(stream), *request < base
 }

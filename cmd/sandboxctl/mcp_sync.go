@@ -177,7 +177,11 @@ func gitTopLevel(ctx context.Context, dir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	workspace, err := filepath.EvalSymlinks(dir)
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+	workspace, err := filepath.EvalSymlinks(abs)
 	if err != nil {
 		return "", err
 	}

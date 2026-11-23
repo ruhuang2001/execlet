@@ -73,6 +73,10 @@ def run(tmp, evidence, record):
 
     (work / ".env").write_text("excluded")
     (work / "sample.ignored").write_text("excluded")
+    (work / "tracked.ignored").write_text("tracked")
+    shell("git", "-C", str(work), "add", "-f", "tracked.ignored")
+    (work / "ignored/.gitignore").write_text("nested-only\n")
+    (work / "ignored/nested-only").write_text("excluded")
     (work / "outside-link").symlink_to(tmp / "sandboxctl")
     pkg = work / "sandbox-python"
     (pkg / "remove me").write_text("old")
@@ -139,7 +143,7 @@ def run(tmp, evidence, record):
                 timeout=10,
             )
             assert invalid.returncode == 2 and not invalid.stdout
-        proc, tools = connect(ttl=None)
+        proc, tools = connect(os.path.relpath(work), ttl=None)
         record["tools"] = [tool["name"] for tool in tools]
         assert len(tools) == 8
         for tool in tools:
@@ -183,6 +187,7 @@ def run(tmp, evidence, record):
 
         initial = tool("sync_workspace")
         assert initial["uploaded"] >= 10, initial
+        assert tool("run_command", command=["sh", "-c", "test -f tracked.ignored && test ! -e ignored/nested-only"])["exit_code"] == 0
         cmd = [
             "env",
             "PYTHONPATH=sandbox-python/src",
@@ -345,6 +350,19 @@ def run(tmp, evidence, record):
             unicode_page["stdout"] + remaining["stdout"]
             == "a" * 65535 + "界" + "b" * 2000
         )
+        streams = ("界" * 100000, "a界" * 100000)
+        mixed = tool("run_command", command=["python3", "-c", "import sys; sys.stdout.write('界'*100000); sys.stderr.write('a界'*100000)"])
+        cursor, stdout, stderr = 0, [], []
+        while True:
+            page = tool("get_execution", execution_id=mixed["execution_id"], offset=cursor)
+            stdout.append(page["stdout"])
+            stderr.append(page["stderr"])
+            assert all(len(s.encode()) <= 65536 for s in (stdout[-1], stderr[-1]))
+            if not page["output_truncated"]:
+                break
+            assert page["next_offset"] > cursor
+            cursor = page["next_offset"]
+        assert ("".join(stdout), "".join(stderr)) == streams
         binary = tool(
             "run_command",
             command=[

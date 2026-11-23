@@ -70,6 +70,7 @@ internal/dockerbackend/guestbin/guest-linux-%: $(wildcard sandbox-agent/cmd/gues
 .PHONY: feature-e2e runtime-e2e
 
 feature-e2e: build typescript
+	$(PYTHON) scripts/e2e-mcp.py $(ARTIFACTS)/mcp-e2e
 	$(PYTHON) scripts/e2e-guest.py --samples 2 --out $(ARTIFACTS)/guest
 	$(PYTHON) scripts/e2e-guest-faults.py --out $(ARTIFACTS)/guest-faults
 	$(PYTHON) scripts/e2e-guest-boundaries.py --out $(ARTIFACTS)/guest-boundaries

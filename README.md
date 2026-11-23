@@ -18,6 +18,7 @@ a command-line client, and HTTP API.
 - **Background commands:** Python/TypeScript E2B-style handles with guest PID,
   fresh-client attachment, remote deadlines, disconnect and confirmed kill.
 - **Interactive shells:** open or reconnect to a PTY with `sandboxctl shell`.
+- **MCP clients:** sync a host workspace into an offline test environment with `sandboxctl mcp`. [Setup and example](examples/mcp/README.md)
 - **Operations:** structured logs, request IDs, authenticated Prometheus metrics,
   readiness, opt-in deployment budgets/network restrictions and restart recovery.
 
@@ -58,7 +59,8 @@ make build
 
 The Make target cross-compiles and embeds both Linux guest agents. A direct
 `go install` of `sandboxd` from a clean module download builds the legacy
-fallback. Use `make build` or a release archive for guest commands and terminals.
+fallback. Use `make build` or a release archive for guest commands, terminals
+and filtered networking.
 
 Select the Docker Unix socket as shown in the [quick start](docs/quickstart.md#2-start-the-server-terminal-a),
 then start `./bin/sandboxd` and use `./bin/sandboxctl` from a
@@ -102,8 +104,8 @@ completed results and reconciles idle containers; interrupted commands become
 `unknown` and their containers are removed, never replayed. This is not process
 memory restoration or E2B persistence parity.
 
-Opt-in `-policy` enforces aggregate reservations and image and runtime allowlists.
-Network modes include offline `none` and unrestricted `bridge`. The guest agent runs managed commands as the image user. Non-root images expose
+Opt-in `-policy` enforces aggregate reservations, image and runtime allowlists, named templates, and prewarmed capacity.
+Network modes include offline `none`, HTTPS domain-filtered `filtered`, and unrestricted `bridge`. The guest agent runs managed commands as the image user. Non-root images expose
 `protected: true` and keep the control socket and supervisor private. Root images
 permit same-UID access. Archive uploads require coordinated writers and are not
 transactional once extraction begins. See [deployment and recovery](docs/operations.md),

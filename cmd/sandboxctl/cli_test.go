@@ -4,7 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -38,6 +42,52 @@ func (h *cliHarness) invoke(args ...string) result {
 	var out, errOut bytes.Buffer
 	code := run(append([]string{"--domain", h.url}, args...), &out, &errOut)
 	return result{code: code, stdout: out.String(), stderr: errOut.String()}
+}
+
+func TestGitTopLevelResolvesOnlyWorkspaceRoots(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip(err)
+	}
+	ctx := context.Background()
+	dir := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		if out, err := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	run("init", "-q")
+	if err := os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", "tracked.txt")
+
+	root, err := gitTopLevel(ctx, dir)
+	if err != nil || root == "" {
+		t.Fatalf("workspace root not recognized: %q, %v", root, err)
+	}
+	nested := filepath.Join(dir, "nested")
+	if err := os.Mkdir(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if root, err := gitTopLevel(ctx, nested); !errors.Is(err, errNotGitRoot) || root != "" {
+		t.Fatalf("nested directory must not select the parent repository: %q, %v", root, err)
+	}
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(dir, link); err != nil {
+		t.Skip(err)
+	}
+	if root, err := gitTopLevel(ctx, link); err != nil || root == "" {
+		t.Fatalf("symlinked workspace root not recognized: %q, %v", root, err)
+	}
+	outside, err := os.MkdirTemp("", "git-top-level-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(outside) })
+	if root, err := gitTopLevel(ctx, outside); !errors.Is(err, errNotGitRoot) || root != "" {
+		t.Fatalf("directory outside any repository must not select one: %q, %v", root, err)
+	}
 }
 
 func TestVersionAndHelp(t *testing.T) {

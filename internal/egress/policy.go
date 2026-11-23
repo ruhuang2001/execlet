@@ -3,6 +3,7 @@ package egress
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"net/url"
@@ -14,8 +15,9 @@ import (
 )
 
 type Policy struct {
-	Domains    []string    `json:"domains"`
-	Credential *Credential `json:"credential,omitempty"`
+	TunnelIdleSeconds int         `json:"tunnel_idle_seconds,omitzero"`
+	Domains           []string    `json:"domains"`
+	Credential        *Credential `json:"credential,omitempty"`
 }
 
 type Credential struct {
@@ -27,7 +29,17 @@ type Credential struct {
 var label = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
+func (p Policy) TunnelIdleTimeout() time.Duration {
+	if p.TunnelIdleSeconds == 0 {
+		return 2 * time.Minute
+	}
+	return time.Duration(p.TunnelIdleSeconds) * time.Second
+}
+
 func (p Policy) Validate() error {
+	if p.TunnelIdleSeconds < 0 || int64(p.TunnelIdleSeconds) > int64((1<<63-1)/time.Second) {
+		return errors.New("invalid egress tunnel idle duration")
+	}
 	if len(p.Domains) == 0 {
 		return errors.New("filtered egress requires exact allowed domains")
 	}
@@ -76,12 +88,13 @@ func public(ip netip.Addr) bool {
 	return true
 }
 
-var errDenied = errors.New("egress destination denied")
-
 func (p Policy) dial(ctx context.Context, network, address string) (net.Conn, error) {
 	host, port, err := net.SplitHostPort(address)
-	if err != nil || port != "443" || !slices.Contains(p.Domains, strings.ToLower(host)) {
-		return nil, errDenied
+	if err != nil || port != "443" {
+		return nil, errors.New("port not allowed")
+	}
+	if !slices.Contains(p.Domains, strings.ToLower(host)) {
+		return nil, errors.New("domain not allowed")
 	}
 	var ips []netip.Addr
 	for _, family := range []string{"ip4", "ip6"} {
@@ -98,7 +111,7 @@ func (p Policy) dial(ctx context.Context, network, address string) (net.Conn, er
 				ip = ip.Unmap()
 			}
 			if !public(ip) {
-				return nil, errDenied
+				return nil, fmt.Errorf("reserved address %s", ip)
 			}
 			ips = append(ips, ip)
 		}

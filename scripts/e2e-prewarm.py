@@ -93,15 +93,20 @@ def run(args, tmp, report):
         ).splitlines()
 
     def ready():
-        return docker(
+        delivered = {s["id"] for s in http("/v1/sandboxes")["sandboxes"]}
+        rows = docker(
             "ps",
-            "-q",
             "--no-trunc",
             "--filter",
             "label=tiny-sandbox.owner=" + owner,
-            "--filter",
-            "name=tiny-sandbox-prewarm-",
-        ).splitlines()
+            "--format",
+            '{{.ID}} {{.Label "tiny-sandbox.id"}}',
+        )
+        return [
+            row.split()[0]
+            for row in rows.splitlines()
+            if len(row.split()) == 2 and row.split()[1] not in delivered
+        ]
 
     def ready_count():
         for line in http("/metrics").splitlines():
@@ -219,6 +224,15 @@ def run(args, tmp, report):
                 ms.append((time.perf_counter_ns() - start_ns) / 1e6)
                 cid = docker("inspect", "-f", "{{.Id}}", "tiny-sandbox-" + sid)
                 assert not before or cid in before, (cid, before)
+                assert (
+                    docker(
+                        "inspect",
+                        "-f",
+                        '{{index .Config.Labels "tiny-sandbox.id"}}',
+                        cid,
+                    )
+                    == sid
+                )
                 rows.append(
                     {"sandbox": sid, "container": cid, "pooled_before_create": before}
                 )

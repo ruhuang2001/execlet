@@ -63,7 +63,8 @@ def main():
             allowed_images=[IMAGE, "alpine:3.21"],
             allowed_networks=["filtered"],
             egress=dict(
-                domains=["packages.fixture.test"],
+                domains=["packages.fixture.test", "fakeip.fixture.test"],
+                tunnel_idle_seconds=4,
                 credential=dict(
                     url="https://packages.fixture.test/account",
                     token_env="TEST_TOKEN",
@@ -143,6 +144,8 @@ def main():
                 network,
                 "--add-host",
                 "packages.fixture.test:" + subnet + ".3",
+                "--add-host",
+                "fakeip.fixture.test:198.18.0.192",
                 "-e",
                 "SSL_CERT_FILE=/fixture/ca.pem",
                 "-e",
@@ -163,21 +166,21 @@ def main():
             def api(method, path, body=None):
                 code = (
                     "import sys,json,urllib.request as u; "
-                    "b=sys.stdin.buffer.read(); r=u.Request('http://127.0.0.1:8080'+sys.argv[2],"
+                    "b=sys.argv[3].encode(); r=u.Request('http://127.0.0.1:8080'+sys.argv[2],"
                     "data=b or None,method=sys.argv[1],headers={'Content-Type':'application/json'});"
                     "print(u.urlopen(r,timeout=25).read().decode())"
                 )
                 out = command(
                     "docker",
                     "exec",
-                    "-i",
                     controller,
                     "python3",
                     "-c",
                     code,
                     method,
                     path,
-                    input=json.dumps(body) if body is not None else "",
+                    json.dumps(body) if body is not None else "",
+                    timeout=35,
                     stderr=subprocess.PIPE,
                 )
                 return json.loads(out)
@@ -218,6 +221,7 @@ def fetch(url,method="GET"):
         return str(e)
 print(json.dumps(dict(index=fetch('https://packages.fixture.test/index'),
  account=fetch('http://127.0.0.1:8888/credential'),denied=fetch('https://unapproved.fixture.test/index'),
+ fake_ip=fetch('https://fakeip.fixture.test/'),
  direct_account=fetch('https://packages.fixture.test/account'),
  other_method=fetch('http://127.0.0.1:8888/credential','POST'),
  other_path=fetch('http://127.0.0.1:8888/elsewhere'), token_present=bool(os.getenv('TEST_TOKEN')))))
@@ -242,6 +246,19 @@ print(json.dumps(dict(index=fetch('https://packages.fixture.test/index'),
                 )
                 == "none"
             )
+            concurrency = """import concurrent.futures, json, ssl, urllib.request
+ctx=ssl.create_default_context(cadata=CERTIFICATE)
+def download(i):
+    url='https://packages.fixture.test/stream'
+    with urllib.request.urlopen(url,context=ctx,timeout=12) as res:
+        return res.read().decode()
+with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+    results=list(pool.map(download,range(6)))
+assert results==['123456']*6,results
+print(json.dumps({'simultaneous_downloads':len(results),'bytes_each':len(results[0])}))
+""".replace("CERTIFICATE", repr((work / "ca.pem").read_text()))
+            result["streaming"] = execute(concurrency)
+            assert "403" in result["fake_ip"]
             install = """import json, pathlib, subprocess, sys, tempfile
 with tempfile.TemporaryDirectory() as tmp:
     dest=pathlib.Path(tmp)
@@ -294,6 +311,22 @@ with tempfile.TemporaryDirectory() as tmp:
             assert int(output) != 0
             logs = command("docker", "logs", controller, stderr=subprocess.STDOUT)
             assert token not in logs
+            refusals = [
+                json.loads(line) for line in logs.splitlines() if line.startswith("{")
+            ]
+            result["denials"] = [
+                {"host": row["host"], "reason": row["reason"]}
+                for row in refusals
+                if row.get("msg") == "egress request denied"
+            ]
+            assert {
+                "host": "fakeip.fixture.test",
+                "reason": "reserved address 198.18.0.192",
+            } in result["denials"], result["denials"]
+            assert {
+                "host": "unapproved.fixture.test",
+                "reason": "domain not allowed",
+            } in result["denials"]
             result.update(
                 network="none",
                 direct_connection_errno_after_proxy_stop=int(output),

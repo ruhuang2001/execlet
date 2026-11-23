@@ -123,6 +123,8 @@ to `artifacts/templates/report.json`.
   variables only have the guest loopback interface. Filtered sandboxes require
   a running guest agent and are retired during daemon restart.
 
+The relay accepts up to 64 active tunnels per sandbox and starts a relay for each incoming connection. Set `egress.tunnel_idle_seconds` to control the inactivity timeout (default 120 seconds). A transfer with continuing traffic can exceed that duration. Inspect sandboxd's `egress request denied` logs for the requested host and reason. DNS proxies using fake-IP mode can return addresses in `198.18.0.0/15`, which the policy rejects. Configure real-address DNS resolution for approved domains on the sandboxd host.
+
 For a deployment that uses the package index, add these policy fields to the
 resource budgets and image allowlist above.
 
@@ -292,7 +294,7 @@ A deployment policy can reserve fresh running containers for repeated requests. 
 
 Replace the example digest with the installed image ID or repository digest. Include `runc` in `allowed_runtimes` when setting the runtime explicitly. Omitting resource, network or runtime fields applies the same defaults as sandbox creation. Restart the daemon to load a new pool configuration. With no `prewarm` entries the daemon creates containers on demand.
 
-The daemon counts each standby container against every deployment budget from the beginning of provisioning. It validates resource limits before making an instance available. An incoming request claims a matching image digest, memory size, CPU limit, PID limit, network and runtime under one lock. A miss takes the usual creation path subject to available quota. The sandbox lifetime starts at handoff. Each instance goes to one user and is discarded on deletion. The background worker replenishes the configured target while capacity is available. The `tiny_sandbox_prewarm_ready` metric counts instances available for handoff.
+The daemon counts each standby container against every deployment budget from the beginning of provisioning. It validates resource limits before making an instance available. An incoming request claims a matching image digest, memory size, CPU limit, PID limit, network and runtime under one lock. A miss takes the usual creation path subject to available quota. The pool assigns the sandbox ID, Docker name and ownership labels at provisioning. Admission claims that identity atomically. The sandbox lifetime starts at handoff. Each instance goes to one user and is discarded on deletion. The background worker replenishes the configured target while capacity is available. Failed provisioning records a warning and backs off per profile from 2 to 60 seconds. The `tiny_sandbox_prewarm_ready` metric counts instances available for handoff.
 
 On a journaled restart the daemon reconciles each delivered sandbox against its durable record. It removes unclaimed owner-labelled containers, then starts filling the pool. Graceful shutdown also removes idle pool containers. Changing a named template switches new requests to its current digest. On its next reconciliation, the pool removes excess standby containers for the old digest and fills the new target. Deleting an alias leaves its pool target dormant, including across restarts. Registering that name again reactivates it.
 

@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -16,6 +17,17 @@ import (
 
 func reject(w io.Writer, status int) {
 	_, _ = fmt.Fprintf(w, "HTTP/1.1 %d %s\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", status, http.StatusText(status))
+}
+
+func logDenial(ctx context.Context, authority, reason string) {
+	host, _, err := net.SplitHostPort(authority)
+	if err != nil {
+		host = authority
+	}
+	if len(host) > 253 || strings.ContainsAny(host, "/@?#") {
+		host = "invalid"
+	}
+	slog.WarnContext(ctx, "egress request denied", "host", host, "reason", reason)
 }
 
 func (p Policy) Serve(ctx context.Context, stream io.ReadWriteCloser, image string) {
@@ -46,6 +58,7 @@ func (p Policy) Serve(ctx context.Context, stream io.ReadWriteCloser, image stri
 		return
 	}
 	if req.Method != http.MethodConnect || !strings.HasSuffix(req.Host, ":443") || req.Host != req.RequestURI {
+		logDenial(ctx, req.Host, "request method or authority not allowed")
 		reject(stream, 403)
 		return
 	}
@@ -53,6 +66,7 @@ func (p Policy) Serve(ctx context.Context, stream io.ReadWriteCloser, image stri
 	upstream, err := p.dial(dialCtx, "tcp", req.Host)
 	cancel()
 	if err != nil {
+		logDenial(ctx, req.Host, err.Error())
 		reject(stream, 403)
 		return
 	}
@@ -74,6 +88,7 @@ func (p Policy) Serve(ctx context.Context, stream io.ReadWriteCloser, image stri
 func (p Policy) fetchCredential(ctx context.Context, w io.Writer, image string) {
 	c := p.Credential
 	if c == nil || !slices.Contains(c.Images, image) {
+		logDenial(ctx, "127.0.0.1:8888", "image not authorized for credential")
 		reject(w, 403)
 		return
 	}

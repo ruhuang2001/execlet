@@ -107,11 +107,6 @@ func NewPolicyBackend(backend Backend, policy DeploymentPolicy) (*PolicyBackend,
 	if err != nil {
 		return nil, err
 	}
-	if len(targets) > 0 {
-		if _, ok := backend.(containerRenamer); !ok {
-			return nil, errors.New("backend cannot claim prewarmed containers")
-		}
-	}
 	return &PolicyBackend{targets: targets, ready: map[prewarmKey][]string{}, Backend: backend, policy: policy, allocations: make(map[string]ContainerSpec)}, nil
 }
 
@@ -161,23 +156,6 @@ func (b *PolicyBackend) usageLocked() PolicyUsage {
 func (b *PolicyBackend) Usage() PolicyUsage { b.mu.Lock(); defer b.mu.Unlock(); return b.usageLocked() }
 
 func (b *PolicyBackend) Create(ctx context.Context, spec ContainerSpec) (string, error) {
-	if len(b.targets) > 0 && b.policy.allowsImage(spec.Image) {
-		if id := b.takeReady(keyOf(spec)); id != "" {
-			live, err := b.Liveness(ctx, id)
-			if err == nil && live == LivenessRunning {
-				err = b.Backend.(containerRenamer).Rename(ctx, id, spec.Name)
-				if err == nil {
-					return id, nil
-				}
-			}
-			if cleanupErr := b.Remove(context.WithoutCancel(ctx), id); cleanupErr != nil && !errors.Is(cleanupErr, ErrNotFound) {
-				return id, errorf(CodeBackendError, "prewarm claim failed and cleanup is unconfirmed")
-			}
-			if err := ctx.Err(); err != nil {
-				return "", err
-			}
-		}
-	}
 	return b.createFresh(ctx, spec)
 }
 

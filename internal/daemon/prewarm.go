@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"slices"
 	"strings"
@@ -27,10 +28,6 @@ type prewarmKey struct {
 	nanoCPUs            int64
 	network             NetworkMode
 	runtime             string
-}
-
-type containerRenamer interface {
-	Rename(context.Context, string, string) error
 }
 
 func keyOf(spec ContainerSpec) prewarmKey {
@@ -65,19 +62,19 @@ func (p DeploymentPolicy) prewarmTargets() (map[prewarmKey]int, error) {
 	return targets, nil
 }
 
-func (b *PolicyBackend) takeReady(k prewarmKey) string {
+func (b *PolicyBackend) takeReady(k prewarmKey) (string, string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	ids := b.ready[k]
 	if len(ids) == 0 {
-		return ""
+		return "", ""
 	}
 	id := ids[len(ids)-1]
 	b.ready[k] = ids[:len(ids)-1]
 	if len(b.ready[k]) == 0 {
 		delete(b.ready, k)
 	}
-	return id
+	return id, b.allocations[id].Labels[SandboxIDLabelKey]
 }
 
 func (b *PolicyBackend) readyIDs(k prewarmKey) []string {
@@ -138,12 +135,18 @@ func (b *PolicyBackend) trimPrewarm(ctx context.Context, targets map[prewarmKey]
 }
 
 func (b *PolicyBackend) maintainPrewarm(ctx context.Context, owner string, retry func(string)) {
+	type failure struct {
+		delay time.Duration
+		next  time.Time
+	}
+	failures := map[prewarmKey]failure{}
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
 	defer b.trimPrewarm(context.WithoutCancel(ctx), nil, retry)
 	for {
 		targets := b.desiredPrewarm()
 		b.trimPrewarm(ctx, targets, retry)
+		maps.DeleteFunc(failures, func(k prewarmKey, _ failure) bool { return targets[k] == 0 })
 		for key, count := range targets {
 			for _, id := range b.readyIDs(key) {
 				probe, cancel := backendCtx(ctx)
@@ -153,18 +156,28 @@ func (b *PolicyBackend) maintainPrewarm(ctx context.Context, owner string, retry
 					b.discardReady(ctx, key, id, retry)
 				}
 			}
+			if time.Now().Before(failures[key].next) {
+				continue
+			}
 			for range count - len(b.readyIDs(key)) {
 				if ctx.Err() != nil {
 					return
 				}
-				spec := ContainerSpec{Image: key.image, MemoryMB: key.memoryMB, PidsLimit: key.pidsLimit, NanoCPUs: key.nanoCPUs, Network: key.network, Runtime: key.runtime, Name: newID("tiny-sandbox-prewarm-"), Labels: map[string]string{OwnerLabelKey: owner}}
+				sandboxID := newID("sbx_")
+				spec := ContainerSpec{Image: key.image, MemoryMB: key.memoryMB, PidsLimit: key.pidsLimit, NanoCPUs: key.nanoCPUs, Network: key.network, Runtime: key.runtime, Name: "tiny-sandbox-" + sandboxID, Labels: map[string]string{OwnerLabelKey: owner, SandboxIDLabelKey: sandboxID}}
 				id, err := b.createFresh(ctx, spec)
 				if err != nil {
+					if ctx.Err() == nil {
+						delay := min(time.Minute, max(2*time.Second, 2*failures[key].delay))
+						failures[key] = failure{delay, time.Now().Add(delay)}
+						slog.WarnContext(ctx, "prewarm create deferred", "image", key.image, "runtime", key.runtime, "error_code", CodeOf(err), "retry_in", delay.String())
+					}
 					if id != "" {
 						retry(id)
 					}
 					break
 				}
+				delete(failures, key)
 				b.mu.Lock()
 				b.ready[key] = append(b.ready[key], id)
 				b.mu.Unlock()

@@ -217,8 +217,28 @@ func (s *Sandboxes) Create(ctx context.Context, req CreateRequest) (result Sandb
 	if err != nil {
 		return Sandbox{}, err
 	}
-	id := newID("sbx_")
+	spec := ContainerSpec{Image: opts.image, Runtime: opts.runtime, MemoryMB: opts.memoryMB, PidsLimit: opts.pidsLimit, NanoCPUs: opts.nanoCPUs, Network: opts.network}
+	var containerID, id string
+	var pool *PolicyBackend
+	if policy, ok := s.backend.(*PolicyBackend); ok && len(policy.targets) > 0 && policy.policy.allowsImage(spec.Image) {
+		pool = policy
+		containerID, id = pool.takeReady(keyOf(spec))
+	}
+	if id == "" {
+		id = newID("sbx_")
+	}
+	spec.Name = "tiny-sandbox-" + id
+	spec.Labels = map[string]string{OwnerLabelKey: s.owner, SandboxIDLabelKey: id}
+	returnStandby := func() {
+		if containerID != "" && pool != nil {
+			pool.mu.Lock()
+			key := keyOf(spec)
+			pool.ready[key] = append(pool.ready[key], containerID)
+			pool.mu.Unlock()
+		}
+	}
 	if err := s.reserve(id); err != nil {
+		returnStandby()
 		return Sandbox{}, err
 	}
 
@@ -243,20 +263,19 @@ func (s *Sandboxes) Create(ctx context.Context, req CreateRequest) (result Sandb
 	sb.mu.Unlock()
 	if err != nil {
 		s.confirmRemoval(id, "")
+		returnStandby()
 		s.forget(sb)
 		return Sandbox{}, err
 	}
-	spec := ContainerSpec{
-		Runtime:   opts.runtime,
-		Image:     opts.image,
-		MemoryMB:  opts.memoryMB,
-		PidsLimit: opts.pidsLimit,
-		NanoCPUs:  opts.nanoCPUs,
-		Network:   opts.network,
-		Name:      "tiny-sandbox-" + id,
-		Labels:    map[string]string{OwnerLabelKey: s.owner, SandboxIDLabelKey: id},
+	if containerID == "" {
+		containerID, err = s.backend.Create(ctx, spec)
+	} else {
+		var live Liveness
+		live, err = s.liveness(ctx, containerID)
+		if err == nil && live != LivenessRunning {
+			err = errorf(CodeInvalidState, "standby container stopped before admission")
+		}
 	}
-	containerID, err := s.backend.Create(ctx, spec)
 	sb.mu.Lock()
 	sb.container = containerID
 	if err != nil || sb.state != StatePending {

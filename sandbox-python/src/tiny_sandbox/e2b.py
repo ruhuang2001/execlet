@@ -667,6 +667,8 @@ class _Files:
             raise AdapterError("file exceeds 10 MiB", code="payload_too_large")
         token = CancellationToken(timeout=self._request_timeout)
         entry = self._call(lambda: self._client.write_file(self._id, target, payload, cancel=token), token)
+        if entry is None:
+            return WriteInfo(target.rsplit("/", 1)[-1], None, target)
         if entry.type not in {"file", "symlink"}:
             raise AdapterError("unexpected type in write response", code="incompatible_server")
         return WriteInfo(entry.name, FileType(entry.type), target)

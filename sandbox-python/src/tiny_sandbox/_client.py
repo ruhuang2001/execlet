@@ -2,22 +2,64 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import base64
+import json
+from collections.abc import Callable,Iterator
 from typing import NoReturn
 
 from ._api import SandboxAPI
 from ._cancel import CancellationToken, _Cancellation
 from ._errors import Error, outcome_error
 from ._models import Event, ExecuteRequest, Execution
-from ._stream import read_event
+from ._stream import read_event, read_frame
 from ._transport import _backoff, _sleep, _status_error
 
 
 class Client(SandboxAPI):
     """Client for sandboxd. See docs/sdk-python.md for the public contract."""
 
+    def stream_terminal(
+        self,
+        sandbox_id: str,
+        terminal_id: str,
+        *,
+        offset: int = 0,
+        cancel: CancellationToken | None = None,
+    ) -> Iterator[bytes]:
+        self.require_capabilities("terminals.v1", cancel=cancel)
+        headers = {"Accept": "text/event-stream", "Last-Event-ID": str(offset)}
+        try:
+            with self._exchange(
+                "GET",
+                self._terminal_path(sandbox_id, terminal_id) + "/events",
+                headers=headers,
+                cancel=cancel,
+            ) as response:
+                if response.status != 200:
+                    raise _status_error(response.status, response.read())
+                while True:
+                    event_id, kind, text = read_frame(response)
+                    if kind == "closed":
+                        return
+                    if kind == "stdout" and event_id is not None and event_id > offset:
+                        try:
+                            data = base64.b64decode(
+                                json.loads(text)["data"], validate=True
+                            )
+                        except (ValueError, KeyError, TypeError) as err:
+                            raise Error(
+                                "stream", "invalid terminal frame", cause=err
+                            ) from err
+                        offset = event_id
+                        yield data
+        except _Cancellation as err:
+            raise Error("canceled", cause=err) from err
+
     def exec(
-        self, sandbox_id: str, command: list[str], *,
+        self,
+        sandbox_id: str,
+        command: list[str],
+        *,
         cancel: CancellationToken | None = None,
     ) -> Execution:
         return self.exec_stream(sandbox_id, command, cancel=cancel)

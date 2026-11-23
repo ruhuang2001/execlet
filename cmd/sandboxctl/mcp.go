@@ -233,6 +233,9 @@ func (s *sandboxTools) writeTool(ctx context.Context, in writeInput) (toolOutput
 	if err != nil {
 		return toolOutput{}, err
 	}
+	if entry == nil {
+		return toolOutput{"Wrote " + in.Path, map[string]string{"path": in.Path}}, nil
+	}
 	return toolOutput{fmt.Sprintf("Wrote %s (%s, %d bytes)", in.Path, entry.Type, entry.Size), entry}, nil
 }
 

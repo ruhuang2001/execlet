@@ -109,7 +109,7 @@ or flag means unsupported, not permission to send fields an old server ignores.
 Flags describe the configured endpoint; mixed-version rolling servers are unsupported.
 Current native SDKs preflight nonempty env/cwd/stdin, explicit concurrency and
 managed `timeout_ms` before create/start. Basic legacy calls need no discovery.
-Directory listings require `files.list.v1`; archive reads and writes require
+The stat endpoint advertises `files.stat.v1`. Guest-enabled deployments advertise `terminals.v1` for PTY sessions. Directory listings require `files.list.v1`; archive reads and writes require
 `files.archive.v1`. These checks happen before the file request. Ordinary
 file reads and writes need no discovery; no file method downgrades to shell.
 
@@ -606,7 +606,7 @@ Set `output_tail: true` when starting an execution to keep the most recent outpu
 
 ### `POST /v1/sandboxes/{sandbox_id}/terminals`
 
-Create a guest PTY. The optional JSON body accepts `command` (default `/bin/sh`), `cwd`, `rows` and `cols`. A 201 response contains `terminal_id`. Each running sandbox supports eight concurrent terminal sessions.
+Create a guest PTY. The optional JSON body accepts `command` (default `/bin/sh`), `cwd`, `rows` and `cols`. A 201 response contains `terminal_id`. Each running sandbox supports eight active terminal sessions. A terminal uses `TERM=xterm-256color` when the image and workload do not specify TERM. Completed shells release their live slot. Recent closed output stays available for replay while capacity permits.
 
 ### `POST /v1/sandboxes/{sandbox_id}/terminals/{terminal_id}/input`
 
@@ -622,4 +622,4 @@ Read SSE output from a persistent terminal. Supply a byte offset in `Last-Event-
 
 ### `DELETE /v1/sandboxes/{sandbox_id}/terminals/{terminal_id}`
 
-Close the terminal, release the session and its processes. Success returns 204. On daemon restart, a sandbox with an outstanding terminal is retired.
+Close the terminal, release the session and its processes. Success returns 204. On daemon restart, a sandbox with a running terminal or unconfirmed terminal status is retired. An exited shell permits recovery of an otherwise idle sandbox.

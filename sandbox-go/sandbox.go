@@ -105,6 +105,9 @@ func (c *Client) WriteFileInfo(ctx context.Context, sandboxID, path string, data
 	if err != nil {
 		return nil, err
 	}
+	if resp.status == http.StatusNoContent {
+		return nil, nil
+	}
 	var entry FileEntry
 	if err := decode(resp, &entry); err != nil {
 		return nil, err

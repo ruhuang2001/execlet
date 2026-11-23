@@ -10,7 +10,7 @@ from ._models import Event, Execution
 MAX_EVENT_BYTES = 16 << 20
 
 
-def read_event(response):
+def read_frame(response):
     event_type, event_id, data, size = "", None, [], 0
     while True:
         raw = response.readline(MAX_EVENT_BYTES + 1)
@@ -29,9 +29,7 @@ def read_event(response):
             if not event_type and not data:
                 event_id, size = None, 0
                 continue
-            if event_id is None:
-                raise Error("stream", "event has no positive integer id")
-            return _decode_event(event_id, event_type, "\n".join(data))
+            return event_id, event_type, "\n".join(data)
         if line.startswith(":"):
             continue
         name, _, value = line.partition(":")
@@ -71,3 +69,9 @@ def _decode_event(event_id, event_type, data):
         return Event(id=event_id, type=event_type, execution=execution)
     except (ValueError, UnicodeError, Error) as exc:
         raise Error("stream", "invalid event payload", cause=exc) from exc
+
+def read_event(response):
+    event_id, event_type, data = read_frame(response)
+    if event_id is None:
+        raise Error("stream", "event has no positive integer id")
+    return _decode_event(event_id, event_type, data)

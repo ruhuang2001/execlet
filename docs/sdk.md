@@ -70,6 +70,7 @@ WriteArchive(ctx, sandboxID, path string, data []byte) error
 ReadFile(ctx, sandboxID, path string) ([]byte, error)
 WriteFile(ctx, sandboxID, path string, data []byte) error
 WriteFileInfo(ctx, sandboxID, path string, data []byte) (*FileEntry, error)
+StatFile(ctx, sandboxID, path string) (*FileEntry, error)
 ```
 
 Optional request fields use pointers (`*int`, `*int64`, `*string`, or `*Action`)
@@ -292,3 +293,5 @@ Standard library only. Minimum Go version is the `go` directive in `go.mod`.
 - [Execution start and recovery](../sandbox-go/exec.go).
 - [SSE reconnects and context cancellation](../sandbox-go/stream.go).
 - [Error matching and outcomes](../sandbox-go/errors.go).
+
+`StatFile` checks `files.stat.v1`. Terminal methods check `terminals.v1`. A successful legacy 204 write returns a nil entry and nil error from `WriteFileInfo`.

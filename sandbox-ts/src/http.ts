@@ -69,8 +69,23 @@ export class Transport {
     return this.fetcher(this.domain + path, { ...init, headers, redirect: 'error' });
   }
 
-  async request(method: string, path: string, repeatable: boolean, signal?: AbortSignal,
-    body?: string | Uint8Array): Promise<Uint8Array> {
+  async request(
+    method: string,
+    path: string,
+    repeatable: boolean,
+    signal?: AbortSignal,
+    body?: string | Uint8Array
+  ): Promise<Uint8Array> {
+    return (await this.requestStatus(method, path, repeatable, signal, body)).bytes;
+  }
+
+  async requestStatus(
+    method: string,
+    path: string,
+    repeatable: boolean,
+    signal?: AbortSignal,
+    body?: string | Uint8Array
+  ): Promise<{ status: number; bytes: Uint8Array }> {
     for (let attempt = 0; ; attempt++) {
       checkSignal(signal);
       let after = 0;
@@ -85,7 +100,7 @@ export class Transport {
         const response = await this.open(path, init);
         after = retryAfter(response.headers.get('Retry-After'));
         const bytes = new Uint8Array(await response.arrayBuffer());
-        if (response.ok) return bytes;
+        if (response.ok) return { status: response.status, bytes };
         error = statusError(response.status, new TextDecoder().decode(bytes));
       } catch (cause) {
         if (signal?.aborted) throw canceled(signal);

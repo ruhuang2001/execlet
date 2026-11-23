@@ -101,6 +101,7 @@ paths:
     get:
       operationId: getCapabilities
       summary: Query supported capabilities before using additive fields
+      description: File metadata uses files.stat.v1, interactive terminals use terminals.v1 and record purge uses sandbox.purge.v1.
       responses:
         '200':
           description: Authenticated server capabilities; absence is not support.

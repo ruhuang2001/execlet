@@ -31,9 +31,15 @@ func (s *Sandboxes) backgroundCommands() bool {
 }
 
 func (h *Handler) capabilities(w http.ResponseWriter, _ *http.Request) {
-	flags := []string{"execution.env-cwd.v1", "files.archive.v1", "files.list.v1", "execution.stdin.v1", "execution.concurrent.v1", "sandbox.runtime.v1", "execution.output-tail.v1", "sandbox.purge.v1"}
+	flags := []string{"execution.env-cwd.v1", "files.archive.v1", "files.list.v1", "files.stat.v1", "execution.stdin.v1", "execution.concurrent.v1", "sandbox.runtime.v1", "execution.output-tail.v1", "sandbox.purge.v1"}
 	if h.store.backgroundCommands() {
 		flags = append(flags, "e2b.background.v1")
+	}
+	if b, err := h.store.terminalBackend(); err == nil {
+		supported, ok := b.(interface{ TerminalsEnabled() bool })
+		if !ok || supported.TerminalsEnabled() {
+			flags = append(flags, "terminals.v1")
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"capabilities": flags})
 }

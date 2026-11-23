@@ -40,6 +40,18 @@ function parseEvent(id: string, type: string, data: string): Event {
 }
 
 export async function* parseSSE(body: ReadableStream<Uint8Array>): AsyncGenerator<Event> {
+  for await (const frame of readFrames(body)) {
+    try { yield parseEvent(frame.id, frame.type, frame.data); }
+    catch (cause) {
+      if (frame.atEOF) throw new SandboxError('transport', 'sandbox: stream ended in an incomplete event', { cause });
+      throw cause;
+    }
+  }
+}
+
+interface RawFrame { id: string; type: string; data: string; atEOF?: boolean }
+
+export async function* readFrames(body: ReadableStream<Uint8Array>): AsyncGenerator<RawFrame> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let fragments: string[] = [];
@@ -50,10 +62,10 @@ export async function* parseSSE(body: ReadableStream<Uint8Array>): AsyncGenerato
   let data: string[] = [];
   let frameLength = 0;
 
-  function line(value: string): Event | undefined {
+  function line(value: string): RawFrame | undefined {
     if (value.length > maxFrameLength) throw invalid('SSE line exceeds 16 Mi characters');
     if (!value) {
-      const event = data.length || type ? parseEvent(id, type, data.join('\n')) : undefined;
+      const event = data.length || type ? { id, type, data: data.join('\n') } : undefined;
       id = ''; type = ''; data = []; frameLength = 0;
       return event;
     }
@@ -95,14 +107,14 @@ export async function* parseSSE(body: ReadableStream<Uint8Array>): AsyncGenerato
       lineLength += rest.length;
       if (lineLength > maxFrameLength) throw invalid('SSE line exceeds 16 Mi characters');
       if (chunk.done) {
-        let event: Event | undefined;
+        let event: ReturnType<typeof line>;
         try {
           if (fragments.length) line(fragments.join(''));
           event = line('');
         } catch (cause) {
           throw new SandboxError('transport', 'sandbox: stream ended in an incomplete event', { cause });
         }
-        if (event) yield event;
+        if (event) yield { ...event, atEOF: true };
         return;
       }
     }

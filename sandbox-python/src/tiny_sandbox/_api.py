@@ -310,8 +310,124 @@ class SandboxAPI(Transport, ABC):
         )
 
     @_public_cancellation
+    def stat_file(
+        self, sandbox_id: str, path: str, *, cancel: CancellationToken | None = None
+    ) -> FileEntry:
+        self.require_capabilities("files.stat.v1", cancel=cancel)
+        return FileEntry.from_dict(
+            self._json(
+                "GET",
+                self._sandbox_path(sandbox_id)
+                + "/files/stat?"
+                + urlencode({"path": path}),
+                cancel=cancel,
+            )
+        )
+
+    @_public_cancellation
+    def destroy_sandbox(
+        self, sandbox_id: str, *, cancel: CancellationToken | None = None
+    ) -> Sandbox:
+        self.require_capabilities("sandbox.purge.v1", cancel=cancel)
+        return Sandbox.from_dict(
+            self._json(
+                "DELETE", self._sandbox_path(sandbox_id) + "?purge=true", cancel=cancel
+            )
+        )
+
+    def _terminal_path(self, sandbox_id: str, terminal_id: str) -> str:
+        return (
+            self._sandbox_path(sandbox_id) + "/terminals/" + quote(terminal_id, safe="")
+        )
+
+    @_public_cancellation
+    def open_terminal(
+        self,
+        sandbox_id: str,
+        *,
+        rows: int = 24,
+        cols: int = 80,
+        command: list[str] | None = None,
+        cwd: str | None = None,
+        cancel: CancellationToken | None = None,
+    ) -> str:
+        self.require_capabilities("terminals.v1", cancel=cancel)
+        payload = {"rows": rows, "cols": cols}
+        if command is not None:
+            payload["command"] = command
+        if cwd is not None:
+            payload["cwd"] = cwd
+        result = self._json(
+            "POST",
+            self._sandbox_path(sandbox_id) + "/terminals",
+            json_body=payload,
+            retry=False,
+            cancel=cancel,
+        )
+        if not isinstance(result.get("terminal_id"), str) or not result["terminal_id"]:
+            raise Error("decode", "missing terminal_id")
+        return result["terminal_id"]
+
+    @_public_cancellation
+    def terminal_input(
+        self,
+        sandbox_id: str,
+        terminal_id: str,
+        data: bytes,
+        *,
+        cancel: CancellationToken | None = None,
+    ) -> None:
+        self.require_capabilities("terminals.v1", cancel=cancel)
+        self._request(
+            "POST",
+            self._terminal_path(sandbox_id, terminal_id) + "/input",
+            body=data,
+            retry=False,
+            cancel=cancel,
+        )
+
+    @_public_cancellation
+    def resize_terminal(
+        self,
+        sandbox_id: str,
+        terminal_id: str,
+        rows: int,
+        cols: int,
+        *,
+        cancel: CancellationToken | None = None,
+    ) -> None:
+        self.require_capabilities("terminals.v1", cancel=cancel)
+        self._request(
+            "POST",
+            self._terminal_path(sandbox_id, terminal_id) + "/resize",
+            json_body={"rows": rows, "cols": cols},
+            cancel=cancel,
+        )
+
+    @_public_cancellation
+    def close_terminal(
+        self,
+        sandbox_id: str,
+        terminal_id: str,
+        *,
+        cancel: CancellationToken | None = None,
+    ) -> None:
+        self.require_capabilities("terminals.v1", cancel=cancel)
+        self._request(
+            "DELETE",
+            self._terminal_path(sandbox_id, terminal_id),
+            retry=False,
+            cancel=cancel,
+        )
+
+    @_public_cancellation
     def list_files(
-        self, sandbox_id: str, path: str, *, limit: int = 100, cursor: str = "",
+        self,
+        sandbox_id: str,
+        path: str,
+        *,
+        limit: int = 100,
+        cursor: str = "",
         cancel: CancellationToken | None = None,
     ) -> FileList:
         """Return one name-ordered page of immediate directory children."""
@@ -362,14 +478,14 @@ class SandboxAPI(Transport, ABC):
         data: bytes,
         *,
         cancel: CancellationToken | None = None,
-    ) -> FileEntry:
+    ) -> FileEntry | None:
         payload = self._json(
             "PUT",
             self._sandbox_path(sandbox_id) + "/files?" + urlencode({"path": path}),
             body=data,
-            cancel=cancel,
+            cancel=cancel, optional_no_content=True,
         )
-        return FileEntry.from_dict(payload)
+        return FileEntry.from_dict(payload) if payload is not None else None
 
     @contextmanager
     def sandbox(

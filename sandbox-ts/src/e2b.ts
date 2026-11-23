@@ -557,6 +557,7 @@ class Files {
     if (payload.length > 10 << 20) throw new AdapterError('file exceeds 10 MiB', { code: 'payload_too_large' });
     return request(this.requestTimeout, async signal => {
       const written = await this.call(() => this.native.writeFile(this.id, target, payload, { signal }), signal);
+      if (written === undefined) return {name:target.slice(target.lastIndexOf('/')+1),path:target};
       if (written.type !== FileType.FILE && written.type !== FileType.SYMLINK) {
         throw new AdapterError('unexpected type in write response', { code: 'incompatible_server' });
       }

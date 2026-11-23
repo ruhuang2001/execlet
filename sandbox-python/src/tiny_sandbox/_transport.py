@@ -275,7 +275,7 @@ class Transport:
                     response.close()
                 conn.close()
 
-    def _request(self, method, path, *, body=None, json_body=None, cancel=None, retry=True):
+    def _request(self, method, path, *, body=None, json_body=None, cancel=None, retry=True, optional_no_content=False):
         headers = {}
         if json_body is not None:
             try:
@@ -297,6 +297,8 @@ class Transport:
                         data = response.read()
                         response._fully_read = True
                         if 200 <= response.status < 300:
+                            if optional_no_content and response.status == 204:
+                                return None
                             return data
                         after = response.getheader("Retry-After", "")
                         error = _status_error(response.status, data)
@@ -312,6 +314,8 @@ class Transport:
 
     def _json(self, method, path, **kwargs):
         data = self._request(method, path, **kwargs)
+        if data is None:
+            return None
         try:
             result = json.loads(data)
             if not isinstance(result, dict):

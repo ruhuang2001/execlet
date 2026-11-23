@@ -24,6 +24,9 @@ type WindowSize struct {
 }
 
 func (c *Client) OpenTerminal(ctx context.Context, sb string, size WindowSize) (string, error) {
+	if err := c.RequireCapability(ctx, "terminals.v1"); err != nil {
+		return "", err
+	}
 	resp, err := c.do(ctx, request{method: http.MethodPost, path: terminalPath(sb, ""), body: size})
 	if err != nil {
 		return "", err
@@ -34,25 +37,40 @@ func (c *Client) OpenTerminal(ctx context.Context, sb string, size WindowSize) (
 	if err := decode(resp, &result); err != nil {
 		return "", err
 	}
+	if result.ID == "" {
+		return "", errors.New("missing terminal_id")
+	}
 	return result.ID, nil
 }
 
 func (c *Client) TerminalInput(ctx context.Context, sb, id string, data []byte) error {
+	if err := c.RequireCapability(ctx, "terminals.v1"); err != nil {
+		return err
+	}
 	_, err := c.do(ctx, request{method: http.MethodPost, path: terminalPath(sb, id) + "/input", raw: data})
 	return err
 }
 
 func (c *Client) ResizeTerminal(ctx context.Context, sb, id string, size WindowSize) error {
+	if err := c.RequireCapability(ctx, "terminals.v1"); err != nil {
+		return err
+	}
 	_, err := c.do(ctx, request{method: http.MethodPost, path: terminalPath(sb, id) + "/resize", body: size, repeatable: true})
 	return err
 }
 
 func (c *Client) CloseTerminal(ctx context.Context, sb, id string) error {
+	if err := c.RequireCapability(ctx, "terminals.v1"); err != nil {
+		return err
+	}
 	_, err := c.do(ctx, request{method: http.MethodDelete, path: terminalPath(sb, id)})
 	return err
 }
 
 func (c *Client) StreamTerminal(ctx context.Context, sb, id string, offset uint64, output io.Writer) error {
+	if err := c.RequireCapability(ctx, "terminals.v1"); err != nil {
+		return err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.domain+terminalPath(sb, id)+"/events", nil)
 	if err != nil {
 		return err

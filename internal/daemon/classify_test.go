@@ -46,6 +46,36 @@ func (s *scripted) livenessCalls() int {
 	return s.livenessN
 }
 
+type lostGuestProcess struct{ daemon.Process }
+
+func (p lostGuestProcess) Wait() (int, error) {
+	_, _ = p.Process.Wait()
+	return -1, daemon.ErrGuestLost
+}
+
+type lostGuestBackend struct{ *membackend.Backend }
+
+func (b lostGuestBackend) Exec(ctx context.Context, id string, spec daemon.ExecSpec) (daemon.Process, error) {
+	p, err := b.Backend.Exec(ctx, id, spec)
+	return lostGuestProcess{p}, err
+}
+
+func TestCancelWithLostGuestRetiresSandbox(t *testing.T) {
+	h := newHarness(t)
+	h.be.Programs["block"] = memLongBlock
+	h.s = daemon.New(lostGuestBackend{h.be}, daemon.WithClassifierSleep(noSleep))
+	sb := h.create(daemon.CreateRequest{})
+	ex, _, err := h.s.StartExecution(t.Context(), sb.ID, daemon.ExecuteRequest{Command: []string{"block"}})
+	wantNoError(t, err)
+	done, err := h.s.CancelExecution(t.Context(), sb.ID, ex.ID)
+	wantNoError(t, err)
+	sb, err = h.s.Get(sb.ID)
+	wantNoError(t, err)
+	if sb.State != daemon.StateKilled || !done.OutputTruncated || *done.TerminationReason != daemon.ReasonCanceled {
+		t.Fatalf("sandbox=%s execution=%+v", sb.State, done)
+	}
+}
+
 func newScripted(t *testing.T, answers ...daemon.Liveness) (*harness, *scripted) {
 	t.Helper()
 	clock := newFakeClock()

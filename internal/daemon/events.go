@@ -104,21 +104,29 @@ func (l *eventLog) makeRoomForTailLocked(size int) {
 		return
 	}
 	first := 0
-	if l.events[first].Type == EventTruncated {
-		first++
-	}
 	for l.retained+size > MaxOutputBytes || l.outputEvents >= MaxOutputEvents {
-		dropped := l.events[first]
-		if dropped.Type == EventStdout {
-			l.stdoutOffset += int64(len(dropped.Data))
-		} else {
-			l.stderrOffset += int64(len(dropped.Data))
-		}
-		l.retained -= len(dropped.Data)
-		l.events[first].Data = nil
-		l.outputEvents--
+		l.dropOutputLocked(first)
 		first++
 	}
+	l.markPrefixLocked(first)
+}
+
+func (l *eventLog) dropOutputLocked(i int) {
+	ev := &l.events[i]
+	switch ev.Type {
+	case EventStdout:
+		l.stdoutOffset += int64(len(ev.Data))
+	case EventStderr:
+		l.stderrOffset += int64(len(ev.Data))
+	default:
+		return
+	}
+	l.retained -= len(ev.Data)
+	ev.Data = nil
+	l.outputEvents--
+}
+
+func (l *eventLog) markPrefixLocked(first int) {
 	marker := l.events[first-1].ID
 	l.events = l.events[first-1:]
 	l.events[0] = Event{ID: marker, Type: EventTruncated, LimitBytes: MaxOutputBytes}
@@ -126,6 +134,39 @@ func (l *eventLog) makeRoomForTailLocked(size int) {
 	l.indexed = 0
 	l.stdout.Reset()
 	l.stderr.Reset()
+}
+
+func (l *eventLog) resumeOutput(kind EventType, offset int64) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.complete {
+		return
+	}
+	if !l.keepTail {
+		if !l.truncated {
+			l.truncateLocked()
+		}
+		return
+	}
+	last := len(l.events) - 1
+	for last >= 0 && l.events[last].Type != kind {
+		last--
+	}
+	if last >= 0 {
+		for i := range last + 1 {
+			l.dropOutputLocked(i)
+		}
+		l.markPrefixLocked(last + 1)
+	} else if !l.truncated {
+		l.appendLocked(Event{Type: EventTruncated, LimitBytes: MaxOutputBytes})
+		l.truncated = true
+	}
+	if kind == EventStdout {
+		l.stdoutOffset = offset
+	} else {
+		l.stderrOffset = offset
+	}
+	l.notifyLocked()
 }
 
 func (l *eventLog) appendOutputLocked(kind EventType, data []byte) {

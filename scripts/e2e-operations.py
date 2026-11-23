@@ -83,12 +83,12 @@ def main():
         finally:
             conn.close()
 
-    def start(extra=(), success=True, legacy_faults=False):
+    def start(extra=(), success=True, legacy_faults=False, direct=False):
         nonlocal server
         log = (out / ('server-%d.log' % len(processes))).open('w')
         logs.append(log)
         server = subprocess.Popen([binary, '-addr', '127.0.0.1:' + str(port),
-            '-owner', owner, '-docker', proxy.path,
+            '-owner', owner, '-docker', docker.removeprefix('unix://') if direct else proxy.path,
             '-guest-agent', 'off' if legacy_faults else args.guest_agent, *extra],
             env=env, stdout=log, stderr=log)
         processes.append(server)
@@ -162,7 +162,7 @@ def main():
 
     def short_benchmark():
         from latency_baseline import measure
-        start(['-policy', str(policy)])
+        start(['-policy', str(policy)], direct=True)
         data = measure('http://127.0.0.1:' + str(port), token, spec, args.samples)
         check('short-command workload released every container before shutdown', not owned())
         (out / 'short-latency.json').write_text(json.dumps(data, indent=2) + '\n')
@@ -292,7 +292,7 @@ def main():
                 cwd=Path(__file__).resolve().parent, text=True).strip(),
             server_sha256=hashlib.sha256(Path(binary).read_bytes()).hexdigest()), indent=2))
         if args.creation_only:
-            start(['-policy', str(policy)])
+            start(['-policy', str(policy)], direct=True)
             fresh = []
             for _ in range(args.samples):
                 began = time.monotonic()

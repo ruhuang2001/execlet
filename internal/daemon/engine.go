@@ -411,13 +411,6 @@ func (s *Sandboxes) run(ctx context.Context, sb *sandbox, ex *execution) {
 
 	exitCode, waitErr := ex.proc.Wait()
 	pumps.Wait()
-	if source, ok := ex.proc.(interface{ OutputTruncated() bool }); ok && source.OutputTruncated() {
-		ex.log.mu.Lock()
-		if !ex.log.truncated {
-			ex.log.truncateLocked()
-		}
-		ex.log.mu.Unlock()
-	}
 	if managed, ok := ex.proc.(ManagedProcess); ok && managed.TimedOut() {
 		ex.setIntent(ReasonTimeout)
 	} else if ok && managed.Killed() {
@@ -445,7 +438,7 @@ func (s *Sandboxes) run(ctx context.Context, sb *sandbox, ex *execution) {
 		}
 	}
 
-	if errors.Is(waitErr, ErrGuestLost) && intent == nil && !outcome.SandboxLost {
+	if errors.Is(waitErr, ErrGuestLost) && !outcome.SandboxLost {
 		exitCode = -1
 		outcome = ExecOutcome{Reason: ReasonUnknown, SandboxLost: true}
 		ex.log.mu.Lock()
@@ -476,6 +469,11 @@ func pump(log *eventLog, kind EventType, r io.Reader) {
 	carry := 0
 	for {
 		n, err := r.Read(buf[carry:])
+		if gap, ok := err.(interface{ ResumeOffset() int64 }); ok {
+			carry = 0
+			log.resumeOutput(kind, gap.ResumeOffset())
+			continue
+		}
 		total := carry + n
 
 		tail := 0

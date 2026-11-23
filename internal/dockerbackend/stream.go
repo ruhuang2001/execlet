@@ -13,6 +13,22 @@ type bufferedStream struct {
 	cond   *sync.Cond
 	buf    bytes.Buffer
 	closed bool
+	gap    *outputGap
+}
+
+type outputGap int64
+
+func (g outputGap) Error() string       { return "guest output gap" }
+func (g outputGap) ResumeOffset() int64 { return int64(g) }
+
+func (b *bufferedStream) resumeAt(offset int64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for b.buf.Len() > 0 || b.gap != nil {
+		b.cond.Wait()
+	}
+	b.gap = new(outputGap(offset))
+	b.cond.Broadcast()
 }
 
 func newBufferedStream() *bufferedStream {
@@ -46,8 +62,14 @@ func (b *bufferedStream) Write(p []byte) (int, error) {
 func (b *bufferedStream) Read(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	for b.buf.Len() == 0 && !b.closed {
+	for b.buf.Len() == 0 && b.gap == nil && !b.closed {
 		b.cond.Wait()
+	}
+	if b.gap != nil {
+		gap := b.gap
+		b.gap = nil
+		b.cond.Broadcast()
+		return 0, gap
 	}
 	if b.buf.Len() == 0 {
 		return 0, io.EOF

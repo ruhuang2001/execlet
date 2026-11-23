@@ -112,6 +112,11 @@ def main():
                 and managed["stderr"] == "FINAL ERROR"
                 and managed["output_truncated"]
             )
+            _, burst = complete({"command": ["python3", "-c",
+                "import os; os.write(1,b'x'*(5<<20)); os.write(2,b'y'*(3<<20))"],
+                "output_tail": True, "timeout_ms": 60000})
+            for stream, size in (("stdout", 5 << 20), ("stderr", 3 << 20)):
+                assert burst.get(stream + "_offset", 0) + len(burst[stream]) == size, stream
             path, tail = complete(payload)
             assert (
                 tail["output_truncated"]

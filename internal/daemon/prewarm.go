@@ -142,7 +142,11 @@ func (b *PolicyBackend) maintainPrewarm(ctx context.Context, owner string, retry
 	failures := map[prewarmKey]failure{}
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
-	defer b.trimPrewarm(context.WithoutCancel(ctx), nil, retry)
+	defer func() {
+		cleanup, cancel := backendCtx(context.WithoutCancel(ctx))
+		defer cancel()
+		b.trimPrewarm(cleanup, nil, retry)
+	}()
 	for {
 		targets := b.desiredPrewarm()
 		b.trimPrewarm(ctx, targets, retry)

@@ -51,12 +51,12 @@ Creation is never automatically retried; see the respective SDK contracts.
 |---|---|---|
 | `id` | string | |
 | `state` | string | `pending`, `running`, `paused`, `killed` |
-| `image` | string | Docker image. Default `alpine:3.20`. |
+| `image` | string | Docker image or administrator-defined `template:<name>`. The sandbox reports the resolved digest for a template. Default `alpine:3.20`. |
 | `memory_mb` | int | memory limit, default 512, minimum 16 |
 | `max_concurrent_executions` | int | immutable execution slot limit, 1–8, default 1 |
 | `pids_limit` | int | task limit, default 1024, minimum 64 |
 | `nano_cpus` | int | CPU limit in units of 1e-9 CPUs, default `0` (unlimited) |
-| `network` | string | `bridge` or `none` |
+| `network` | string | `bridge`, `none`, or administrator-configured `filtered` |
 | `runtime` | string | Selected administrator-allowed runtime when configured |
 | `agent_mode` | string | `guest` after a successful handshake, `legacy` when disabled, or `unavailable` on fallback |
 | `protected` | boolean | A working root guest agent protects its control directory from the non-root workload |
@@ -274,7 +274,7 @@ Request (all fields optional):
   see the [concurrency policy](#concurrent-execution-policy).
 - `nano_cpus` is a CPU limit in units of 1e-9 CPUs; `0`, the default, means no
   limit. `1000000000` is one CPU.
-- `network` accepts `bridge` (default) or `none`. `bridge` gives the sandbox its own
+- `network` accepts `bridge` (default), `none` or policy-configured `filtered`. `bridge` gives the sandbox its own
   network namespace with outbound access, so package installs and HTTP calls
   work. `none` removes networking entirely. Host networking is not offered: it
   would expose every host socket to code the caller does not control.

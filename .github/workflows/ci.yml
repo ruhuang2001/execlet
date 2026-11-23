@@ -498,6 +498,7 @@ jobs:
           GOFLAGS='-cover -covermode=atomic -coverpkg=./...' make build
           docker build --target minimal -t tiny-sandbox-guest:minimal -f examples/guest/Dockerfile.agent-minimal examples/guest
           sudo env "PATH=$PATH" "GOCOVERDIR=$GOCOVERDIR" python3 scripts/e2e-runtime.py
+          sudo env "PATH=$PATH" "GOCOVERDIR=$GOCOVERDIR" python3 scripts/e2e-templates.py --runtime runsc --out artifacts/runsc-template
           sudo chown -R "$(id -u):$(id -g)" artifacts
       - uses: actions/upload-artifact@v4
         if: success() && hashFiles('sandbox-agent/go.mod') != ''
@@ -512,6 +513,7 @@ jobs:
           name: runtime-evidence
           path: |
             artifacts/runtime/*.json
+            artifacts/runsc-template/*.json
           retention-days: 7
 
   coverage:

@@ -9,7 +9,7 @@ whole daemon, not one tenant.
 ## Administrator policy
 
 `sandboxd -policy /absolute/path/policy.json` enables strict aggregate admission.
-All fields are required; unknown fields, nonpositive budgets and unsupported
+The aggregate budgets and image and network allowlists are required. Unknown fields, nonpositive budgets and unsupported
 network modes prevent startup. For example, replace the image placeholder
 with an installed, approved image digest:
 
@@ -45,7 +45,66 @@ sandbox and container awaiting confirmed cleanup. This limit applies with or
 without a deployment policy. A failed create that left a container, or a failed
 delete, holds its slot until the runtime confirms removal. A record may already say `killed` while its container still exists;
 the reaper retries removal and `/metrics` exposes the backlog. Changing the
-policy requires a restart and recovery rechecks adopted containers.
+budgets or runtime policy requires a restart. Recovery rechecks adopted containers.
+
+### Named images and filesystem templates
+
+The optional `templates` object maps names to local Docker image IDs
+(`sha256:<64 lowercase hex digits>`) or digest-pinned repository references.
+Each registered digest is an approved image. Requests can use the digest or
+`{"image":"template:python-test"}`. The sandbox records the resolved digest.
+Each creation receives its own writable filesystem. New admissions read the
+template mapping from the policy file, so additions and deletions take effect
+while the server runs. A missing or invalid catalog prevents alias resolution.
+Use an atomic rename when editing the policy.
+
+An administrator with local Docker access can save a configured sandbox and
+publish its digest to the same policy. Run the tool against the Docker context
+used by sandboxd and pass the daemon's ownership label.
+
+```sh
+python3 scripts/template-admin.py save --policy /etc/tiny-sandbox/policy.json \
+  --owner sandboxd-prod --sandbox "$SANDBOX_ID" --name python-test
+
+sandboxctl run --image template:python-test --rm -- python3 -m pytest
+
+python3 scripts/template-admin.py delete --policy /etc/tiny-sandbox/policy.json \
+  --name python-test
+```
+
+Save requires a new name. For runc, Docker briefly freezes the source during its commit. The administrator tool exports a stopped copy, filters its tar, and imports a local image.
+
+For runsc, execute the same command on the Linux Docker host with the installed
+`runsc` binary. Docker pauses writers while the tool captures the lower filesystem
+and gVisor's upper layer using `runsc tar rootfs-upper`. The merge applies file
+deletions, directory replacements, permissions and hard links, excludes the
+runtime's backing file and imports the flattened filesystem. A running source
+resumes after capture. A paused source stays paused. The default runtime state
+directory is `/var/run/docker/runtime-runc/moby`. Supply `--runsc-root DIR` for
+another installation path. An unsupported overlay format or failed capture
+aborts publication.
+[Upstream runsc tar command](https://github.com/google/gvisor/blob/release-20261116.0/runsc/cmd/tar.go)
+ Finish dependency installation before saving to
+capture an application-consistent project. Contents under `/tmp`, `/var/tmp`,
+`/run`, `/dev`, `/proc`, `/sys`, and each mounted volume are excluded.
+The tool also omits `/.tiny-sandbox`, `/.dockerenv` and Docker-managed
+`/etc/hosts`, `/etc/hostname` and `/etc/resolv.conf`. Other files, including
+project-local settings and credentials written to disk, are part of the
+snapshot. A retained hard link to an excluded path fails publication.
+The template preserves the base image's architecture, user, working
+directory, environment, entrypoint, command and volume declarations. Processes
+and execution records start fresh. The tool needs temporary host disk space
+for the flattened filesystem and uses a lock and atomic rename to publish the
+catalog after the image import succeeds.
+
+Delete revokes the name for future creates. If no other name or explicit
+image allowlist entry references the digest, it also removes this tool's
+Docker tag. Docker retains layers needed by existing containers. Registry
+images and independently managed tags stay under administrator control.
+
+Run `python3 scripts/e2e-templates.py --server bin/sandboxd` to exercise
+the save, restart, isolation and delete flow and write the acceptance report
+to `artifacts/templates/report.json`.
 
 ### Network guarantees
 
@@ -164,7 +223,7 @@ Run the reproducible Docker/HTTP policy, failure and recovery suite with a
 compatible image already installed, using a fresh short output path:
 
 ```sh
-go build -o bin/sandboxd ./cmd/sandboxd
+make build
 IMAGE=$(docker image inspect tiny-sandbox-e2b:local --format '{{.Id}}')
 python3 scripts/e2e-operations.py --server bin/sandboxd --image "$IMAGE" \
   --out artifacts/operations --samples 5
@@ -209,3 +268,44 @@ Python versions), `policy.json`, the raw rounds and `cleanup.json` together.
 Use the same build flags and an idle host for comparisons: CI uses coverage
 instrumentation and its small sample is a semantics/cleanup check, not a
 latency threshold. Neither workload measures cold pulls or pool hits.
+
+## Prewarmed templates
+
+A deployment policy can reserve fresh running containers for repeated requests. Set `templates` to an immutable image reference and add a `prewarm` target to the same policy. For example, the following fields belong alongside the existing aggregate budgets and allowlists.
+
+```json
+{
+  "templates": {
+    "python-test": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "prewarm": [
+    {
+      "image": "template:python-test",
+      "count": 1,
+      "memory_mb": 256,
+      "pids_limit": 128,
+      "nano_cpus": 500000000,
+      "network": "none",
+      "runtime": "runc"
+    }
+  ]
+}
+```
+
+Replace the example digest with the installed image ID or repository digest. Include `runc` in `allowed_runtimes` when setting the runtime explicitly. Omitting resource, network or runtime fields applies the same defaults as sandbox creation. Restart the daemon to load a new pool configuration. With no `prewarm` entries the daemon creates containers on demand.
+
+The daemon counts each standby container against every deployment budget from the beginning of provisioning. It validates resource limits before making an instance available. An incoming request claims a matching image digest, memory size, CPU limit, PID limit, network and runtime under one lock. A miss takes the usual creation path subject to available quota. The pool assigns the sandbox ID, Docker name and ownership labels at provisioning. Admission claims that identity atomically. The sandbox lifetime starts at handoff. Each instance goes to one user and is discarded on deletion. The background worker replenishes the configured target while capacity is available. Failed provisioning records a warning and backs off per profile from 2 to 60 seconds. The `tiny_sandbox_prewarm_ready` metric counts instances available for handoff.
+
+On a journaled restart the daemon reconciles each delivered sandbox against its durable record. It removes unclaimed owner-labelled containers, then starts filling the pool. Graceful shutdown also removes idle pool containers. Changing a named template switches new requests to its current digest. On its next reconciliation, the pool removes excess standby containers for the old digest and fills the new target. Deleting an alias leaves its pool target dormant, including across restarts. Registering that name again reactivates it.
+
+Run `python3 scripts/e2e-prewarm.py --samples 10` with Docker available to measure the interval from a create request to its first completed command. A private loopback registry serves a unique single-layer image for cold pulls. The script compares cold pulls, a local image, template resolution and confirmed pool hits on one engine. The output includes all samples, P50, P95, saturation and recovery results in `artifacts/prewarm-e2e/acceptance.json`.
+
+### Runtime verification
+
+Clients specifying a runtime first require the `sandbox.runtime.v1` capability so older servers that ignore unknown fields cannot silently select their default.
+
+Set `allowed_runtimes` in the deployment policy to the Docker runtime names the administrator permits, for example `["runc", "runsc"]`. The first entry supplies the default. Set `runtime` on the create request to choose one of the allowed runtimes.
+
+Docker inspection selects the filesystem transfer path at creation and journal recovery, including when the Docker Engine chooses its default runtime.
+
+Runsc exposes a virtualized cgroup hierarchy to the guest. Policy verification therefore requires sandboxd to run on the Linux Docker host with access to its process table and cgroup tree. Admission fails if the matching scope or a limit cannot be checked. Runsc's private overlay and `/tmp` can diverge from Docker's archive view of the container. The backend uses a guest transfer helper for live filesystem operations.

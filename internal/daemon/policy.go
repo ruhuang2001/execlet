@@ -5,17 +5,19 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"github.com/ruhuang2001/tiny-sandbox/internal/egress"
 	"math"
 	"os"
 	"slices"
 	"sync"
-
-	"github.com/ruhuang2001/tiny-sandbox/internal/egress"
 )
 
 type DeploymentPolicy struct {
-	Egress       *egress.Policy  `json:"egress,omitempty"`
+	Templates    map[string]string `json:"templates,omitempty"`
+	catalogPath  string
+	Prewarm      []PrewarmTarget `json:"prewarm,omitempty"`
 	Runtimes     []string        `json:"allowed_runtimes,omitempty"`
+	Egress       *egress.Policy  `json:"egress,omitempty"`
 	MaxSandboxes int             `json:"max_sandboxes"`
 	MemoryMB     int64           `json:"total_memory_mb"`
 	NanoCPUs     int64           `json:"total_nano_cpus"`
@@ -33,12 +35,16 @@ func LoadPolicy(path string) (DeploymentPolicy, error) {
 	if err = json.Unmarshal(data, &p, json.RejectUnknownMembers(true)); err != nil {
 		return p, err
 	}
+	p.catalogPath = path
 	return p, p.Validate()
 }
 
 func (p DeploymentPolicy) Validate() error {
 	if p.MaxSandboxes <= 0 || p.MemoryMB <= 0 || p.NanoCPUs <= 0 || p.Pids <= 0 || len(p.Images) == 0 || len(p.Networks) == 0 {
 		return errors.New("policy requires positive aggregate budgets, allowed_images and allowed_networks")
+	}
+	if err := validateTemplates(p.Templates); err != nil {
+		return err
 	}
 	if p.MemoryMB > math.MaxInt64>>20 {
 		return errors.New("policy memory budget exceeds supported byte range")
@@ -66,7 +72,8 @@ func (p DeploymentPolicy) Validate() error {
 			return fmt.Errorf("unsupported network policy %q; no silent fallback", network)
 		}
 	}
-	return nil
+	_, err := p.prewarmTargets()
+	return err
 }
 
 type PolicyUsage struct {
@@ -81,6 +88,8 @@ type PolicyBackend struct {
 	policy      DeploymentPolicy
 	mu          sync.Mutex
 	allocations map[string]ContainerSpec
+	ready       map[prewarmKey][]string
+	targets     map[prewarmKey]int
 }
 
 func NewPolicyBackend(backend Backend, policy DeploymentPolicy) (*PolicyBackend, error) {
@@ -94,7 +103,11 @@ func NewPolicyBackend(backend Backend, policy DeploymentPolicy) (*PolicyBackend,
 	}
 	policy.Images = slices.Clone(policy.Images)
 	policy.Networks = slices.Clone(policy.Networks)
-	return &PolicyBackend{Backend: backend, policy: policy, allocations: make(map[string]ContainerSpec)}, nil
+	targets, err := policy.prewarmTargets()
+	if err != nil {
+		return nil, err
+	}
+	return &PolicyBackend{targets: targets, ready: map[prewarmKey][]string{}, Backend: backend, policy: policy, allocations: make(map[string]ContainerSpec)}, nil
 }
 
 func (b *PolicyBackend) DefaultRuntime() string {
@@ -143,7 +156,11 @@ func (b *PolicyBackend) usageLocked() PolicyUsage {
 func (b *PolicyBackend) Usage() PolicyUsage { b.mu.Lock(); defer b.mu.Unlock(); return b.usageLocked() }
 
 func (b *PolicyBackend) Create(ctx context.Context, spec ContainerSpec) (string, error) {
-	if !b.allowedRuntime(spec.Runtime) || spec.Name == "" || !slices.Contains(b.policy.Images, spec.Image) || !slices.Contains(b.policy.Networks, spec.Network) || spec.NanoCPUs <= 0 || spec.MemoryMB < MinMemoryMB || int64(spec.MemoryMB) > math.MaxInt64>>20 || spec.PidsLimit < MinPidsLimit {
+	return b.createFresh(ctx, spec)
+}
+
+func (b *PolicyBackend) createFresh(ctx context.Context, spec ContainerSpec) (string, error) {
+	if !b.allowedRuntime(spec.Runtime) || spec.Name == "" || !b.policy.allowsImage(spec.Image) || !slices.Contains(b.policy.Networks, spec.Network) || spec.NanoCPUs <= 0 || spec.MemoryMB < MinMemoryMB || int64(spec.MemoryMB) > math.MaxInt64>>20 || spec.PidsLimit < MinPidsLimit {
 		return "", errorf(CodeInvalidRequest, "deployment policy rejects image, network or unlimited CPU")
 	}
 	b.mu.Lock()
@@ -194,7 +211,7 @@ func (b *PolicyBackend) Remove(ctx context.Context, id string) error {
 }
 
 func (b *PolicyBackend) Adopt(ctx context.Context, id string, spec ContainerSpec) error {
-	if !b.allowedRuntime(spec.Runtime) || !slices.Contains(b.policy.Images, spec.Image) || !slices.Contains(b.policy.Networks, spec.Network) || spec.NanoCPUs <= 0 || spec.MemoryMB < MinMemoryMB || spec.PidsLimit < MinPidsLimit {
+	if !b.allowedRuntime(spec.Runtime) || !b.policy.allowsImage(spec.Image) || !slices.Contains(b.policy.Networks, spec.Network) || spec.NanoCPUs <= 0 || spec.MemoryMB < MinMemoryMB || spec.PidsLimit < MinPidsLimit {
 		return errors.New("recovered container violates deployment policy")
 	}
 	if err := b.Backend.(interface {

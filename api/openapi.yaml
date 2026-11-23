@@ -1068,7 +1068,7 @@ components:
         image:
           type: string
           default: alpine:3.20
-          description: Docker image reference.
+          description: Docker image reference or template:<name> registered in deployment policy.
         memory_mb:
           type: integer
           minimum: 16

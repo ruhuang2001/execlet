@@ -78,7 +78,10 @@ feature-e2e: build typescript
 	$(PYTHON) scripts/e2e-guest-idle.py --server bin/sandboxd --out $(ARTIFACTS)/guest-idle/acceptance.json
 	$(PYTHON) scripts/e2e-output-retention.py --out $(ARTIFACTS)/output-retention
 	$(PYTHON) scripts/egress-e2e/run.py --out $(ARTIFACTS)/egress
+	$(PYTHON) scripts/e2e-templates.py --out $(ARTIFACTS)/templates
+	$(PYTHON) scripts/e2e-prewarm.py --samples 2 --out $(ARTIFACTS)/prewarm-e2e
 
 runtime-e2e: build
 	docker build --target minimal -t tiny-sandbox-guest:minimal -f examples/guest/Dockerfile.agent-minimal examples/guest
 	$(PYTHON) scripts/e2e-runtime.py --out $(ARTIFACTS)/runtime
+	$(PYTHON) scripts/e2e-templates.py --runtime runsc --out $(ARTIFACTS)/runsc-template

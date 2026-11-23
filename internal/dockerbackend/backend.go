@@ -31,6 +31,8 @@ var sandboxCapDrop = []string{"NET_RAW", "MKNOD"}
 var sandboxSecurityOpt = []string{"no-new-privileges"}
 
 type Backend struct {
+	guestMode  string
+	guests     sync.Map
 	api        *dockerapi.Client
 	cgroupRoot string
 
@@ -49,6 +51,7 @@ func Dial(ctx context.Context, socketPath string) (*Backend, error) {
 		return nil, err
 	}
 	b := New(api)
+	_ = b.SetGuestAgent("auto")
 	if runtime.GOOS == "linux" {
 		b.cgroupRoot = "/sys/fs/cgroup"
 	}
@@ -65,11 +68,16 @@ func (b *Backend) Create(ctx context.Context, spec daemon.ContainerSpec) (string
 	}
 	pids := int64(pidsLimit)
 	initProcess := true
+	pidMount := "rw,size=1m,mode=1777"
+	if b.guestMode == "auto" {
+		pidMount = "rw,size=1m,mode=0700"
+	}
 	cfg := dockerapi.ContainerConfig{
 		Image:  spec.Image,
 		Cmd:    initCommand,
 		Labels: spec.Labels,
 		HostConfig: dockerapi.HostConfig{
+			Runtime:     spec.Runtime,
 			Memory:      limit,
 			MemorySwap:  limit,
 			NanoCpus:    spec.NanoCPUs,
@@ -77,16 +85,19 @@ func (b *Backend) Create(ctx context.Context, spec daemon.ContainerSpec) (string
 			CapDrop:     sandboxCapDrop,
 			SecurityOpt: sandboxSecurityOpt,
 			NetworkMode: networkMode(spec.Network),
-			Tmpfs:       map[string]string{PidDir: "rw,size=1m,mode=1777"},
+			Tmpfs:       map[string]string{PidDir: pidMount},
 			Init:        &initProcess,
 		},
 	}
 
+	archive, deliveryErr := b.guestImage(ctx, &cfg)
 	id, err := b.api.ContainerCreate(ctx, spec.Name, cfg)
 	if err != nil && dockerapi.IsNoSuchImage(err) {
 		if pullErr := b.api.PullImage(ctx, spec.Image); pullErr != nil {
 			return "", fmt.Errorf("dockerbackend: pull %s: %w", spec.Image, pullErr)
 		}
+		cfg.Image = spec.Image
+		archive, deliveryErr = b.guestImage(ctx, &cfg)
 		id, err = b.api.ContainerCreate(ctx, spec.Name, cfg)
 	}
 	if dockerapi.IsConflict(err) && spec.Name != "" {
@@ -108,6 +119,13 @@ func (b *Backend) Create(ctx context.Context, spec daemon.ContainerSpec) (string
 		return "", createErr
 	}
 
+	spec.Runtime, err = b.effectiveRuntime(ctx, id, spec.Runtime)
+	if err != nil {
+		return id, err
+	}
+	if archive != nil {
+		deliveryErr = errors.Join(deliveryErr, b.api.ArchivePut(ctx, id, "/", archive))
+	}
 	if err := b.api.ContainerStart(ctx, id); err != nil {
 		startErr := fmt.Errorf("dockerbackend: start container: %w", err)
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), daemon.BackendCallTimeout)
@@ -116,6 +134,17 @@ func (b *Backend) Create(ctx context.Context, spec daemon.ContainerSpec) (string
 			return id, errors.Join(startErr, fmt.Errorf("removing unstarted container: %w", rmErr))
 		}
 		return "", startErr
+	}
+	if b.guestMode == "auto" {
+		if deliveryErr == nil {
+			deliveryErr = b.startGuest(ctx, id, spec)
+		}
+		if deliveryErr != nil {
+			b.guestUnavailable(id, deliveryErr)
+		}
+	}
+	if spec.Runtime == "runsc" && b.guest(id) == nil {
+		return id, errors.New("runsc requires the guest agent for filesystem access")
 	}
 	return id, nil
 }
@@ -173,6 +202,9 @@ func (b *Backend) Remove(ctx context.Context, containerID string) error {
 	}
 	err := b.api.ContainerRemove(ctx, containerID)
 	if err == nil || dockerapi.IsNotFound(err) {
+		if g, ok := b.guests.LoadAndDelete(containerID); ok {
+			g.(*guestSession).close()
+		}
 		b.cleanup.forget(containerID)
 	}
 	return notFound(err, "container %s", containerID)
@@ -271,6 +303,13 @@ func (b *Backend) Exec(ctx context.Context, containerID string, spec daemon.Exec
 		return nil, errors.New("managed commands do not support stdin")
 	}
 	pidPath := b.nextPidPath()
+	g := b.guest(containerID)
+	if g != nil && spec.TimeoutMS != nil {
+		return b.execGuest(ctx, g, spec)
+	}
+	if (g != nil && g.protected) || (g == nil && b.guestMode == "auto") {
+		pidPath = "/tmp/.tiny-sandbox-" + strings.TrimPrefix(pidPath, PidDir+"/")
+	}
 	stdinDir, err := b.stageStdin(ctx, containerID, spec.Stdin)
 	if err != nil {
 		return nil, err
@@ -359,7 +398,7 @@ func (b *Backend) OOMKillCount(ctx context.Context, containerID string) (int64, 
 }
 
 func (b *Backend) ReadFile(ctx context.Context, containerID, path string) ([]byte, error) {
-	rc, err := b.api.ArchiveGet(ctx, containerID, path)
+	rc, err := b.archiveGet(ctx, containerID, path)
 	if err != nil {
 		return nil, notFound(err, "%s", path)
 	}
@@ -386,10 +425,10 @@ func (b *Backend) WriteFile(ctx context.Context, containerID, path string, data 
 	if err != nil {
 		return daemon.FileEntry{}, err
 	}
-	if err := b.api.ArchivePut(ctx, containerID, "/", tarBody); err != nil {
+	if err := b.archivePut(ctx, containerID, "/", tarBody); err != nil {
 		return daemon.FileEntry{}, notFound(err, "%s", path)
 	}
-	entry, err := b.statWrittenFile(ctx, containerID, path)
+	entry, err := b.StatFile(ctx, containerID, path)
 	if err != nil {
 		if errors.Is(err, daemon.ErrNotFound) {
 			return daemon.FileEntry{}, &daemon.Error{Code: daemon.CodeInvalidRequest, Message: "destination missing after write: " + path}

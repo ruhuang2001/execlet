@@ -117,6 +117,9 @@ func (b *Backend) statFromArchive(ctx context.Context, id, p string) (daemon.Fil
 }
 
 func (b *Backend) ListFiles(ctx context.Context, id, p, after string, limit int) ([]daemon.FileEntry, error) {
+	if g := b.guest(id); g != nil {
+		return b.guestList(ctx, g, p, after, limit)
+	}
 	out, err := b.captureExec(ctx, id, "", []string{"/bin/sh", "-c", listDirScript, "list-files", p}, daemon.MaxFileScanBytes)
 	if err != nil {
 		if errors.Is(err, errCaptureLimit) {

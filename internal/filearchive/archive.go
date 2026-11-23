@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"slices"
 	"strings"
 	"unicode/utf8"
 )
@@ -205,6 +206,18 @@ func (a *Archive) Entries() []Entry {
 		result[i] = Entry{Header: entry.Header, Data: bytes.Clone(entry.Data)}
 	}
 	return result
+}
+
+func (a *Archive) BytesOwnedBy(uid, gid int) ([]byte, error) {
+	if uid == 0 && gid == 0 {
+		return a.Bytes(), nil
+	}
+	entries := slices.Clone(a.entries)
+	for i := range entries {
+		entries[i].Header.Uid = uid
+		entries[i].Header.Gid = gid
+	}
+	return encode(entries)
 }
 
 func (a *Archive) Bytes() []byte { return bytes.Clone(a.data) }

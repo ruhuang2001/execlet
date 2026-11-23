@@ -95,6 +95,7 @@ func (ex *execution) finish(at time.Time, exitCode int, outcome ExecOutcome) boo
 		FinishedAt:        ex.finished,
 	}
 	ex.log.mu.Lock()
+	terminal.StdoutOffset, terminal.StderrOffset = ex.log.stdoutOffset, ex.log.stderrOffset
 	if ex.persist != nil {
 		events := append(append([]Event(nil), ex.log.events...), Event{ID: ex.log.nextID + 1, Type: EventComplete, Execution: &terminal})
 		terminal.OutputTruncated = ex.log.truncated
@@ -134,7 +135,7 @@ func (ex *execution) snapshot() Execution {
 }
 
 func (ex *execution) snapshotLocked() Execution {
-	stdout, stderr, truncated := ex.log.output()
+	stdout, stderr, truncated, stdoutOffset, stderrOffset := ex.log.output()
 	return Execution{
 		ID:                ex.id,
 		PID:               ex.pid,
@@ -144,11 +145,12 @@ func (ex *execution) snapshotLocked() Execution {
 		State:             ex.state,
 		ExitCode:          cloneInt(ex.exitCode),
 		TerminationReason: cloneReason2(ex.reason),
-		Stdout:            stdout,
-		Stderr:            stderr,
-		OutputTruncated:   truncated,
-		StartedAt:         ex.startedAt,
-		FinishedAt:        cloneTime(ex.finished),
+		StdoutOffset:      stdoutOffset, StderrOffset: stderrOffset,
+		Stdout:          stdout,
+		Stderr:          stderr,
+		OutputTruncated: truncated,
+		StartedAt:       ex.startedAt,
+		FinishedAt:      cloneTime(ex.finished),
 	}
 }
 
@@ -273,6 +275,7 @@ func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req Ex
 		stdinDigest: keyedFingerprint(s.fingerprintKey, []string{req.Stdin}), fingerprintKey: s.fingerprintKey,
 		startedAt: s.now(), state: ExecRunning, log: newEventLog(), logger: contextLogger(ctx), oomBaseline: baseline, done: make(chan struct{}),
 	}
+	ex.log.keepTail = req.OutputTail
 	if req.TimeoutMS != nil {
 		ex.timeoutMS = new(*req.TimeoutMS)
 	}
@@ -295,6 +298,7 @@ func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req Ex
 	}
 	startCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), BackendCallTimeout)
 	proc, err := s.backend.Exec(startCtx, sb.container, ExecSpec{
+		ExecutionID: ex.id, OutputTail: req.OutputTail,
 		Command:   req.Command,
 		Env:       mergedEnv(sb.opts.env, req.Env),
 		Dir:       req.Cwd,
@@ -303,6 +307,18 @@ func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req Ex
 	})
 	cancel()
 	startErr := err
+	if err != nil && proc == nil && CodeOf(err) == CodeInvalidState && !errors.Is(err, ErrStartUnconfirmed) {
+		if ex.forget != nil {
+			if forgetErr := ex.forget(); forgetErr != nil {
+				sb.mu.Unlock()
+				return Execution{}, false, forgetErr
+			}
+			sb.executions = sb.executions[:len(sb.executions)-1]
+			delete(sb.idempotency, ex.key)
+		}
+		sb.mu.Unlock()
+		return Execution{}, false, err
+	}
 	if err != nil && proc == nil {
 		if s.journal != nil || req.TimeoutMS != nil || errors.Is(err, ErrStartUnconfirmed) {
 			if s.journal == nil {
@@ -395,6 +411,13 @@ func (s *Sandboxes) run(ctx context.Context, sb *sandbox, ex *execution) {
 
 	exitCode, waitErr := ex.proc.Wait()
 	pumps.Wait()
+	if source, ok := ex.proc.(interface{ OutputTruncated() bool }); ok && source.OutputTruncated() {
+		ex.log.mu.Lock()
+		if !ex.log.truncated {
+			ex.log.truncateLocked()
+		}
+		ex.log.mu.Unlock()
+	}
 	if managed, ok := ex.proc.(ManagedProcess); ok && managed.TimedOut() {
 		ex.setIntent(ReasonTimeout)
 	} else if ok && managed.Killed() {
@@ -422,6 +445,15 @@ func (s *Sandboxes) run(ctx context.Context, sb *sandbox, ex *execution) {
 		}
 	}
 
+	if errors.Is(waitErr, ErrGuestLost) && intent == nil && !outcome.SandboxLost {
+		exitCode = -1
+		outcome = ExecOutcome{Reason: ReasonUnknown, SandboxLost: true}
+		ex.log.mu.Lock()
+		if !ex.log.truncated {
+			ex.log.truncateLocked()
+		}
+		ex.log.mu.Unlock()
+	}
 	now := s.now()
 	sb.mu.Lock()
 	if ex.finish(now, exitCode, outcome) {
@@ -481,10 +513,21 @@ func (s *Sandboxes) CancelExecution(ctx context.Context, sandboxID, executionID 
 	}
 	sb.mu.Unlock()
 
-	ex.setIntent(ReasonCanceled)
-
 	cleanup := context.WithoutCancel(ctx)
-	_ = ex.proc.Signal(SignalTerm)
+	pending := &intentRecord{reason: ReasonCanceled}
+	ex.mu.Lock()
+	if ex.intent == nil && ex.state == ExecRunning {
+		ex.intent = pending
+	}
+	ex.mu.Unlock()
+	if err := ex.proc.Signal(SignalTerm); CodeOf(err) == CodeInvalidState {
+		ex.mu.Lock()
+		if ex.intent == pending {
+			ex.intent = nil
+		}
+		ex.mu.Unlock()
+		return Execution{}, err
+	}
 	if s.waitDone(cleanup, ex.done, s.cancelGrace) {
 		return ex.snapshot(), nil
 	}
@@ -774,7 +817,7 @@ func validateCwd(cwd string) error {
 }
 
 func sameInvocation(ex *execution, req ExecuteRequest) bool {
-	return equalStrings(ex.command, req.Command) &&
+	return ex.log.keepTail == req.OutputTail && equalStrings(ex.command, req.Command) &&
 		((ex.timeoutMS == nil && req.TimeoutMS == nil) || (ex.timeoutMS != nil && req.TimeoutMS != nil && *ex.timeoutMS == *req.TimeoutMS)) &&
 		ex.envCount == len(req.Env) &&
 		ex.envDigest == keyedFingerprint(ex.fingerprintKey, req.envPairs()) &&

@@ -10,20 +10,33 @@ import (
 	"github.com/ruhuang2001/tiny-sandbox/internal/daemon"
 )
 
+func (b *Backend) Rename(ctx context.Context, id, name string) error {
+	return b.api.ContainerRename(ctx, id, name)
+}
+
 func (b *Backend) VerifyLimits(ctx context.Context, id string, spec daemon.ContainerSpec) error {
 	value, err := b.api.ContainerInspect(ctx, id)
 	if err != nil {
 		return err
 	}
 	h := value.HostConfig
-	if h.Memory != int64(spec.MemoryMB)<<20 || h.MemorySwap != h.Memory || h.NanoCpus != spec.NanoCPUs || h.PidsLimit == nil || *h.PidsLimit != int64(spec.PidsLimit) || h.NetworkMode != string(spec.Network) {
+	if spec.Runtime != "" && h.Runtime != spec.Runtime {
+		return errors.New("runtime did not confirm isolation runtime")
+	}
+	if h.Memory != int64(spec.MemoryMB)<<20 || h.MemorySwap != h.Memory || h.NanoCpus != spec.NanoCPUs || h.PidsLimit == nil || *h.PidsLimit != int64(spec.PidsLimit) || h.NetworkMode != networkMode(spec.Network) {
 		return errors.New("runtime did not confirm requested deployment limits")
 	}
-	data, err := b.capture(ctx, id, []string{"sh", "-c", "set -eu; cat /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.swap.max /sys/fs/cgroup/pids.max /sys/fs/cgroup/cpu.max; ls /sys/class/net"})
+	var f []string
+	if h.Runtime == "runsc" {
+		f, err = b.runscLimits(ctx, id, value)
+	} else {
+		var data []byte
+		data, err = b.capture(ctx, id, []string{"sh", "-c", "set -eu; cat /sys/fs/cgroup/memory.max /sys/fs/cgroup/memory.swap.max /sys/fs/cgroup/pids.max /sys/fs/cgroup/cpu.max; ls /sys/class/net"})
+		f = strings.Fields(string(data))
+	}
 	if err != nil {
 		return fmt.Errorf("cannot verify cgroup v2 limits: %w", err)
 	}
-	f := strings.Fields(string(data))
 	if len(f) < 6 {
 		return errors.New("incomplete runtime policy evidence")
 	}
@@ -39,7 +52,7 @@ func (b *Backend) VerifyLimits(ctx context.Context, id string, spec daemon.Conta
 	if memory != int64(spec.MemoryMB)<<20 || swap != 0 || pids != int64(spec.PidsLimit) || quota != wantQuota || quota <= 0 {
 		return errors.New("kernel resource limits differ from policy")
 	}
-	if spec.Network == daemon.NetworkNone && (len(f) != 6 || f[5] != "lo") {
+	if networkMode(spec.Network) == "none" && (len(f) != 6 || f[5] != "lo") {
 		return errors.New("restricted network has a non-loopback interface")
 	}
 	return nil

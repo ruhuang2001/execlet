@@ -2,6 +2,10 @@ version: 2
 
 project_name: tiny-sandbox
 
+before:
+  hooks:
+    - make agent
+
 builds:
   - id: sandboxd
     main: ./cmd/sandboxd

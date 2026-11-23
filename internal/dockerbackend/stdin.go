@@ -22,7 +22,7 @@ func (b *Backend) stageStdin(ctx context.Context, containerID, input string) (st
 	}
 	body, err := dockerapi.BuildFileTar("input", []byte(input))
 	if err == nil {
-		err = b.api.ArchivePut(ctx, containerID, dir, body)
+		err = b.archivePut(ctx, containerID, dir, body)
 	}
 	if err != nil {
 		b.cleanupStdin(containerID, dir)

@@ -10,7 +10,7 @@ import (
 )
 
 func (b *Backend) ReadArchive(ctx context.Context, id, p string) ([]byte, error) {
-	rc, err := b.api.ArchiveGet(ctx, id, p)
+	rc, err := b.archiveGet(ctx, id, p)
 	if err != nil {
 		return nil, notFound(err, "%s", p)
 	}
@@ -49,7 +49,12 @@ func (b *Backend) WriteArchive(ctx context.Context, id, p string, archive *filea
 	if err := b.checkArchivePaths(ctx, id, p, batch); err != nil {
 		return err
 	}
-	return notFound(b.api.ArchivePut(ctx, id, p, archive.Bytes()), "%s", p)
+	uid, gid, _ := b.writeOwnership(ctx, id, strings.TrimPrefix(p, "/"))
+	data, err := archive.BytesOwnedBy(uid, gid)
+	if err != nil {
+		return err
+	}
+	return notFound(b.archivePut(ctx, id, p, data), "%s", p)
 }
 func (b *Backend) checkArchiveDestination(ctx context.Context, id, p string) error {
 	if err := b.checkArchivePaths(ctx, id, "/", []string{p}); err != nil {

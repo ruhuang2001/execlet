@@ -12,12 +12,13 @@ import (
 )
 
 type DeploymentPolicy struct {
-	MaxSandboxes int           `json:"max_sandboxes"`
-	MemoryMB     int64         `json:"total_memory_mb"`
-	NanoCPUs     int64         `json:"total_nano_cpus"`
-	Pids         int64         `json:"total_pids"`
-	Images       []string      `json:"allowed_images"`
-	Networks     []NetworkMode `json:"allowed_networks"`
+	Runtimes     []string        `json:"allowed_runtimes,omitempty"`
+	MaxSandboxes int             `json:"max_sandboxes"`
+	MemoryMB     int64           `json:"total_memory_mb"`
+	NanoCPUs     int64           `json:"total_nano_cpus"`
+	Pids         int64           `json:"total_pids"`
+	Images       []string        `json:"allowed_images"`
+	Networks     []NetworkMode   `json:"allowed_networks"`
 }
 
 func LoadPolicy(path string) (DeploymentPolicy, error) {
@@ -38,6 +39,11 @@ func (p DeploymentPolicy) Validate() error {
 	}
 	if p.MemoryMB > math.MaxInt64>>20 {
 		return errors.New("policy memory budget exceeds supported byte range")
+	}
+	for _, r := range p.Runtimes {
+		if r != "runc" && r != "runsc" {
+			return fmt.Errorf("unsupported runtime %q", r)
+		}
 	}
 	for _, image := range p.Images {
 		if image == "" {
@@ -80,6 +86,15 @@ func NewPolicyBackend(backend Backend, policy DeploymentPolicy) (*PolicyBackend,
 	return &PolicyBackend{Backend: backend, policy: policy, allocations: make(map[string]ContainerSpec)}, nil
 }
 
+func (b *PolicyBackend) DefaultRuntime() string {
+	if len(b.policy.Runtimes) == 0 {
+		return ""
+	}
+	return b.policy.Runtimes[0]
+}
+func (b *PolicyBackend) allowedRuntime(runtime string) bool {
+	return len(b.policy.Runtimes) == 0 && runtime == "" || slices.Contains(b.policy.Runtimes, runtime)
+}
 func (b *PolicyBackend) DefaultNetwork() NetworkMode { return b.policy.Networks[0] }
 
 func (b *PolicyBackend) DefaultNanoCPUs() int64 { return min(int64(1_000_000_000), b.policy.NanoCPUs) }
@@ -117,12 +132,12 @@ func (b *PolicyBackend) usageLocked() PolicyUsage {
 func (b *PolicyBackend) Usage() PolicyUsage { b.mu.Lock(); defer b.mu.Unlock(); return b.usageLocked() }
 
 func (b *PolicyBackend) Create(ctx context.Context, spec ContainerSpec) (string, error) {
-	if spec.Name == "" || !slices.Contains(b.policy.Images, spec.Image) || !slices.Contains(b.policy.Networks, spec.Network) || spec.NanoCPUs <= 0 || spec.MemoryMB < MinMemoryMB || int64(spec.MemoryMB) > math.MaxInt64>>20 || spec.PidsLimit < MinPidsLimit {
+	if !b.allowedRuntime(spec.Runtime) || spec.Name == "" || !slices.Contains(b.policy.Images, spec.Image) || !slices.Contains(b.policy.Networks, spec.Network) || spec.NanoCPUs <= 0 || spec.MemoryMB < MinMemoryMB || int64(spec.MemoryMB) > math.MaxInt64>>20 || spec.PidsLimit < MinPidsLimit {
 		return "", errorf(CodeInvalidRequest, "deployment policy rejects image, network or unlimited CPU")
 	}
 	b.mu.Lock()
 	u := b.usageLocked()
-	if _, exists := b.allocations[spec.Name]; exists || u.Sandboxes >= b.policy.MaxSandboxes || int64(spec.MemoryMB) > b.policy.MemoryMB-u.MemoryMB || spec.NanoCPUs > b.policy.NanoCPUs-u.NanoCPUs || int64(spec.PidsLimit) > b.policy.Pids-u.Pids {
+	if _, exists := b.allocations[spec.Name]; exists || u.Sandboxes >= min(b.policy.MaxSandboxes, MaxSandboxes) || int64(spec.MemoryMB) > b.policy.MemoryMB-u.MemoryMB || spec.NanoCPUs > b.policy.NanoCPUs-u.NanoCPUs || int64(spec.PidsLimit) > b.policy.Pids-u.Pids {
 		b.mu.Unlock()
 		return "", errorf(CodeRateLimited, "deployment resource budget exhausted")
 	}
@@ -168,7 +183,7 @@ func (b *PolicyBackend) Remove(ctx context.Context, id string) error {
 }
 
 func (b *PolicyBackend) Adopt(ctx context.Context, id string, spec ContainerSpec) error {
-	if !slices.Contains(b.policy.Images, spec.Image) || !slices.Contains(b.policy.Networks, spec.Network) || spec.NanoCPUs <= 0 || spec.MemoryMB < MinMemoryMB || spec.PidsLimit < MinPidsLimit {
+	if !b.allowedRuntime(spec.Runtime) || !slices.Contains(b.policy.Images, spec.Image) || !slices.Contains(b.policy.Networks, spec.Network) || spec.NanoCPUs <= 0 || spec.MemoryMB < MinMemoryMB || spec.PidsLimit < MinPidsLimit {
 		return errors.New("recovered container violates deployment policy")
 	}
 	if err := b.Backend.(interface {
@@ -182,7 +197,7 @@ func (b *PolicyBackend) Adopt(ctx context.Context, id string, spec ContainerSpec
 	if _, exists := b.allocations[id]; exists {
 		return errors.New("duplicate recovered container")
 	}
-	if u.Sandboxes >= b.policy.MaxSandboxes || int64(spec.MemoryMB) > b.policy.MemoryMB-u.MemoryMB || spec.NanoCPUs > b.policy.NanoCPUs-u.NanoCPUs || int64(spec.PidsLimit) > b.policy.Pids-u.Pids {
+	if u.Sandboxes >= min(b.policy.MaxSandboxes, MaxSandboxes) || int64(spec.MemoryMB) > b.policy.MemoryMB-u.MemoryMB || spec.NanoCPUs > b.policy.NanoCPUs-u.NanoCPUs || int64(spec.PidsLimit) > b.policy.Pids-u.Pids {
 		return errors.New("recovered containers exceed deployment budget")
 	}
 	b.allocations[id] = spec

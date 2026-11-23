@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -137,7 +138,9 @@ func sleepContext(ctx context.Context, d time.Duration) bool {
 func (s *Sandboxes) now() time.Time { return s.clock.Now().UTC() }
 
 type sandbox struct {
-	mu sync.Mutex
+	agentMode string
+	protected bool
+	mu        sync.Mutex
 
 	id        string
 	container string
@@ -155,7 +158,8 @@ type sandbox struct {
 	running     map[string]*execution
 	idempotency map[string]*execution
 
-	streams int
+	terminals map[string]bool
+	streams   int
 }
 
 func (sb *sandbox) pruneExecutionsLocked() {
@@ -189,11 +193,22 @@ func (s *Sandboxes) Create(ctx context.Context, req CreateRequest) (result Sandb
 			req.NanoCPUs = new(defaults.DefaultNanoCPUs())
 		}
 	}
+	if defaults, ok := s.backend.(interface{ DefaultRuntime() string }); ok && req.Runtime == "" {
+		req.Runtime = defaults.DefaultRuntime()
+	}
+	if req.Runtime != "" {
+		if _, ok := s.backend.(interface{ DefaultRuntime() string }); !ok {
+			return Sandbox{}, errorf(CodeInvalidRequest, "runtime selection requires a deployment policy")
+		}
+	}
 	opts, err := req.resolve()
 	if err != nil {
 		return Sandbox{}, err
 	}
+	spec := ContainerSpec{Image: opts.image, Runtime: opts.runtime, MemoryMB: opts.memoryMB, PidsLimit: opts.pidsLimit, NanoCPUs: opts.nanoCPUs, Network: opts.network}
 	id := newID("sbx_")
+	spec.Name = "tiny-sandbox-" + id
+	spec.Labels = map[string]string{OwnerLabelKey: s.owner, SandboxIDLabelKey: id}
 	if err := s.reserve(id); err != nil {
 		return Sandbox{}, err
 	}
@@ -222,15 +237,6 @@ func (s *Sandboxes) Create(ctx context.Context, req CreateRequest) (result Sandb
 		s.forget(sb)
 		return Sandbox{}, err
 	}
-	spec := ContainerSpec{
-		Image:     opts.image,
-		MemoryMB:  opts.memoryMB,
-		PidsLimit: opts.pidsLimit,
-		NanoCPUs:  opts.nanoCPUs,
-		Network:   opts.network,
-		Name:      "tiny-sandbox-" + id,
-		Labels:    map[string]string{OwnerLabelKey: s.owner, SandboxIDLabelKey: id},
-	}
 	containerID, err := s.backend.Create(ctx, spec)
 	sb.mu.Lock()
 	sb.container = containerID
@@ -250,6 +256,7 @@ func (s *Sandboxes) Create(ctx context.Context, req CreateRequest) (result Sandb
 		}
 		return out, cleanupErr
 	}
+	sb.agentMode, sb.protected = agentInfo(s.backend, containerID)
 	sb.state = StateRunning
 	sb.armLifetimeLocked(s.now())
 	err = s.saveSandboxLocked(sb)
@@ -520,6 +527,38 @@ func (s *Sandboxes) Delete(ctx context.Context, id string) (Sandbox, error) {
 	return sb.snapshot(), nil
 }
 
+func (s *Sandboxes) Destroy(ctx context.Context, id string) (Sandbox, error) {
+	sb, err := s.lookup(id)
+	if err != nil {
+		return Sandbox{}, err
+	}
+	sb.mu.Lock()
+	pending := sb.state == StatePending
+	sb.mu.Unlock()
+	if pending {
+		return Sandbox{}, errorf(CodeInvalidState, "sandbox creation is pending")
+	}
+	result, err := s.Delete(ctx, id)
+	if err != nil {
+		return result, err
+	}
+	sb.mu.Lock()
+	pendingWork := make([]<-chan struct{}, 0, len(sb.running))
+	for _, ex := range sb.running {
+		pendingWork = append(pendingWork, ex.done)
+	}
+	sb.mu.Unlock()
+	for _, done := range pendingWork {
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return result, errorf(CodeUnavailable, "sandbox cleanup is pending")
+		}
+	}
+	s.forget(sb)
+	return result, s.durableReady()
+}
+
 func (s *Sandboxes) unconfirmedRemoval(containerID string) error {
 	return &Error{
 		Code:    CodeBackendError,
@@ -673,6 +712,8 @@ func (sb *sandbox) invalidState() error {
 
 func (sb *sandbox) snapshot() Sandbox {
 	return Sandbox{
+		AgentMode: cmp.Or(sb.agentMode, "legacy"), Protected: sb.protected,
+		Runtime:                 sb.opts.runtime,
 		MaxConcurrentExecutions: sb.opts.maxConcurrentExecutions,
 		ID:                      sb.id,
 		State:                   sb.state,

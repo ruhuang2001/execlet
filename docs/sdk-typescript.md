@@ -322,3 +322,8 @@ logs and scoped container cleanup. The [failure matrix](../sandbox-ts/e2e/FAILUR
 precedes implementation. Faults wrap real server responses; there is no fake-only
 unit suite. Package validation installs the tarball, compiles a strict consumer
 and exercises a browser bundle without Node globals against the real daemon.
+
+### Terminal, metadata and purge operations
+
+`statFile(sandboxID, path)` checks `files.stat.v1` and returns the observed entry. A legacy 204 write returns `undefined`.
+`openTerminal(sandboxID, {rows, cols, command, cwd, signal})` returns the terminal ID. Use `terminalInput`, `resizeTerminal`, `streamTerminal` and `closeTerminal` with that ID. `streamTerminal` yields Uint8Array chunks and supports an initial byte offset. Terminal methods check `terminals.v1`. `destroySandbox(sandboxID)` checks `sandbox.purge.v1` and removes retained records.

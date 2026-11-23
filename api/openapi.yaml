@@ -22,6 +22,69 @@ tags:
   - name: executions
   - name: files
 paths:
+  /v1/sandboxes/{sandbox_id}/terminals:
+    parameters:
+      - $ref: '#/components/parameters/SandboxID'
+    post:
+      operationId: createTerminal
+      requestBody:
+        content:
+          application/json:
+            schema: {type: object, properties: {rows: {type: integer, minimum: 1, maximum: 65535}, cols: {type: integer, minimum: 1, maximum: 65535}, cwd: {type: string}, command: {type: array, items: {type: string}}}}
+      responses:
+        '201':
+          description: Created shell backed by a persistent PTY
+          content:
+            application/json:
+              schema: {type: object, required: [terminal_id], properties: {terminal_id: {type: string}}}
+  /v1/sandboxes/{sandbox_id}/terminals/{terminal_id}/input:
+    parameters:
+      - $ref: '#/components/parameters/SandboxID'
+      - {in: path, name: terminal_id, required: true, schema: {type: string}}
+    post:
+      operationId: inputTerminal
+      requestBody:
+        content:
+          application/octet-stream:
+            schema: {type: string, format: binary, maxLength: 32768}
+      responses:
+        '204':
+          description: Input accepted
+  /v1/sandboxes/{sandbox_id}/terminals/{terminal_id}/resize:
+    parameters:
+      - $ref: '#/components/parameters/SandboxID'
+      - {in: path, name: terminal_id, required: true, schema: {type: string}}
+    post:
+      operationId: resizeTerminal
+      requestBody:
+        content:
+          application/json:
+            schema: {type: object, required: [rows, cols], properties: {rows: {type: integer, minimum: 1, maximum: 65535}, cols: {type: integer, minimum: 1, maximum: 65535}}}
+      responses:
+        '204':
+          description: Window resized
+  /v1/sandboxes/{sandbox_id}/terminals/{terminal_id}/events:
+    parameters:
+      - $ref: '#/components/parameters/SandboxID'
+      - {in: path, name: terminal_id, required: true, schema: {type: string}}
+      - {in: header, name: Last-Event-ID, schema: {type: integer, minimum: 0}}
+    get:
+      operationId: streamTerminal
+      responses:
+        '200':
+          description: Base64-encoded bytes with a byte offset as the event ID
+          content:
+            text/event-stream:
+              schema: {type: string}
+  /v1/sandboxes/{sandbox_id}/terminals/{terminal_id}:
+    parameters:
+      - $ref: '#/components/parameters/SandboxID'
+      - {in: path, name: terminal_id, required: true, schema: {type: string}}
+    delete:
+      operationId: closeTerminal
+      responses:
+        '204':
+          description: Session closed
   /metrics:
     get:
       operationId: getMetrics
@@ -38,6 +101,7 @@ paths:
     get:
       operationId: getCapabilities
       summary: Query supported capabilities before using additive fields
+      description: File metadata uses files.stat.v1, interactive terminals use terminals.v1 and record purge uses sandbox.purge.v1.
       responses:
         '200':
           description: Authenticated server capabilities; absence is not support.
@@ -254,7 +318,13 @@ paths:
         and requests container removal. Unconfirmed runtime removal returns 502
         backend_error while scheduling background retries; repeated deletes keep
         reporting 502 until removal is confirmed, then return 200 with the stored
-        killed record.
+        killed record. With purge=true, wait for execution settlement and
+        discard the record and its retained executions after confirmed removal.
+      parameters:
+        - in: query
+          name: purge
+          schema: {type: boolean, default: false}
+          description: Requires sandbox.purge.v1. Later lookups return 404.
       responses:
         '200':
           description: The sandbox, in state killed.
@@ -657,6 +727,36 @@ paths:
           $ref: '#/components/responses/BackendError'
         '503':
           $ref: '#/components/responses/Unavailable'
+  /v1/sandboxes/{sandbox_id}/files/stat:
+    parameters:
+      - $ref: '#/components/parameters/SandboxID'
+      - $ref: '#/components/parameters/FilePath'
+    get:
+      tags: [files]
+      operationId: statFile
+      summary: Read file metadata without following the final symlink
+      responses:
+        '200':
+          description: File metadata.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileEntry'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '502':
+          $ref: '#/components/responses/BackendError'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+
   /v1/sandboxes/{sandbox_id}/files/list:
     parameters:
       - $ref: '#/components/parameters/SandboxID'
@@ -964,9 +1064,11 @@ components:
         Every field is optional. Unknown fields are ignored so a newer client
         can talk to an older server.
       properties:
+        runtime: {type: string, enum: [runc, runsc], description: Administrator-allowed Docker runtime.}
         image:
           type: string
           default: alpine:3.20
+          description: Docker image reference.
         memory_mb:
           type: integer
           minimum: 16
@@ -1048,6 +1150,8 @@ components:
     Sandbox:
       type: object
       required:
+        - agent_mode
+        - protected
         - id
         - state
         - image
@@ -1064,6 +1168,9 @@ components:
         - expires_at
         - kill_reason
       properties:
+        runtime: {type: string, enum: [runc, runsc], description: Administrator-allowed Docker runtime.}
+        agent_mode: {type: string, enum: [guest, legacy, unavailable]}
+        protected: {type: boolean, description: Non-root workload isolated from the guest supervisor.}
         id:
           type: string
           description: Opaque identifier. Clients must not parse it.
@@ -1128,13 +1235,17 @@ components:
       type: object
       required: [command]
       properties:
+        output_tail:
+          type: boolean
+          default: false
+          description: Retain newest output events within the existing limits. Requires execution.output-tail.v1 and participates in idempotency.
         timeout_ms:
           type: integer
           minimum: 0
           maximum: 9223372036854
           description: >-
             Managed execution deadline, requiring e2b.background.v1 capability
-            and Linux Python 3 in the image. Mutually exclusive with
+            and a guest agent or Linux Python 3 for the legacy supervisor. Mutually exclusive with
             timeout_seconds and nonempty stdin. Zero disables the deadline.
             Unlike timeout_seconds, this is part of the idempotency identity
             and expiry uses immediate group kill. Check capabilities first.
@@ -1287,6 +1398,16 @@ components:
             Retained output. It is exactly the data delivered in events, so a
             replay from ID 0 reproduces stdout and stderr.
           properties:
+            stdout_offset:
+              type: integer
+              format: int64
+              minimum: 0
+              description: Absolute byte position of the beginning of retained stdout. Defaults to zero.
+            stderr_offset:
+              type: integer
+              format: int64
+              minimum: 0
+              description: Absolute byte position of the beginning of retained stderr. Defaults to zero.
             stdout:
               type: string
             stderr:

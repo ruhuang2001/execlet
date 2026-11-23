@@ -16,6 +16,7 @@ Status: normative. Contract for `sandboxctl`. It is a thin layer over the [Go SD
 | `doctor` | environment and connectivity checks, see below |
 | `run [flags] -- CMD [ARG...]` | create a sandbox (or use `--sandbox ID`), start `CMD`, stream output, print the final status |
 | `run [flags] -- code 'PYTHON'` | shorthand for `python3 -c 'PYTHON'`; a newly created sandbox uses `python:3.12-alpine` unless `--image` is given |
+| `shell SANDBOX [TERMINAL]` | open a PTY or reconnect by its printed ID. Ctrl-] detaches and shell exit closes the terminal |
 | `attach SANDBOX EXECUTION` | stream an existing execution from the beginning; Ctrl+C cancels it |
 | `logs SANDBOX EXECUTION` | print retained stdout/stderr and the current status without streaming |
 | `inspect SANDBOX` | print the sandbox |

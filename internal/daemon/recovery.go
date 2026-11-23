@@ -30,6 +30,8 @@ type Journal struct {
 }
 
 type storedSandbox struct {
+	TerminalIDs  []string          `json:"terminal_ids,omitempty"`
+	HasTerminals bool              `json:"has_terminals,omitzero"`
 	Version      int               `json:"version"`
 	Sandbox      Sandbox           `json:"sandbox"`
 	Container    string            `json:"container"`
@@ -38,6 +40,7 @@ type storedSandbox struct {
 	Executions   []string          `json:"executions"`
 }
 type storedExecution struct {
+	OutputTail  bool      `json:"output_tail,omitzero"`
 	Version     int       `json:"version"`
 	Execution   Execution `json:"execution"`
 	Key         string    `json:"key"`
@@ -215,7 +218,14 @@ func (s *Sandboxes) saveSandboxExceptLocked(sb *sandbox, omit string) error {
 			ids = append(ids, ex.id)
 		}
 	}
-	err := s.journal.write(sb.id+".json", storedSandbox{1, sb.snapshot(), sb.container, sb.opts.env, sb.lastActivity, ids})
+	terminalIDs := []string{}
+	for id, running := range sb.terminals {
+		if running {
+			terminalIDs = append(terminalIDs, id)
+		}
+	}
+	slices.Sort(terminalIDs)
+	err := s.journal.write(sb.id+".json", storedSandbox{TerminalIDs: terminalIDs, Version: 1, Sandbox: sb.snapshot(), Container: sb.container, Env: sb.opts.env, LastActivity: sb.lastActivity, Executions: ids, HasTerminals: len(terminalIDs) > 0})
 	if err != nil {
 		return errorf(CodeUnavailable, "cannot persist sandbox state")
 	}
@@ -235,7 +245,7 @@ func (s *Sandboxes) saveExecution(ex *execution, snapshot Execution, events []Ev
 		return nil
 	}
 	snapshot.Stdout, snapshot.Stderr = "", ""
-	return s.journal.write(ex.sandboxID+"-"+ex.id+".json", storedExecution{1, snapshot, ex.key, ex.envDigest, ex.envCount, ex.stdinDigest, ex.timeoutMS, events, ex.outputLost})
+	return s.journal.write(ex.sandboxID+"-"+ex.id+".json", storedExecution{Version: 1, Execution: snapshot, Key: ex.key, EnvDigest: ex.envDigest, EnvCount: ex.envCount, StdinDigest: ex.stdinDigest, TimeoutMS: ex.timeoutMS, Events: events, OutputLost: ex.outputLost, OutputTail: ex.log.keepTail})
 }
 
 func (s *Sandboxes) Recover(ctx context.Context, j *Journal, backend RecoveryBackend) error {
@@ -261,11 +271,6 @@ func (s *Sandboxes) Recover(ctx context.Context, j *Journal, backend RecoveryBac
 			}
 			if len(value.Events) > MaxOutputEvents+2 {
 				return errors.New("excess recovery events")
-			}
-			for i, ev := range value.Events {
-				if ev.ID != uint64(i+1) || len(ev.Data) > MaxEventDataBytes {
-					return errors.New("invalid recovery cursor")
-				}
 			}
 			executions[ex.SandboxID] = append(executions[ex.SandboxID], value)
 		} else {
@@ -331,8 +336,8 @@ func (s *Sandboxes) Recover(ctx context.Context, j *Journal, backend RecoveryBac
 		if err != nil {
 			return errors.New("invalid recovered sandbox options")
 		}
-		sb := &sandbox{id: v.ID, container: value.Container, opts: opts, createdAt: v.CreatedAt, state: v.State, killReason: v.KillReason, expiresAt: v.ExpiresAt, lastActivity: value.LastActivity, running: map[string]*execution{}, idempotency: map[string]*execution{}}
-		unsafe := sb.state == StatePending || sb.state == StateKilled
+		sb := &sandbox{id: v.ID, agentMode: v.AgentMode, protected: v.Protected, container: value.Container, opts: opts, createdAt: v.CreatedAt, state: v.State, killReason: v.KillReason, expiresAt: v.ExpiresAt, lastActivity: value.LastActivity, running: map[string]*execution{}, idempotency: map[string]*execution{}}
+		unsafe := (value.HasTerminals && len(value.TerminalIDs) == 0) || sb.state == StatePending || sb.state == StateKilled
 		items := executions[sb.id]
 		slices.SortFunc(items, func(a, b storedExecution) int { return a.Execution.StartedAt.Compare(b.Execution.StartedAt) })
 		for _, item := range items {
@@ -344,6 +349,8 @@ func (s *Sandboxes) Recover(ctx context.Context, j *Journal, backend RecoveryBac
 			ex.persist = func(snapshot Execution, events []Event) error { return s.saveExecution(ex, snapshot, events) }
 			ex.forget = func() error { return s.forgetExecution(sb, ex) }
 			ex.outputLost = item.OutputLost || v.State == ExecRunning
+			ex.log.keepTail = item.OutputTail
+			ex.log.stdoutOffset, ex.log.stderrOffset = v.StdoutOffset, v.StderrOffset
 			ex.log.truncated = v.OutputTruncated
 			for _, ev := range item.Events {
 				ex.log.events = append(ex.log.events, ev)
@@ -395,11 +402,30 @@ func (s *Sandboxes) Recover(ctx context.Context, j *Journal, backend RecoveryBac
 				_, unsafe = sb.dueTimeout(s.now())
 			}
 		}
+		if !unsafe && sb.agentMode == "guest" {
+			if restorer, ok := backend.(interface {
+				RestoreGuest(context.Context, string, bool, string) error
+			}); ok {
+				if err := restorer.RestoreGuest(ctx, sb.container, sb.protected, sb.opts.runtime); err != nil {
+					return err
+				}
+			}
+		}
+		if !unsafe && len(value.TerminalIDs) > 0 {
+			sb.terminals = make(map[string]bool, len(value.TerminalIDs))
+			for _, id := range value.TerminalIDs {
+				sb.terminals[id] = true
+			}
+			unsafe = sb.state == StatePaused || s.refreshTerminals(ctx, sb) != nil
+			for _, running := range sb.terminals {
+				unsafe = unsafe || running
+			}
+		}
 		if !unsafe {
 			if adopter, ok := s.backend.(interface {
 				Adopt(context.Context, string, ContainerSpec) error
 			}); ok {
-				unsafe = sb.state == StatePaused || adopter.Adopt(ctx, sb.container, ContainerSpec{Image: opts.image, MemoryMB: opts.memoryMB, PidsLimit: opts.pidsLimit, NanoCPUs: opts.nanoCPUs, Network: opts.network}) != nil
+				unsafe = sb.state == StatePaused || adopter.Adopt(ctx, sb.container, ContainerSpec{Runtime: opts.runtime, Image: opts.image, MemoryMB: opts.memoryMB, PidsLimit: opts.pidsLimit, NanoCPUs: opts.nanoCPUs, Network: opts.network}) != nil
 			}
 		}
 		if unsafe {
@@ -493,7 +519,7 @@ func validStateID(id, prefix string) bool {
 
 func recoveredOptions(value storedSandbox) (sandboxOptions, error) {
 	v := value.Sandbox
-	return (CreateRequest{Image: &v.Image, MemoryMB: &v.MemoryMB, PidsLimit: &v.PidsLimit, NanoCPUs: &v.NanoCPUs, Network: &v.Network, TimeoutSeconds: &v.TimeoutSeconds, TimeoutAction: &v.TimeoutAction, IdleTimeoutSeconds: &v.IdleTimeoutSeconds, IdleTimeoutAction: &v.IdleTimeoutAction, MaxConcurrentExecutions: &v.MaxConcurrentExecutions, Env: value.Env}).resolve()
+	return (CreateRequest{Runtime: v.Runtime, Image: &v.Image, MemoryMB: &v.MemoryMB, PidsLimit: &v.PidsLimit, NanoCPUs: &v.NanoCPUs, Network: &v.Network, TimeoutSeconds: &v.TimeoutSeconds, TimeoutAction: &v.TimeoutAction, IdleTimeoutSeconds: &v.IdleTimeoutSeconds, IdleTimeoutAction: &v.IdleTimeoutAction, MaxConcurrentExecutions: &v.MaxConcurrentExecutions, Env: value.Env}).resolve()
 }
 
 func validateStoredExecution(value storedExecution) error {
@@ -502,8 +528,12 @@ func validateStoredExecution(value storedExecution) error {
 		return errors.New("invalid recovered invocation")
 	}
 	bytes, completed := 0, false
+	firstID := uint64(1)
+	if value.OutputTail && len(value.Events) > 0 && value.Events[0].Type == EventTruncated && v.OutputTruncated {
+		firstID = value.Events[0].ID
+	}
 	for i, ev := range value.Events {
-		if completed || ev.ID != uint64(i+1) {
+		if completed || ev.ID == 0 || ev.ID != firstID+uint64(i) || len(ev.Data) > MaxEventDataBytes {
 			return errors.New("invalid recovered event order")
 		}
 		switch ev.Type {

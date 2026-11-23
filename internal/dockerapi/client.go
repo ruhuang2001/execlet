@@ -108,6 +108,10 @@ func (c *Client) ContainerCreate(ctx context.Context, name string, cfg Container
 	return out.ID, nil
 }
 
+func (c *Client) ContainerRename(ctx context.Context, id, name string) error {
+	return c.send(ctx, http.MethodPost, "/containers/"+id+"/rename", url.Values{"name": {name}}, nil)
+}
+
 func (c *Client) ContainerStart(ctx context.Context, id string) error {
 	return c.send(ctx, http.MethodPost, "/containers/"+id+"/start", nil, nil)
 }
@@ -168,8 +172,10 @@ func (c *Client) ExecCreate(ctx context.Context, containerID string, cfg ExecCon
 	body := cfg
 	body.AttachStdout = true
 	body.AttachStderr = true
-	body.AttachStdin = false
-	body.Tty = false
+	return c.execCreate(ctx, containerID, body)
+}
+
+func (c *Client) execCreate(ctx context.Context, containerID string, body ExecConfig) (string, error) {
 	var out struct {
 		ID string `json:"Id"`
 	}

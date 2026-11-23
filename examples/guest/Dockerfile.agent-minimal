@@ -1,0 +1,7 @@
+FROM alpine:3.21@sha256:bc21487101ae47172509130ee1092cc273a831968d64b617776d1f69c81e42ab AS fixture
+RUN adduser -D -u 1000 sandbox && mkdir -p /fixture/dir && touch /fixture/dir/child && printf data >/fixture/regular && ln -s regular /fixture/link && touch -h -t 202501010000 /fixture/* && chown -h 1000:1000 /fixture/*
+USER 1000
+FROM fixture AS minimal
+USER 0
+RUN rm -f /usr/bin/stat /bin/stat /usr/bin/readlink /bin/readlink && ! command -v stat && ! command -v readlink && ! command -v python3
+USER 1000

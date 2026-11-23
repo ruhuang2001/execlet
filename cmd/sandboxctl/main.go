@@ -30,6 +30,7 @@ commands:
   run [flags] -- CMD [ARG...]            run a command in a sandbox
   run [flags] -- code 'PYTHON'           shorthand for python3 -c
   attach SANDBOX EXECUTION               stream an execution from the start
+  shell SANDBOX [TERMINAL]               open or reconnect to a terminal
   logs SANDBOX EXECUTION                 print retained output
   inspect SANDBOX                        print one sandbox
   list                                   list sandboxes
@@ -103,6 +104,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return in.doctor(rest)
 	case "run":
 		return in.runCommand(rest)
+	case "shell":
+		return in.shell(rest)
 	case "attach":
 		return in.attach(rest)
 	case "logs":

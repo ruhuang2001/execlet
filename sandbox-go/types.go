@@ -37,6 +37,9 @@ const (
 )
 
 type Sandbox struct {
+	AgentMode               string      `json:"agent_mode"`
+	Protected               bool        `json:"protected"`
+	Runtime                 string      `json:"runtime,omitempty"`
 	MaxConcurrentExecutions int         `json:"max_concurrent_executions"`
 	ID                      string      `json:"id"`
 	State                   State       `json:"state"`
@@ -55,6 +58,9 @@ type Sandbox struct {
 }
 
 type Execution struct {
+	StdoutOffset int64 `json:"stdout_offset,omitzero"`
+	StderrOffset int64 `json:"stderr_offset,omitzero"`
+
 	ID                string   `json:"id"`
 	PID               *int     `json:"pid,omitempty"`
 	SandboxID         string   `json:"sandbox_id"`
@@ -76,6 +82,7 @@ const (
 )
 
 type CreateSandboxRequest struct {
+	Runtime                 string            `json:"runtime,omitempty"`
 	MaxConcurrentExecutions *int              `json:"max_concurrent_executions,omitempty"`
 	Image                   *string           `json:"image,omitempty"`
 	MemoryMB                *int              `json:"memory_mb,omitempty"`
@@ -95,6 +102,7 @@ type UpdateSandboxRequest struct {
 }
 
 type ExecuteRequest struct {
+	OutputTail     bool              `json:"output_tail,omitzero"`
 	Command        []string          `json:"command"`
 	IdempotencyKey string            `json:"idempotency_key,omitempty"`
 	TimeoutSeconds *int              `json:"timeout_seconds,omitempty"`

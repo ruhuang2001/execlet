@@ -3,6 +3,8 @@ export type Action = 'kill' | 'pause';
 export type TerminationReason = 'exited' | 'canceled' | 'timeout' | 'oom' | 'evicted' | 'unknown';
 
 export interface Sandbox {
+  agent_mode?: OpenString<'guest' | 'legacy' | 'unavailable'>;
+  protected?: boolean;
   id: string;
   state: OpenString<'pending' | 'running' | 'paused' | 'killed'>;
   image: string;
@@ -11,6 +13,7 @@ export interface Sandbox {
   pids_limit?: number;
   nano_cpus?: number;
   network?: OpenString<'bridge' | 'none'>;
+  runtime?: OpenString<'runc' | 'runsc'>;
   timeout_seconds: number;
   timeout_action: OpenString<Action>;
   idle_timeout_seconds: number;
@@ -62,6 +65,7 @@ export interface CreateSandboxRequest {
   pids_limit?: number;
   nano_cpus?: number;
   network?: 'bridge' | 'none';
+  runtime?: 'runc' | 'runsc';
   timeout_seconds?: number;
   timeout_action?: Action;
   idle_timeout_seconds?: number;
@@ -72,6 +76,7 @@ export interface CreateSandboxRequest {
 export interface UpdateSandboxRequest { timeout_seconds?: number; extend_seconds?: number }
 
 export interface ExecuteRequest {
+  output_tail?: boolean;
   command: readonly string[];
   idempotency_key?: string;
   timeout_seconds?: number;

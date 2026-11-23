@@ -17,6 +17,7 @@ a command-line client, and HTTP API.
   ambiguous exit 137 as `unknown`.
 - **Background commands:** Python/TypeScript E2B-style handles with guest PID,
   fresh-client attachment, remote deadlines, disconnect and confirmed kill.
+- **Interactive shells:** open or reconnect to a PTY with `sandboxctl shell`.
 - **Operations:** structured logs, request IDs, authenticated Prometheus metrics,
   readiness, opt-in deployment budgets/network restrictions and restart recovery.
 
@@ -54,6 +55,10 @@ git clone https://github.com/ruhuang2001/tiny-sandbox.git
 cd tiny-sandbox
 make build
 ```
+
+The Make target cross-compiles and embeds both Linux guest agents. A direct
+`go install` of `sandboxd` from a clean module download builds the legacy
+fallback. Use `make build` or a release archive for guest commands and terminals.
 
 Select the Docker Unix socket as shown in the [quick start](docs/quickstart.md#2-start-the-server-terminal-a),
 then start `./bin/sandboxd` and use `./bin/sandboxctl` from a
@@ -97,10 +102,10 @@ completed results and reconciles idle containers; interrupted commands become
 `unknown` and their containers are removed, never replayed. This is not process
 memory restoration or E2B persistence parity.
 
-Opt-in `-policy` enforces aggregate reservations, allowed images and either
-`none` (no external network) or unrestricted `bridge`; filtered internet access
-is not implemented. The managed-command supervisor is not protected from
-same-UID guest code. Archive uploads require coordinated writers and are not
+Opt-in `-policy` enforces aggregate reservations and image and runtime allowlists.
+Network modes include offline `none` and unrestricted `bridge`. The guest agent runs managed commands as the image user. Non-root images expose
+`protected: true` and keep the control socket and supervisor private. Root images
+permit same-UID access. Archive uploads require coordinated writers and are not
 transactional once extraction begins. See [deployment and recovery](docs/operations.md),
 [design](docs/design.md), the [archive contract](docs/api.md#tar-transfer), and
 [future directions](docs/future.md).

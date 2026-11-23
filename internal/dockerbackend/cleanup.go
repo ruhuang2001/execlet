@@ -34,6 +34,9 @@ func (f *execFiles) remove(ctx context.Context, b *Backend) error {
 	}
 	if f.pidPath != "" {
 		name, ok := strings.CutPrefix(f.pidPath, PidDir+"/")
+		if !ok {
+			name, ok = strings.CutPrefix(f.pidPath, "/tmp/.tiny-sandbox-")
+		}
 		if !ok || name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\\x00") {
 			return nil
 		}

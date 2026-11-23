@@ -61,3 +61,5 @@ func backendError(err error) error {
 	}
 	return &Error{Code: CodeBackendError, Message: "container runtime failed", Err: err}
 }
+
+var ErrGuestLost = errors.New("guest agent lost")

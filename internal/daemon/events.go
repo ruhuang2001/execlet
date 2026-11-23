@@ -28,16 +28,18 @@ type eventLog struct {
 	mu      sync.Mutex
 	changed chan struct{}
 
-	events        []Event
-	nextID        uint64
-	retained      int
-	outputEvents  int
-	truncated     bool
-	complete      bool
-	stdout        strings.Builder
-	stderr        strings.Builder
-	indexed       int
-	onFirstOutput func()
+	keepTail                   bool
+	events                     []Event
+	nextID                     uint64
+	stdoutOffset, stderrOffset int64
+	retained                   int
+	outputEvents               int
+	truncated                  bool
+	complete                   bool
+	stdout                     strings.Builder
+	stderr                     strings.Builder
+	indexed                    int
+	onFirstOutput              func()
 }
 
 func newEventLog() *eventLog {
@@ -53,7 +55,7 @@ func (l *eventLog) appendOutput(kind EventType, chunk []byte) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if l.truncated || l.complete || len(chunk) == 0 {
+	if l.complete || len(chunk) == 0 || (l.truncated && !l.keepTail) {
 		return
 	}
 	for len(chunk) > 0 {
@@ -62,6 +64,12 @@ func (l *eventLog) appendOutput(kind EventType, chunk []byte) {
 			if cut := runeBoundary(chunk, n); cut > 0 {
 				n = cut
 			}
+		}
+		if l.keepTail {
+			l.makeRoomForTailLocked(n)
+			l.appendOutputLocked(kind, chunk[:n])
+			chunk = chunk[n:]
+			continue
 		}
 		if l.outputEvents >= MaxOutputEvents {
 			l.truncateLocked()
@@ -89,6 +97,35 @@ func (l *eventLog) appendOutput(kind EventType, chunk []byte) {
 		l.appendOutputLocked(kind, chunk[:n])
 		chunk = chunk[n:]
 	}
+}
+
+func (l *eventLog) makeRoomForTailLocked(size int) {
+	if l.retained+size <= MaxOutputBytes && l.outputEvents < MaxOutputEvents {
+		return
+	}
+	first := 0
+	if l.events[first].Type == EventTruncated {
+		first++
+	}
+	for l.retained+size > MaxOutputBytes || l.outputEvents >= MaxOutputEvents {
+		dropped := l.events[first]
+		if dropped.Type == EventStdout {
+			l.stdoutOffset += int64(len(dropped.Data))
+		} else {
+			l.stderrOffset += int64(len(dropped.Data))
+		}
+		l.retained -= len(dropped.Data)
+		l.events[first].Data = nil
+		l.outputEvents--
+		first++
+	}
+	marker := l.events[first-1].ID
+	l.events = l.events[first-1:]
+	l.events[0] = Event{ID: marker, Type: EventTruncated, LimitBytes: MaxOutputBytes}
+	l.truncated = true
+	l.indexed = 0
+	l.stdout.Reset()
+	l.stderr.Reset()
 }
 
 func (l *eventLog) appendOutputLocked(kind EventType, data []byte) {
@@ -140,11 +177,14 @@ func (l *eventLog) appendLocked(ev Event) {
 }
 
 func (l *eventLog) eventsAfterLocked(after uint64) ([]Event, bool) {
-	i := 0
-	if after < l.nextID {
-		i = int(after)
-	} else {
-		i = len(l.events)
+	i := len(l.events)
+	if i > 0 && after < l.nextID {
+		first := l.events[0].ID
+		if after < first {
+			i = 0
+		} else {
+			i = int(after - first + 1)
+		}
 	}
 	events := append([]Event(nil), l.events[i:]...)
 	if n := len(events); n > 0 && events[n-1].Type == EventComplete && events[n-1].Execution != nil {
@@ -186,10 +226,11 @@ func (l *eventLog) retainedBytes() int {
 	return l.retained
 }
 
-func (l *eventLog) output() (stdout, stderr string, truncated bool) {
+func (l *eventLog) output() (stdout, stderr string, truncated bool, stdoutOffset, stderrOffset int64) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.outputLocked()
+	stdout, stderr, truncated = l.outputLocked()
+	return stdout, stderr, truncated, l.stdoutOffset, l.stderrOffset
 }
 
 func (l *eventLog) outputLocked() (stdout, stderr string, truncated bool) {

@@ -390,3 +390,9 @@ pre-implementation [failure model](../sandbox-python/e2e/FAILURES.md). CI runs
 the installed package against real Docker on Python 3.10 and 3.15 and uploads
 evidence even on failure. The wheel and source distribution are verification
 artifacts, not publication to a package index.
+
+
+### Terminal, metadata and purge operations
+
+`stat_file(sandbox_id, path)` returns one FileEntry and checks `files.stat.v1`. A legacy 204 write returns `None`.
+`open_terminal(sandbox_id, *, rows=24, cols=80, command=None, cwd=None)` returns a terminal ID. Use `terminal_input`, `resize_terminal`, `stream_terminal` and `close_terminal` with that ID. `stream_terminal` yields bytes and supports an initial byte offset. These calls check `terminals.v1`; all accept a cancellation token. `destroy_sandbox(sandbox_id)` checks `sandbox.purge.v1` and removes retained records.

@@ -51,12 +51,15 @@ Creation is never automatically retried; see the respective SDK contracts.
 |---|---|---|
 | `id` | string | |
 | `state` | string | `pending`, `running`, `paused`, `killed` |
-| `image` | string | default `alpine:3.20` |
+| `image` | string | Docker image. Default `alpine:3.20`. |
 | `memory_mb` | int | memory limit, default 512, minimum 16 |
 | `max_concurrent_executions` | int | immutable execution slot limit, 1–8, default 1 |
 | `pids_limit` | int | task limit, default 1024, minimum 64 |
 | `nano_cpus` | int | CPU limit in units of 1e-9 CPUs, default `0` (unlimited) |
-| `network` | string | `bridge` (default, outbound access) or `none` |
+| `network` | string | `bridge` or `none` |
+| `runtime` | string | Selected administrator-allowed runtime when configured |
+| `agent_mode` | string | `guest` after a successful handshake, `legacy` when disabled, or `unavailable` on fallback |
+| `protected` | boolean | A working root guest agent protects its control directory from the non-root workload |
 | `timeout_seconds` | int | lifetime timeout, default 300, `0` disables |
 | `timeout_action` | string | `kill` (default) or `pause` |
 | `idle_timeout_seconds` | int | default `0` (disabled) |
@@ -77,6 +80,7 @@ Creation is never automatically retried; see the respective SDK contracts.
 | `exit_code` | int or null | null while running, or if the runtime could not report one |
 | `termination_reason` | string or null | null while running; see below |
 | `stdout`, `stderr` | string | retained output; omitted in list responses |
+| `stdout_offset`, `stderr_offset` | integer | absolute byte index of the first retained byte in each stream when tail retention evicts output, default zero |
 | `output_truncated` | bool | true when output exceeded retention or live output was lost during recovery |
 | `pid` | int, optional | confirmed positive guest PID for managed commands; absent on native executions or unconfirmed start |
 | `started_at` | string | |
@@ -105,7 +109,7 @@ or flag means unsupported, not permission to send fields an old server ignores.
 Flags describe the configured endpoint; mixed-version rolling servers are unsupported.
 Current native SDKs preflight nonempty env/cwd/stdin, explicit concurrency and
 managed `timeout_ms` before create/start. Basic legacy calls need no discovery.
-Directory listings require `files.list.v1`; archive reads and writes require
+The stat endpoint advertises `files.stat.v1`. Guest-enabled deployments advertise `terminals.v1` for PTY sessions. Directory listings require `files.list.v1`; archive reads and writes require
 `files.archive.v1`. These checks happen before the file request. Ordinary
 file reads and writes need no discovery; no file method downgrades to shell.
 
@@ -270,7 +274,7 @@ Request (all fields optional):
   see the [concurrency policy](#concurrent-execution-policy).
 - `nano_cpus` is a CPU limit in units of 1e-9 CPUs; `0`, the default, means no
   limit. `1000000000` is one CPU.
-- `network` is `bridge` (default) or `none`. `bridge` gives the sandbox its own
+- `network` accepts `bridge` (default) or `none`. `bridge` gives the sandbox its own
   network namespace with outbound access, so package installs and HTTP calls
   work. `none` removes networking entirely. Host networking is not offered: it
   would expose every host socket to code the caller does not control.
@@ -315,6 +319,8 @@ expired sandbox.
 No body. `200` Sandbox. Idempotent per the transition table.
 
 ### `DELETE /v1/sandboxes/{sandbox_id}`
+
+The optional query parameter `purge=true` requests permanent cleanup. Check for `sandbox.purge.v1` before sending it. A successful call confirms removal of the container and its local history. Subsequent listing excludes the ID and lookup returns 404. Ordinary deletion retains its history.
 
 `200` Sandbox in state `killed`, once the container is confirmed gone. Repeating deletion is idempotent and returns the stored killed record.
 
@@ -587,3 +593,33 @@ cleanup with the same owner label is the fallback.
 - [Execution engine](../internal/daemon/engine.go): idempotency, cancellation, and file access.
 - [Reaper](../internal/daemon/reaper.go): timeout and eviction checks.
 - [Server entry point](../cmd/sandboxd/main.go): startup cleanup and HTTP shutdown.
+
+### `GET /v1/sandboxes/{sandbox_id}/files/stat?path=...`
+
+Return a single FileEntry for an absolute path, including the link target for a symbolic link.
+
+## Tail retention
+
+Set `output_tail: true` when starting an execution to keep the most recent output within the 1 MiB and event-count limits. Clients first check for `execution.output-tail.v1`. Reusing an idempotency key requires the same retention mode. Each eviction drops complete oldest events to preserve character boundaries. A replay from a cursor that predates the window starts with a `truncated` marker. Retained events keep their original IDs across reconnect and durable recovery. The default mode keeps the initial output up to the same limits.
+
+## Interactive terminals
+
+### `POST /v1/sandboxes/{sandbox_id}/terminals`
+
+Create a guest PTY. The optional JSON body accepts `command` (default `/bin/sh`), `cwd`, `rows` and `cols`. A 201 response contains `terminal_id`. Each running sandbox supports eight active terminal sessions. A terminal uses `TERM=xterm-256color` when the image and workload do not specify TERM. Completed shells release their live slot. Recent closed output stays available for replay while capacity permits.
+
+### `POST /v1/sandboxes/{sandbox_id}/terminals/{terminal_id}/input`
+
+Send up to 32 KiB of raw input bytes. Success returns 204. Repeating a request can send the input twice.
+
+### `POST /v1/sandboxes/{sandbox_id}/terminals/{terminal_id}/resize`
+
+Send JSON with positive `rows` and `cols` up to 65535. Success returns 204.
+
+### `GET /v1/sandboxes/{sandbox_id}/terminals/{terminal_id}/events`
+
+Read SSE output from a persistent terminal. Supply a byte offset in `Last-Event-ID` to resume. Each `stdout` event contains base64 `data` and a `truncated` flag for lost history. A `closed` event signals the final output. Disconnecting leaves the shell running.
+
+### `DELETE /v1/sandboxes/{sandbox_id}/terminals/{terminal_id}`
+
+Close the terminal, release the session and its processes. Success returns 204. On daemon restart, a sandbox with a running terminal or unconfirmed terminal status is retired. An exited shell permits recovery of an otherwise idle sandbox.

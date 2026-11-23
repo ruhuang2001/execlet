@@ -53,6 +53,9 @@ class _Model:
 
 @dataclass(kw_only=True)
 class Sandbox(_Model):
+    agent_mode: str | None = None
+    protected: bool | None = None
+    runtime: str | None = None
     id: str
     state: str
     image: str = ""
@@ -126,6 +129,7 @@ class _Request:
 
 @dataclass(kw_only=True)
 class CreateSandboxRequest(_Request):
+    runtime: str | None = None
     image: str | None = None
     memory_mb: int | None = None
     max_concurrent_executions: int | None = None
@@ -147,6 +151,7 @@ class UpdateSandboxRequest(_Request):
 
 @dataclass(kw_only=True)
 class ExecuteRequest(_Request):
+    output_tail: bool | None = None
     command: list[str]
     idempotency_key: str = ""
     timeout_seconds: int | None = None

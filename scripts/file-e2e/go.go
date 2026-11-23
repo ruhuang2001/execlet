@@ -45,6 +45,11 @@ func main() {
 	if entry.Name != "sdk.bin" || entry.Size != 2 || entry.Type != sandbox.FileTypeFile {
 		panic(fmt.Sprintf("write metadata: %+v", entry))
 	}
+	observed, err := c.StatFile(context.Background(), os.Args[1], "/go/sdk.bin")
+	must(err)
+	if *observed != *entry {
+		panic(fmt.Sprintf("stat differs from write: %+v, %+v", observed, entry))
+	}
 	data, err := json.Marshal(map[string]any{"sdk": "go", "names": names, "written": entry})
 	must(err)
 	fmt.Println(string(data))

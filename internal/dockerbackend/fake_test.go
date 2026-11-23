@@ -202,9 +202,9 @@ func (f *fakeDaemon) containerOp(w http.ResponseWriter, r *http.Request, tail st
 	id = c.id
 	switch {
 	case action == "json" && r.Method == http.MethodGet:
-		writeJSON(w, 200, map[string]any{"Id": id, "Name": "/" + lookup,
-			"Config": map[string]any{"Labels": c.labels}, "State": map[string]string{"Status": c.state}})
-
+		value := dockerapi.ContainerInspect{ID: id, Name: "/" + lookup, HostConfig: dockerapi.HostConfig{Runtime: "runc"}, State: dockerapi.ContainerState{Status: c.state, Running: c.state == "running", Paused: c.state == "paused"}}
+		value.Config.Labels = c.labels
+		writeJSON(w, http.StatusOK, value)
 	case action == "start" && r.Method == http.MethodPost:
 		if f.failStart {
 			writeError(w, 500, "cannot start: simulated failure")

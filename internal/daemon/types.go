@@ -90,6 +90,9 @@ const (
 )
 
 type Sandbox struct {
+	AgentMode               string      `json:"agent_mode"`
+	Protected               bool        `json:"protected"`
+	Runtime                 string      `json:"runtime,omitempty"`
 	MaxConcurrentExecutions int         `json:"max_concurrent_executions"`
 	ID                      string      `json:"id"`
 	State                   State       `json:"state"`
@@ -108,6 +111,9 @@ type Sandbox struct {
 }
 
 type Execution struct {
+	StdoutOffset int64 `json:"stdout_offset,omitzero"`
+	StderrOffset int64 `json:"stderr_offset,omitzero"`
+
 	ID                string     `json:"id"`
 	PID               int        `json:"pid,omitzero"`
 	SandboxID         string     `json:"sandbox_id"`
@@ -154,6 +160,7 @@ func (e Execution) Summary() ExecutionSummary {
 }
 
 type CreateRequest struct {
+	Runtime                 string            `json:"runtime,omitempty"`
 	MaxConcurrentExecutions *int              `json:"max_concurrent_executions,omitempty"`
 	Image                   *string           `json:"image,omitempty"`
 	MemoryMB                *int              `json:"memory_mb,omitempty"`
@@ -173,6 +180,7 @@ type UpdateRequest struct {
 }
 
 type ExecuteRequest struct {
+	OutputTail     bool              `json:"output_tail,omitzero"`
 	Command        []string          `json:"command"`
 	IdempotencyKey string            `json:"idempotency_key,omitempty"`
 	TimeoutSeconds *int              `json:"timeout_seconds,omitempty"`
@@ -209,6 +217,7 @@ func mergedEnv(base, override map[string]string) []string {
 }
 
 type sandboxOptions struct {
+	runtime                 string
 	maxConcurrentExecutions int
 	image                   string
 	memoryMB                int
@@ -224,6 +233,7 @@ type sandboxOptions struct {
 
 func (r CreateRequest) resolve() (sandboxOptions, error) {
 	opts := sandboxOptions{
+		runtime:                 r.Runtime,
 		maxConcurrentExecutions: 1,
 		image:                   DefaultImage,
 		memoryMB:                DefaultMemoryMB,
@@ -264,7 +274,7 @@ func (r CreateRequest) resolve() (sandboxOptions, error) {
 		case NetworkBridge, NetworkNone:
 			opts.network = *r.Network
 		default:
-			return sandboxOptions{}, errorf(CodeInvalidRequest, "network must be %q or %q", NetworkBridge, NetworkNone)
+			return sandboxOptions{}, errorf(CodeInvalidRequest, "network must be bridge or none")
 		}
 	}
 	if r.MemoryMB != nil {

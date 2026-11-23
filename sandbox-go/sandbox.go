@@ -8,6 +8,9 @@ import (
 
 func (c *Client) CreateSandbox(ctx context.Context, req CreateSandboxRequest) (*Sandbox, error) {
 	var required []string
+	if req.Runtime != "" {
+		required = append(required, "sandbox.runtime.v1")
+	}
 	if len(req.Env) > 0 {
 		required = append(required, "execution.env-cwd.v1")
 	}
@@ -54,6 +57,13 @@ func (c *Client) ResumeSandbox(ctx context.Context, sandboxID string) (*Sandbox,
 
 func (c *Client) KillSandbox(ctx context.Context, sandboxID string) (*Sandbox, error) {
 	return c.sandboxOp(ctx, http.MethodDelete, sandboxID, "")
+}
+
+func (c *Client) DestroySandbox(ctx context.Context, id string) (*Sandbox, error) {
+	if err := c.RequireCapabilities(ctx, "sandbox.purge.v1"); err != nil {
+		return nil, err
+	}
+	return c.sandboxOp(ctx, http.MethodDelete, id, "?purge=true")
 }
 
 func (c *Client) sandboxOp(ctx context.Context, method, sandboxID, suffix string) (*Sandbox, error) {

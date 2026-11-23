@@ -1,4 +1,5 @@
-import { checkSignal, SandboxError } from './errors.js';
+import { readFrames } from './sse.js';
+import { checkSignal, SandboxError, statusError, transportError } from './errors.js';
 import { decodeJSON, sleep, Transport } from './http.js';
 import { consume, streamEvents } from './stream.js';
 import type {
@@ -17,6 +18,7 @@ function validateFileEntry(entry: FileEntry): void {
 }
 
 function sandboxPath(id: string): string { return '/v1/sandboxes/' + encodeURIComponent(id); }
+function terminalPath(sandboxID:string,id:string):string{return sandboxPath(sandboxID)+'/terminals/'+encodeURIComponent(id)}
 function executionPath(sandboxID: string, executionID: string): string {
   return sandboxPath(sandboxID) + '/executions/' + encodeURIComponent(executionID);
 }
@@ -52,8 +54,12 @@ export class Client {
 
   constructor(config: ClientConfig = {}) { this.transport = new Transport(config); }
 
-  getCapabilities(options: RequestOptions = {}): Promise<Capabilities> {
-    return this.transport.json('GET', '/v1/capabilities', true, options.signal);
+  async getCapabilities(options: RequestOptions = {}): Promise<Capabilities> {
+    const result = await this.transport.json<Capabilities>('GET', '/v1/capabilities', true, options.signal);
+    if (!Array.isArray(result?.capabilities) || result.capabilities.some(flag => typeof flag !== 'string')) {
+      throw new SandboxError('decode', 'invalid capability response');
+    }
+    return result;
   }
 
   async requireCapabilities(required: readonly string[], options: RequestOptions = {}): Promise<void> {
@@ -62,9 +68,6 @@ export class Client {
     if (this.capabilities === undefined) {
       try {
         const response = await this.getCapabilities(options);
-        if (!Array.isArray(response?.capabilities) || response.capabilities.some(v => typeof v !== 'string')) {
-          throw new SandboxError('decode', 'invalid capability response');
-        }
         this.capabilities = [...response.capabilities];
       } catch (cause) {
         if (!(cause instanceof SandboxError) || !([404, 405, 501].includes(cause.statusCode) ||
@@ -79,6 +82,7 @@ export class Client {
   async createSandbox(request: CreateSandboxRequest = {}, options: RequestOptions = {}): Promise<Sandbox> {
     const snapshot = { ...request, ...(request.env ? { env: { ...request.env } } : {}) };
     const required = [];
+    if (snapshot.runtime !== undefined) required.push('sandbox.runtime.v1');
     if (snapshot.env && Object.keys(snapshot.env).length) required.push('execution.env-cwd.v1');
     if (snapshot.max_concurrent_executions !== undefined) required.push('execution.concurrent.v1');
     await this.requireCapabilities(required, options);
@@ -126,6 +130,7 @@ export class Client {
     };
     const required = [];
     if ((keyed.env && Object.keys(keyed.env).length) || keyed.cwd) required.push('execution.env-cwd.v1');
+    if (keyed.output_tail) required.push('execution.output-tail.v1');
     if (keyed.stdin) required.push('execution.stdin.v1');
     if (keyed.timeout_ms !== undefined) required.push('e2b.background.v1');
     await this.requireCapabilities(required, options);
@@ -228,6 +233,101 @@ export class Client {
     options: RequestOptions = {}): Promise<ExecutionOutcome> {
     const started = await this.startExecution(sandboxID, { command }, options);
     return executionOutcome(await this.streamExecution(sandboxID, started.id, onEvent, options));
+  }
+
+  async statFile(sandboxID: string, path: string, options: RequestOptions = {}): Promise<FileEntry> {
+    await this.requireCapabilities(['files.stat.v1'], options);
+    const entry = await this.transport.json<FileEntry>(
+      'GET',
+      sandboxPath(sandboxID) + '/files/stat?path=' + encodeURIComponent(path),
+      true,
+      options.signal
+    );
+    validateFileEntry(entry);
+    return entry;
+  }
+
+  async destroySandbox(sandboxID: string, options: RequestOptions = {}): Promise<Sandbox> {
+    await this.requireCapabilities(['sandbox.purge.v1'], options);
+    return this.transport.json('DELETE', sandboxPath(sandboxID) + '?purge=true', false, options.signal);
+  }
+
+  async openTerminal(
+    sandboxID: string,
+    options: RequestOptions & { rows?: number; cols?: number; command?: string[]; cwd?: string } = {}
+  ): Promise<string> {
+    await this.requireCapabilities(['terminals.v1'], options);
+    const { signal, ...body } = options;
+    const result = await this.transport.json<{ terminal_id: string }>(
+      'POST',
+      sandboxPath(sandboxID) + '/terminals',
+      false,
+      signal,
+      body
+    );
+    if (typeof result?.terminal_id !== 'string' || !result.terminal_id)
+      throw new SandboxError('decode', 'missing terminal_id');
+    return result.terminal_id;
+  }
+
+  async terminalInput(sandboxID: string, id: string, data: Uint8Array, options: RequestOptions = {}): Promise<void> {
+    await this.requireCapabilities(['terminals.v1'], options);
+    await this.transport.request('POST', terminalPath(sandboxID, id) + '/input', false, options.signal, data);
+  }
+
+  async resizeTerminal(
+    sandboxID: string,
+    id: string,
+    rows: number,
+    cols: number,
+    options: RequestOptions = {}
+  ): Promise<void> {
+    await this.requireCapabilities(['terminals.v1'], options);
+    await this.transport.request(
+      'POST',
+      terminalPath(sandboxID, id) + '/resize',
+      true,
+      options.signal,
+      JSON.stringify({ rows, cols })
+    );
+  }
+
+  async closeTerminal(sandboxID: string, id: string, options: RequestOptions = {}): Promise<void> {
+    await this.requireCapabilities(['terminals.v1'], options);
+    await this.transport.request('DELETE', terminalPath(sandboxID, id), false, options.signal);
+  }
+
+  async *streamTerminal(
+    sandboxID: string,
+    id: string,
+    options: RequestOptions & { offset?: number } = {}
+  ): AsyncGenerator<Uint8Array> {
+    await this.requireCapabilities(['terminals.v1'], options);
+    let offset = options.offset ?? 0;
+    try {
+      const response = await this.transport.open(terminalPath(sandboxID, id) + '/events', {
+        method: 'GET',
+        headers: { Accept: 'text/event-stream', 'Last-Event-ID': String(offset) },
+        ...(options.signal ? { signal: options.signal } : {})
+      });
+      if (!response.ok) throw statusError(response.status, await response.text());
+      if (!response.body) throw new SandboxError('stream', 'missing terminal body');
+      for await (const frame of readFrames(response.body)) {
+        if (frame.type === 'closed') return;
+        if (frame.type !== 'stdout') continue;
+        const next = Number(frame.id);
+        if (!Number.isSafeInteger(next) || next <= 0) throw new SandboxError('stream', 'invalid terminal offset');
+        if (next <= offset) continue;
+        const payload = decodeJSON<{ data: string }>(new TextEncoder().encode(frame.data));
+        if (typeof payload?.data !== 'string') throw new SandboxError('stream', 'invalid terminal output');
+        offset = next;
+        yield Uint8Array.from(atob(payload.data), (c) => c.charCodeAt(0));
+      }
+      throw new SandboxError('transport', 'terminal stream closed without a closed event');
+    } catch (error) {
+      checkSignal(options.signal);
+      throw transportError(error);
+    }
   }
 
   async listFiles(sandboxID: string, path: string, options: ListFilesOptions = {}): Promise<FileList> {

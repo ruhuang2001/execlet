@@ -21,6 +21,11 @@ type Route struct {
 }
 
 var routes = []Route{
+	{Operation{http.MethodPost, "/v1/sandboxes/{sandbox_id}/terminals"}, (*Handler).openTerminal},
+	{Operation{http.MethodPost, "/v1/sandboxes/{sandbox_id}/terminals/{terminal_id}/input"}, (*Handler).terminalControl},
+	{Operation{http.MethodPost, "/v1/sandboxes/{sandbox_id}/terminals/{terminal_id}/resize"}, (*Handler).terminalControl},
+	{Operation{http.MethodGet, "/v1/sandboxes/{sandbox_id}/terminals/{terminal_id}/events"}, (*Handler).terminalEvents},
+	{Operation{http.MethodDelete, "/v1/sandboxes/{sandbox_id}/terminals/{terminal_id}"}, (*Handler).terminalControl},
 	{Operation{http.MethodGet, "/healthz"}, (*Handler).handleHealth},
 	{Operation{http.MethodGet, "/readyz"}, (*Handler).handleReady},
 	{Operation{http.MethodGet, "/metrics"}, (*Handler).handleMetrics},
@@ -44,6 +49,7 @@ var routes = []Route{
 
 	{Operation{http.MethodGet, "/v1/sandboxes/{sandbox_id}/files/archive"}, (*Handler).readArchive},
 	{Operation{http.MethodPut, "/v1/sandboxes/{sandbox_id}/files/archive"}, (*Handler).writeArchive},
+	{Operation{http.MethodGet, "/v1/sandboxes/{sandbox_id}/files/stat"}, (*Handler).statFile},
 	{Operation{http.MethodGet, "/v1/sandboxes/{sandbox_id}/files/list"}, (*Handler).listFiles},
 	{Operation{http.MethodGet, "/v1/sandboxes/{sandbox_id}/files"}, (*Handler).readFile},
 	{Operation{http.MethodPut, "/v1/sandboxes/{sandbox_id}/files"}, (*Handler).writeFile},

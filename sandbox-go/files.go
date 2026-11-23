@@ -113,3 +113,18 @@ func (c *Client) WriteArchive(ctx context.Context, id, path string, data []byte)
 	_, err := c.do(ctx, request{method: http.MethodPut, path: "/v1/sandboxes/" + url.PathEscape(id) + "/files/archive", query: "?path=" + url.QueryEscape(path), raw: data})
 	return err
 }
+
+func (c *Client) StatFile(ctx context.Context, id, path string) (*FileEntry, error) {
+	if err := c.RequireCapability(ctx, "files.stat.v1"); err != nil {
+		return nil, err
+	}
+	resp, err := c.do(ctx, request{method: http.MethodGet, path: "/v1/sandboxes/" + url.PathEscape(id) + "/files/stat", query: "?path=" + url.QueryEscape(path), repeatable: true})
+	if err != nil {
+		return nil, err
+	}
+	var out FileEntry
+	if err = decode(resp, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}

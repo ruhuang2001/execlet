@@ -217,8 +217,10 @@ def main():
                     assert tf.getmember("workspace").mtime == directory.mtime
                     assert tf.getmember("workspace/sample").mtime == entry_header.mtime
                     assert tf.getmember("workspace/link").mtime == link.mtime
-                    assert tf.getmember("workspace/link").uid == int(cli("docker", "exec", cid, "id", "-u"))
-                    assert tf.getmember("workspace/link").gid == int(cli("docker", "exec", cid, "id", "-g"))
+                link_stat = request("GET", base + "/files/stat?path=/tmp/workspace/link")
+                assert link_stat["type"] == "symlink", link_stat
+                assert link_stat["uid"] == int(cli("docker", "exec", cid, "id", "-u")), link_stat
+                assert link_stat["gid"] == int(cli("docker", "exec", cid, "id", "-g")), link_stat
                 assert (
                     cli(
                         "docker", "exec", cid, "sha256sum", "/tmp/workspace/sample"

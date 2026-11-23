@@ -68,12 +68,14 @@ internal/dockerbackend/guestbin/guest-linux-%: $(wildcard sandbox-agent/cmd/gues
 
 .PHONY: feature-e2e runtime-e2e
 
-feature-e2e: build
+feature-e2e: build typescript
 	$(PYTHON) scripts/e2e-mcp.py
 	$(PYTHON) scripts/e2e-guest.py --samples 2
 	$(PYTHON) scripts/e2e-guest-faults.py
 	$(PYTHON) scripts/e2e-guest-boundaries.py
 	$(PYTHON) scripts/e2e-terminal.py
+	$(PYTHON) scripts/e2e-terminal-sdks.py
+	$(PYTHON) scripts/e2e-guest-idle.py --server bin/sandboxd --out artifacts/guest-idle/acceptance.json
 	$(PYTHON) scripts/e2e-output-retention.py
 	$(PYTHON) scripts/egress-e2e/run.py
 	$(PYTHON) scripts/e2e-templates.py

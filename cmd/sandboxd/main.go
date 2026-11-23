@@ -73,6 +73,9 @@ func main() {
 		os.Exit(1)
 	}
 
+	if policy != nil {
+		backend.ConfigureEgress(policy.Egress)
+	}
 	if err := backend.SetGuestAgent(*guestMode); err != nil {
 		slog.Error("invalid guest mode", "error", err)
 		os.Exit(1)

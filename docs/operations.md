@@ -54,8 +54,41 @@ policy requires a restart and recovery rechecks adopted containers.
 - `bridge` is deliberately unrestricted; it can reach private/host services
   according to Docker routing. Including it in the allowlist opts out of the
   no-egress guarantee for those sandboxes.
-- No destination/domain allowlist, filtered internet, per-tenant ACL or
-  custom bridge mode is implemented. Unsupported names are rejected.
+- `filtered` uses a Docker `none` network and a guest loopback HTTPS proxy at
+  `127.0.0.1:8888`. The host opens each upstream connection through Docker exec,
+  resolves the requested hostname, checks the returned addresses and dials the
+  selected address directly. The proxy accepts CONNECT on port 443 for exact
+  configured domain names. Each new tunnel undergoes the same checks, including
+  new connections after redirects. TLS payloads are opaque to the proxy.
+  HTTPS clients use `HTTPS_PROXY` or `https_proxy`. Tools ignoring these
+  variables only have the guest loopback interface. Filtered sandboxes require
+  a running guest agent and are retired during daemon restart.
+
+The relay accepts up to 64 active tunnels per sandbox and starts a relay for each incoming connection. Set `egress.tunnel_idle_seconds` to control the inactivity timeout (default 120 seconds). A transfer with continuing traffic can exceed that duration. Inspect sandboxd's `egress request denied` logs for the requested host and reason. DNS proxies using fake-IP mode can return addresses in `198.18.0.0/15`, which the policy rejects. Configure real-address DNS resolution for approved domains on the sandboxd host.
+
+For a deployment that uses the package index, add these policy fields to the
+resource budgets and image allowlist above.
+
+```json
+{
+  "allowed_networks": ["none", "filtered"],
+  "egress": {"domains": ["pypi.org", "files.pythonhosted.org"]}
+}
+```
+
+The optional `egress.credential` object binds one GET request to a fixed
+HTTPS URL and a list of authorized image identities. Set `url`, `images`
+and `token_env` in that object. Supply the bearer token in the named
+environment variable of sandboxd. A workload in an authorized filtered
+sandbox can call `GET http://127.0.0.1:8888/credential`. The host identifies
+the sandbox from its Docker exec channel, sends a newly constructed request,
+and returns up to 1 MiB from a successful response. The broker exposes
+no guest-selectable upstream path, headers, redirect handling or method.
+
+Run `python3 scripts/egress-e2e/run.py` after `make agent` to verify an
+authenticated request with temporary credentials, allowlist enforcement
+and connectivity after proxy shutdown. The suite uses an internal Docker
+network and writes its report to `artifacts/egress/acceptance.json`.
 
 The acceptance suite includes a reachable private-peer control under bridge
 and denied private/metadata attempts under none, plus interface evidence. It

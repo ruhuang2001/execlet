@@ -62,8 +62,9 @@ type Action string
 type NetworkMode string
 
 const (
-	NetworkBridge NetworkMode = "bridge"
-	NetworkNone   NetworkMode = "none"
+	NetworkBridge   NetworkMode = "bridge"
+	NetworkNone     NetworkMode = "none"
+	NetworkFiltered NetworkMode = "filtered"
 )
 
 const (
@@ -271,10 +272,10 @@ func (r CreateRequest) resolve() (sandboxOptions, error) {
 	}
 	if r.Network != nil {
 		switch *r.Network {
-		case NetworkBridge, NetworkNone:
+		case NetworkBridge, NetworkNone, NetworkFiltered:
 			opts.network = *r.Network
 		default:
-			return sandboxOptions{}, errorf(CodeInvalidRequest, "network must be bridge or none")
+			return sandboxOptions{}, errorf(CodeInvalidRequest, "network must be bridge, none or filtered")
 		}
 	}
 	if r.MemoryMB != nil {

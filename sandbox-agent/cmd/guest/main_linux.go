@@ -46,6 +46,7 @@ func run(args []string) error {
 		f := flag.NewFlagSet("daemon", flag.ContinueOnError)
 		path := f.String("socket", protocol.Socket, "control socket")
 		identity := f.String("identity", "", "workload identity")
+		filtered := f.Bool("filtered", false, "start loopback proxy")
 		if err := f.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -53,10 +54,17 @@ func run(args []string) error {
 		if err := json.Unmarshal([]byte(*identity), &id); err != nil {
 			return err
 		}
+		if *filtered {
+			if err := startProxyListener(); err != nil {
+				return err
+			}
+		}
 		runtime.GOMAXPROCS(1)
 		return serve(*path, id)
 	case "transfer":
 		return transfer(args[1:])
+	case "proxy-accept":
+		return proxyAccept()
 	case "connect":
 		runtime.GOMAXPROCS(1)
 		c, err := (&net.Dialer{}).DialContext(context.Background(), "unix", protocol.Socket)

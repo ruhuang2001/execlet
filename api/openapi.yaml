@@ -1096,7 +1096,7 @@ components:
             and defaults to the smaller of one CPU and its total CPU budget.
         network:
           type: string
-          enum: [bridge, none]
+          enum: [bridge, none, filtered]
           default: bridge
           description: >-
             bridge gives the sandbox outbound network access; none removes
@@ -1196,7 +1196,7 @@ components:
           minimum: 0
         network:
           type: string
-          enum: [bridge, none]
+          enum: [bridge, none, filtered]
         timeout_seconds:
           type: integer
           minimum: 0

@@ -77,6 +77,7 @@ feature-e2e: build typescript
 	$(PYTHON) scripts/e2e-terminal-sdks.py --out $(ARTIFACTS)/terminal-sdks
 	$(PYTHON) scripts/e2e-guest-idle.py --server bin/sandboxd --out $(ARTIFACTS)/guest-idle/acceptance.json
 	$(PYTHON) scripts/e2e-output-retention.py --out $(ARTIFACTS)/output-retention
+	$(PYTHON) scripts/egress-e2e/run.py --out $(ARTIFACTS)/egress
 
 runtime-e2e: build
 	docker build --target minimal -t tiny-sandbox-guest:minimal -f examples/guest/Dockerfile.agent-minimal examples/guest

@@ -50,7 +50,7 @@ run flags:
   --max-concurrent-executions N  execution slots (default 1, maximum 8)
   --pids-limit N        task limit (default 1024, minimum 64)
   --nano-cpus N         CPU limit in units of 1e-9 CPUs (0 is unlimited)
-  --network MODE        bridge (default) or none
+  --network MODE        bridge (default), filtered or none
   --timeout S           lifetime timeout in seconds
   --timeout-action A    kill or pause
   --idle-timeout S      idle timeout in seconds

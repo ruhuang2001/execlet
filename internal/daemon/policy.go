@@ -9,9 +9,12 @@ import (
 	"os"
 	"slices"
 	"sync"
+
+	"github.com/ruhuang2001/tiny-sandbox/internal/egress"
 )
 
 type DeploymentPolicy struct {
+	Egress       *egress.Policy  `json:"egress,omitempty"`
 	Runtimes     []string        `json:"allowed_runtimes,omitempty"`
 	MaxSandboxes int             `json:"max_sandboxes"`
 	MemoryMB     int64           `json:"total_memory_mb"`
@@ -50,7 +53,15 @@ func (p DeploymentPolicy) Validate() error {
 			return errors.New("empty allowed image")
 		}
 	}
+	if p.Egress != nil {
+		if err := p.Egress.Validate(); err != nil {
+			return err
+		}
+	}
 	for _, network := range p.Networks {
+		if network == NetworkFiltered && p.Egress != nil {
+			continue
+		}
 		if network != NetworkNone && network != NetworkBridge {
 			return fmt.Errorf("unsupported network policy %q; no silent fallback", network)
 		}

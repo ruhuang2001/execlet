@@ -77,8 +77,9 @@ type Execution struct {
 }
 
 const (
-	NetworkBridge = "bridge"
-	NetworkNone   = "none"
+	NetworkFiltered = "filtered"
+	NetworkBridge   = "bridge"
+	NetworkNone     = "none"
 )
 
 type CreateSandboxRequest struct {

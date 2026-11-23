@@ -102,6 +102,9 @@ func (b *Backend) startGuest(ctx context.Context, id string, spec daemon.Contain
 		return err
 	}
 	cmd := []string{protocol.Binary, "daemon", "--socket", protocol.Socket, "--identity", string(raw)}
+	if spec.Network == daemon.NetworkFiltered {
+		cmd = append(cmd, "--filtered")
+	}
 	eid, err := b.api.ExecCreate(ctx, id, dockerapi.ExecConfig{User: "0:0", Cmd: cmd})
 	if err != nil {
 		return err

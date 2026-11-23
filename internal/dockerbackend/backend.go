@@ -33,6 +33,7 @@ var sandboxSecurityOpt = []string{"no-new-privileges"}
 type Backend struct {
 	guestMode  string
 	guests     sync.Map
+	egress     egressState
 	api        *dockerapi.Client
 	cgroupRoot string
 
@@ -76,6 +77,7 @@ func (b *Backend) Create(ctx context.Context, spec daemon.ContainerSpec) (string
 		Image:  spec.Image,
 		Cmd:    initCommand,
 		Labels: spec.Labels,
+		Env:    proxyEnv(spec.Network),
 		HostConfig: dockerapi.HostConfig{
 			Runtime:     spec.Runtime,
 			Memory:      limit,
@@ -146,6 +148,14 @@ func (b *Backend) Create(ctx context.Context, spec daemon.ContainerSpec) (string
 	if spec.Runtime == "runsc" && b.guest(id) == nil {
 		return id, errors.New("runsc requires the guest agent for filesystem access")
 	}
+	if spec.Network == daemon.NetworkFiltered {
+		if b.guest(id) == nil {
+			return id, errors.New("filtered network requires guest agent")
+		}
+		if err := b.startEgress(ctx, id, spec); err != nil {
+			return id, err
+		}
+	}
 	return id, nil
 }
 
@@ -205,6 +215,7 @@ func (b *Backend) Remove(ctx context.Context, containerID string) error {
 		if g, ok := b.guests.LoadAndDelete(containerID); ok {
 			g.(*guestSession).close()
 		}
+		b.stopEgress(containerID)
 		b.cleanup.forget(containerID)
 	}
 	return notFound(err, "container %s", containerID)
@@ -645,7 +656,7 @@ func notFound(err error, format string, args ...any) error {
 
 func networkMode(mode daemon.NetworkMode) string {
 	switch mode {
-	case daemon.NetworkNone:
+	case daemon.NetworkFiltered, daemon.NetworkNone:
 		return string(daemon.NetworkNone)
 	default:
 		return string(daemon.NetworkBridge)

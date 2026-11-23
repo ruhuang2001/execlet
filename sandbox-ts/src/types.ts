@@ -12,7 +12,7 @@ export interface Sandbox {
   max_concurrent_executions?: number;
   pids_limit?: number;
   nano_cpus?: number;
-  network?: OpenString<'bridge' | 'none'>;
+  network?: OpenString<'bridge' | 'none' | 'filtered'>;
   runtime?: OpenString<'runc' | 'runsc'>;
   timeout_seconds: number;
   timeout_action: OpenString<Action>;
@@ -64,7 +64,7 @@ export interface CreateSandboxRequest {
   max_concurrent_executions?: number;
   pids_limit?: number;
   nano_cpus?: number;
-  network?: 'bridge' | 'none';
+  network?: 'bridge' | 'none' | 'filtered';
   runtime?: 'runc' | 'runsc';
   timeout_seconds?: number;
   timeout_action?: Action;

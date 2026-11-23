@@ -337,7 +337,7 @@ func (s *Sandboxes) Recover(ctx context.Context, j *Journal, backend RecoveryBac
 			return errors.New("invalid recovered sandbox options")
 		}
 		sb := &sandbox{id: v.ID, agentMode: v.AgentMode, protected: v.Protected, container: value.Container, opts: opts, createdAt: v.CreatedAt, state: v.State, killReason: v.KillReason, expiresAt: v.ExpiresAt, lastActivity: value.LastActivity, running: map[string]*execution{}, idempotency: map[string]*execution{}}
-		unsafe := (value.HasTerminals && len(value.TerminalIDs) == 0) || sb.state == StatePending || sb.state == StateKilled
+		unsafe := (value.HasTerminals && len(value.TerminalIDs) == 0) || v.Network == NetworkFiltered || sb.state == StatePending || sb.state == StateKilled
 		items := executions[sb.id]
 		slices.SortFunc(items, func(a, b storedExecution) int { return a.Execution.StartedAt.Compare(b.Execution.StartedAt) })
 		for _, item := range items {

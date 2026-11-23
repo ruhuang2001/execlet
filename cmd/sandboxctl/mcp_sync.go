@@ -464,7 +464,14 @@ walk() {
 }
 case $action in
  mkdir) for dir do (walk "$dir"); done ;;
- remove) parent=$1; shift; walk "$parent"; rm -f -- "$@" ;;
+ remove)
+  parent=$1; shift; walk "$parent"
+  count=$#
+  while [ "$count" -gt 0 ]; do
+   leaf=$1; shift; count=$((count - 1))
+   if [ -L "./$leaf" ] || [ ! -d "./$leaf" ]; then set -- "$@" "$leaf"; fi
+  done
+  if [ "$#" -gt 0 ]; then rm -f -- "$@"; fi ;;
  prune) for dir do (walk "${dir%/*}"; rmdir -- "${dir##*/}" 2>/dev/null || :); done ;;
 esac`
 

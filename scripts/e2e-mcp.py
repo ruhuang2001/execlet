@@ -230,6 +230,34 @@ def run(tmp, evidence, record):
         passed = tool("run_command", command=cmd)
         assert passed["exit_code"] == 0 and "1 passed" in passed["stdout"], passed
         archive_limit_cases(work, sb, call, tool, record)
+        transition = work / "transition"
+        transition.write_text("old file")
+        assert tool("sync_workspace")["uploaded"] == 1
+        transition.unlink()
+        transition.mkdir()
+        (transition / "child").write_text("new child")
+        blocker = work / "upload-blocker"
+        blocker.write_text("new file")
+        block_upload = tool(
+            "run_command", command=["ln", "-s", "missing", blocker.name]
+        )
+        assert block_upload["exit_code"] == 0, block_upload
+        failed_upload = call("sync_workspace", error=True, sandbox_id=sb)
+        assert "archive destination" in failed_upload and blocker.name in failed_upload
+        guest_file = tool("run_command", command=["touch", "transition/guest-only"])
+        assert guest_file["exit_code"] == 0, guest_file
+        unblock_upload = tool("run_command", command=["rm", "--", blocker.name])
+        assert unblock_upload["exit_code"] == 0, unblock_upload
+        retried = tool("sync_workspace")
+        assert retried["uploaded"] == 2, retried
+        child = tool("read_file", path="/tmp/tiny-sandbox-workspace/transition/child")
+        assert child["content"] == "new child", child
+        preserved = tool("run_command", command=["test", "-f", "transition/guest-only"])
+        assert preserved["exit_code"] == 0, preserved
+        assert tool("sync_workspace")["uploaded"] == 0
+        shutil.rmtree(transition)
+        blocker.unlink()
+        assert tool("sync_workspace")["deleted"] == 2
         (pkg / "remove me").unlink()
         blocked = "/tmp/tiny-sandbox-workspace.failed"
         block_swap = tool(

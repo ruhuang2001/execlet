@@ -133,6 +133,11 @@ func (s *Sandboxes) openTerminal(ctx context.Context, sandboxID string, spec Exe
 	spec.Env = mergedEnv(sb.opts.env, nil)
 	ctx, cancel := backendCtx(ctx)
 	defer cancel()
+	for _, ex := range sb.running {
+		ex.mu.Lock()
+		ex.terminalOverlap = true
+		ex.mu.Unlock()
+	}
 	if err := b.OpenTerminal(ctx, sb.container, id, spec, cmp.Or(size.Rows, 24), cmp.Or(size.Cols, 80)); err != nil {
 		cleanup, stop := backendCtx(context.WithoutCancel(ctx))
 		defer stop()
@@ -185,7 +190,7 @@ func (h *Handler) terminalControl(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	default:
-		if err = t.backend.CloseTerminal(ctx, t.container, t.id); err != nil {
+		if err = t.backend.CloseTerminal(ctx, t.container, t.id); err != nil && CodeOf(backendError(err)) != CodeNotFound {
 			writeDaemonError(ctx, w, backendError(err))
 			return
 		}
@@ -287,6 +292,11 @@ func (s *Sandboxes) refreshTerminals(ctx context.Context, sb *sandbox) error {
 		if running {
 			done, err := status.TerminalDone(ctx, sb.container, id)
 			if err != nil {
+				if CodeOf(backendError(err)) == CodeNotFound {
+					delete(sb.terminals, id)
+					sb.dirty = true
+					continue
+				}
 				return backendError(err)
 			}
 			if done {
@@ -297,7 +307,7 @@ func (s *Sandboxes) refreshTerminals(ctx context.Context, sb *sandbox) error {
 		if !sb.terminals[id] {
 			finished++
 			if finished > 8 {
-				if err := b.CloseTerminal(ctx, sb.container, id); err != nil {
+				if err := b.CloseTerminal(ctx, sb.container, id); err != nil && CodeOf(backendError(err)) != CodeNotFound {
 					return backendError(err)
 				}
 				delete(sb.terminals, id)

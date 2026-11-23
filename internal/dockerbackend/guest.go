@@ -244,6 +244,9 @@ func (g *guestSession) call(ctx context.Context, kind byte, req protocol.Request
 	}
 	if err == nil {
 		err = protocol.Write(stream, kind, req)
+		if errors.Is(err, protocol.ErrFrameTooLarge) {
+			err = &daemon.Error{Code: daemon.CodePayloadTooLarge, Message: err.Error(), Err: err}
+		}
 	}
 	if err == nil {
 		err = readGuestReply(stream, kind, req, out)

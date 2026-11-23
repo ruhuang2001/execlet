@@ -47,9 +47,10 @@ type execution struct {
 	deadline *time.Time
 	timedOut bool
 
-	proc        Process
-	oomBaseline int64
-	done        chan struct{}
+	proc            Process
+	oomBaseline     int64
+	terminalOverlap bool
+	done            chan struct{}
 }
 
 func (ex *execution) setIntent(reason Reason) {
@@ -262,7 +263,14 @@ func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req Ex
 	}
 
 	baseline, oomErr := int64(-1), error(nil)
-	if sb.opts.maxConcurrentExecutions == 1 {
+	terminalOverlap := false
+	for _, active := range sb.terminals {
+		if active {
+			terminalOverlap = true
+			break
+		}
+	}
+	if sb.opts.maxConcurrentExecutions == 1 && !terminalOverlap {
 		baseline, oomErr = s.readOOMBaseline(ctx, sb.container)
 	}
 	if oomErr != nil {
@@ -275,6 +283,7 @@ func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req Ex
 		stdinDigest: keyedFingerprint(s.fingerprintKey, []string{req.Stdin}), fingerprintKey: s.fingerprintKey,
 		startedAt: s.now(), state: ExecRunning, log: newEventLog(), logger: contextLogger(ctx), oomBaseline: baseline, done: make(chan struct{}),
 	}
+	ex.terminalOverlap = terminalOverlap
 	ex.log.keepTail = req.OutputTail
 	if req.TimeoutMS != nil {
 		ex.timeoutMS = new(*req.TimeoutMS)
@@ -307,7 +316,7 @@ func (s *Sandboxes) StartExecution(ctx context.Context, sandboxID string, req Ex
 	})
 	cancel()
 	startErr := err
-	if err != nil && proc == nil && CodeOf(err) == CodeInvalidState && !errors.Is(err, ErrStartUnconfirmed) {
+	if err != nil && proc == nil && (CodeOf(err) == CodeInvalidState || CodeOf(err) == CodePayloadTooLarge) && !errors.Is(err, ErrStartUnconfirmed) {
 		if ex.forget != nil {
 			if forgetErr := ex.forget(); forgetErr != nil {
 				sb.mu.Unlock()
@@ -420,10 +429,11 @@ func (s *Sandboxes) run(ctx context.Context, sb *sandbox, ex *execution) {
 	ex.mu.Lock()
 	intent := ex.intent
 	baseline := ex.oomBaseline
+	overlap := ex.terminalOverlap
 	ex.mu.Unlock()
 
 	var outcome ExecOutcome
-	if sb.opts.maxConcurrentExecutions == 1 {
+	if sb.opts.maxConcurrentExecutions == 1 && !overlap {
 		outcome = classify(context.WithoutCancel(context.Background()), s.backend, sb.container, baseline, exitCode, intent, s.sleep)
 	} else {
 		outcome = classifyWithAttribution(context.WithoutCancel(context.Background()), s.backend, sb.container, baseline, exitCode, intent, s.sleep, false)
@@ -440,6 +450,9 @@ func (s *Sandboxes) run(ctx context.Context, sb *sandbox, ex *execution) {
 
 	now := s.now()
 	sb.mu.Lock()
+	if outcome.Reason == ReasonOOM && ex.terminalOverlap {
+		outcome = classifyWithAttribution(context.Background(), s.backend, sb.container, -1, exitCode, intent, s.sleep, false)
+	}
 	if errors.Is(waitErr, ErrGuestLost) && sb.state != StateKilled && !outcome.SandboxLost {
 		exitCode = -1
 		outcome = ExecOutcome{Reason: ReasonUnknown, SandboxLost: true}

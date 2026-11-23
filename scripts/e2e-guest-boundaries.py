@@ -101,6 +101,11 @@ def run(binary, out, image):
                         },
                     )
                     job = "/executions/" + command["id"]
+                    rejected, error = call("POST", base + "/executions", {
+                        "command": ["/bin/true"] + ["x" * 1022] * 1024, "timeout_ms": 0,
+                    })
+                    assert rejected == 413 and error["code"] == "payload_too_large", (rejected, error)
+                    assert ok("GET", base + job)["state"] == "running"
                     term = (
                         "/terminals/"
                         + ok("POST", base + "/terminals", {})["terminal_id"]

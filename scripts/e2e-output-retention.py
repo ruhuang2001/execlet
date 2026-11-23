@@ -1,5 +1,6 @@
 """Exercise both output retention policies and permanent deletion across daemon restarts."""
 
+import argparse
 import json
 import socket
 import subprocess
@@ -16,6 +17,10 @@ LIMIT = 1 << 20
 
 
 def main():
+    global OUT
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--out", type=Path, default=OUT)
+    OUT = parser.parse_args().out
     OUT.mkdir(parents=True, exist_ok=True)
     owner = "output-e2e-" + uuid.uuid4().hex
     with socket.socket() as sock:

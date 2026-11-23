@@ -1,6 +1,6 @@
 # Four-direction acceptance
 
-Build from the checkout with `make build` to embed the Linux amd64 and arm64 guest executables. The suites below start local daemons with distinct ownership labels and write their evidence under `artifacts/`. The commands use Docker, Go, Python and Node.js. Run the runtime suite on a Linux Docker host with `runsc` installed.
+Build from the checkout with `make build` to embed the Linux amd64 and arm64 guest executables. The suites below start local daemons with distinct ownership labels and write their evidence under `artifacts/`, or under `$(ARTIFACTS)` when `make feature-e2e ARTIFACTS=path` or `make runtime-e2e ARTIFACTS=path` runs them, which keeps concurrent runs apart. The commands use Docker, Go, Python and Node.js. Run the runtime suite on a Linux Docker host with `runsc` installed.
 
 | Feature | Reproduce from the repository root | Evidence |
 | --- | --- | --- |

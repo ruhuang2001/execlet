@@ -1,6 +1,7 @@
 BIN := bin
 PYTHON ?= python3
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+ARTIFACTS ?= artifacts
 COMMENT_PYTHON := .venv/comment-lint/bin/python
 COMMENT_DEPS := .venv/comment-lint/requirements.stamp
 LDFLAGS := -X main.version=$(VERSION)
@@ -69,19 +70,19 @@ internal/dockerbackend/guestbin/guest-linux-%: $(wildcard sandbox-agent/cmd/gues
 .PHONY: feature-e2e runtime-e2e
 
 feature-e2e: build typescript
-	$(PYTHON) scripts/e2e-mcp.py
-	$(PYTHON) scripts/e2e-guest.py --samples 2
-	$(PYTHON) scripts/e2e-guest-faults.py
-	$(PYTHON) scripts/e2e-guest-boundaries.py
-	$(PYTHON) scripts/e2e-terminal.py
-	$(PYTHON) scripts/e2e-terminal-sdks.py
-	$(PYTHON) scripts/e2e-guest-idle.py --server bin/sandboxd --out artifacts/guest-idle/acceptance.json
-	$(PYTHON) scripts/e2e-output-retention.py
-	$(PYTHON) scripts/egress-e2e/run.py
-	$(PYTHON) scripts/e2e-templates.py
-	$(PYTHON) scripts/e2e-prewarm.py --samples 2
+	$(PYTHON) scripts/e2e-mcp.py $(ARTIFACTS)/mcp-e2e
+	$(PYTHON) scripts/e2e-guest.py --samples 2 --out $(ARTIFACTS)/guest
+	$(PYTHON) scripts/e2e-guest-faults.py --out $(ARTIFACTS)/guest-faults
+	$(PYTHON) scripts/e2e-guest-boundaries.py --out $(ARTIFACTS)/guest-boundaries
+	$(PYTHON) scripts/e2e-terminal.py --out $(ARTIFACTS)/terminal
+	$(PYTHON) scripts/e2e-terminal-sdks.py --out $(ARTIFACTS)/terminal-sdks
+	$(PYTHON) scripts/e2e-guest-idle.py --server bin/sandboxd --out $(ARTIFACTS)/guest-idle/acceptance.json
+	$(PYTHON) scripts/e2e-output-retention.py --out $(ARTIFACTS)/output-retention
+	$(PYTHON) scripts/egress-e2e/run.py --out $(ARTIFACTS)/egress
+	$(PYTHON) scripts/e2e-templates.py --out $(ARTIFACTS)/templates
+	$(PYTHON) scripts/e2e-prewarm.py --samples 2 --out $(ARTIFACTS)/prewarm-e2e
 
 runtime-e2e: build
 	docker build --target minimal -t tiny-sandbox-guest:minimal -f examples/guest/Dockerfile.agent-minimal examples/guest
-	$(PYTHON) scripts/e2e-runtime.py
-	$(PYTHON) scripts/e2e-templates.py --runtime runsc --out artifacts/runsc-template
+	$(PYTHON) scripts/e2e-runtime.py --out $(ARTIFACTS)/runtime
+	$(PYTHON) scripts/e2e-templates.py --runtime runsc --out $(ARTIFACTS)/runsc-template

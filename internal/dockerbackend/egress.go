@@ -48,8 +48,33 @@ func (b *Backend) startEgress(_ context.Context, id string, spec daemon.Containe
 	return nil
 }
 
+const egressSlots = 64
+
+func (b *Backend) reportEgressSaturation(ctx context.Context, id string, slots chan struct{}) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	saturated := false
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		full := len(slots) == cap(slots)
+		switch {
+		case full && !saturated:
+			saturated = true
+			slog.WarnContext(ctx, "egress relays saturated; new tunnels queue", "container", id, "relays", cap(slots))
+		case !full && saturated:
+			saturated = false
+			slog.InfoContext(ctx, "egress relays accepting again", "container", id)
+		}
+	}
+}
+
 func (b *Backend) acceptEgress(ctx context.Context, id, image string, policy *egress.Policy) {
-	slots := make(chan struct{}, 64)
+	slots := make(chan struct{}, egressSlots)
+	go b.reportEgressSaturation(ctx, id, slots)
 	var tunnels sync.WaitGroup
 	defer tunnels.Wait()
 	var delay time.Duration

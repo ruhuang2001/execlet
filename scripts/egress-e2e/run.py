@@ -1,5 +1,6 @@
 """Run a sandboxd and an authenticated HTTPS fixture on an internal Docker network."""
 
+import argparse
 import hashlib
 import json
 import os
@@ -19,6 +20,10 @@ def command(*args, **kwargs):
 
 
 def main():
+    global OUT
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--out", type=Path, default=OUT)
+    OUT = parser.parse_args().out
     OUT.mkdir(parents=True, exist_ok=True)
     suffix = secrets.token_hex(5)
     network, upstream, controller = [

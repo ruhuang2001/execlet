@@ -1,5 +1,6 @@
 """Exercise the shell CLI, PTY reattachment, resizing, binary SSE and process cleanup."""
 
+import argparse
 import json
 import re
 import secrets
@@ -14,6 +15,10 @@ OUT = ROOT / "artifacts/terminal"
 
 
 def main():
+    global OUT
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--out", type=Path, default=OUT)
+    OUT = parser.parse_args().out
     OUT.mkdir(parents=True, exist_ok=True)
     owner = "pty-" + secrets.token_hex(5)
     with socket.socket() as probe:

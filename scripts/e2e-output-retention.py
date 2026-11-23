@@ -112,11 +112,14 @@ def main():
                 and managed["stderr"] == "FINAL ERROR"
                 and managed["output_truncated"]
             )
+            assert managed["stdout_offset"] + len(managed["stdout"]) == LIMIT + 200_008
+            assert len(managed["stdout"] + managed["stderr"]) <= LIMIT
             _, burst = complete({"command": ["python3", "-c",
                 "import os; os.write(1,b'x'*(5<<20)); os.write(2,b'y'*(3<<20))"],
                 "output_tail": True, "timeout_ms": 60000})
             for stream, size in (("stdout", 5 << 20), ("stderr", 3 << 20)):
                 assert burst.get(stream + "_offset", 0) + len(burst[stream]) == size, stream
+            assert not burst["stdout"] and 0 < len(burst["stderr"]) <= LIMIT
             path, tail = complete(payload)
             assert (
                 tail["output_truncated"]
@@ -125,8 +128,8 @@ def main():
             ), "true tail lost"
             assert len((tail["stdout"] + tail["stderr"]).encode()) <= LIMIT
 
-            def replay():
-                events = request("GET", path + "/events", raw=True)
+            def replay(execution_path, snapshot):
+                events = request("GET", execution_path + "/events", raw=True)
                 parsed = [
                     block.splitlines()
                     for block in events.split("\n\n")
@@ -138,21 +141,29 @@ def main():
                     and parsed[-1][1] == "event: complete"
                     and parsed[0][1] == "event: truncated"
                 ), ids[:4]
-                output = "".join(
-                    json.loads(b[2][6:])["data"]
-                    for b in parsed
-                    if b[1] == "event: stdout"
-                )
-                assert output == tail["stdout"]
+                for stream in ("stdout", "stderr"):
+                    output = "".join(
+                        json.loads(b[2][6:])["data"]
+                        for b in parsed
+                        if b[1] == "event: " + stream
+                    )
+                    assert output == snapshot[stream]
+                mid = len(ids) // 2
+                resumed = request("GET", execution_path + "/events", raw=True,
+                                  headers={"Last-Event-ID": str(ids[mid])})
+                assert [int(line[4:]) for line in resumed.splitlines()
+                        if line.startswith("id: ")] == ids[mid + 1:]
                 return ids
 
-            ids = replay()
+            ids = replay(path, tail)
+            managed_ids = replay(managed_path, managed)
             stop(daemon)
             daemon = start()
             assert (
                 request("GET", path) == tail
                 and request("GET", managed_path) == managed
-                and replay() == ids
+                and replay(path, tail) == ids
+                and replay(managed_path, managed) == managed_ids
             )
             assert request("POST", base + "/executions", payload)["id"] == tail["id"]
             try:

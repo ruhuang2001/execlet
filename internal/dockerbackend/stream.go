@@ -9,11 +9,12 @@ import (
 const bufferCap = 1 << 20
 
 type bufferedStream struct {
-	mu     sync.Mutex
-	cond   *sync.Cond
-	buf    bytes.Buffer
-	closed bool
-	gap    *outputGap
+	mu      sync.Mutex
+	cond    *sync.Cond
+	buf     bytes.Buffer
+	closed  bool
+	waiting bool
+	gap     *outputGap
 }
 
 type outputGap int64
@@ -63,7 +64,10 @@ func (b *bufferedStream) Read(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for b.buf.Len() == 0 && b.gap == nil && !b.closed {
+		b.waiting = true
+		b.cond.Broadcast()
 		b.cond.Wait()
+		b.waiting = false
 	}
 	if b.gap != nil {
 		gap := b.gap
@@ -78,6 +82,14 @@ func (b *bufferedStream) Read(p []byte) (int, error) {
 	b.buf.Next(n)
 	b.cond.Broadcast()
 	return n, nil
+}
+
+func (b *bufferedStream) waitForNextRead() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for !b.closed && (!b.waiting || b.buf.Len() != 0 || b.gap != nil) {
+		b.cond.Wait()
+	}
 }
 
 func (b *bufferedStream) Close() error {

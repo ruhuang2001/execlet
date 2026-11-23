@@ -33,6 +33,7 @@ type job struct {
 	exit           int
 	reason         string
 	stdout, stderr output
+	tail           *jobTail
 }
 type output struct {
 	changed chan struct{}
@@ -167,7 +168,6 @@ func (s *server) start(r protocol.Request, terminal bool) (*job, error) {
 	j := &job{changed: make(chan struct{}, 1)}
 	j.stdout.changed, j.stderr.changed = j.changed, j.changed
 
-	j.stdout.rolling, j.stderr.rolling = r.OutputTail, r.OutputTail
 	var readDone chan struct{}
 	if terminal {
 		j.stdout.rolling = true
@@ -194,6 +194,10 @@ func (s *server) start(r protocol.Request, terminal bool) (*job, error) {
 		go func() { defer close(readDone); _, _ = io.Copy(&j.stdout, f) }()
 	} else {
 		cmd.Stdout, cmd.Stderr = &j.stdout, &j.stderr
+		if r.OutputTail {
+			j.tail = &jobTail{changed: j.changed}
+			cmd.Stdout, cmd.Stderr = tailWriter{j.tail, false}, tailWriter{j.tail, true}
+		}
 		cmd.Stdin = strings.NewReader(r.Stdin)
 		if err := cmd.Start(); err != nil {
 			return nil, err
@@ -338,6 +342,10 @@ func (j *job) snapshot(r protocol.Request) protocol.Result {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	out := protocol.Result{PID: j.pid, Done: j.done, ExitCode: j.exit, Reason: j.reason}
+	if j.tail != nil {
+		j.tail.read(r, &out)
+		return out
+	}
 	out.Stdout, out.Next = j.stdout.read(r.Offset)
 	out.Stderr, out.ErrNext = j.stderr.read(r.ErrOffset)
 	return out

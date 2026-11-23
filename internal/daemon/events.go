@@ -148,15 +148,11 @@ func (l *eventLog) resumeOutput(kind EventType, offset int64) {
 		}
 		return
 	}
-	last := len(l.events) - 1
-	for last >= 0 && l.events[last].Type != kind {
-		last--
-	}
-	if last >= 0 {
-		for i := range last + 1 {
+	if l.outputEvents > 0 {
+		for i := range l.events {
 			l.dropOutputLocked(i)
 		}
-		l.markPrefixLocked(last + 1)
+		l.markPrefixLocked(len(l.events))
 	} else if !l.truncated {
 		l.appendLocked(Event{Type: EventTruncated, LimitBytes: MaxOutputBytes})
 		l.truncated = true

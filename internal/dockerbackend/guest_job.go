@@ -46,10 +46,10 @@ func (b *Backend) execGuest(ctx context.Context, g *guestSession, spec daemon.Ex
 		}
 	}
 	p := &guestProcess{g: g, id: id, pid: result.PID, stdout: newBufferedStream(), stderr: newBufferedStream(), done: make(chan struct{})}
-	go p.follow()
+	go p.follow(spec.OutputTail)
 	return p, nil
 }
-func (p *guestProcess) follow() {
+func (p *guestProcess) follow(orderedTail bool) {
 	defer close(p.done)
 	defer func() { _ = p.stdout.Close() }()
 	defer func() { _ = p.stderr.Close() }()
@@ -75,14 +75,20 @@ func (p *guestProcess) follow() {
 		}
 		outEnd := req.Offset + int64(len(result.Stdout))
 		errEnd := req.ErrOffset + int64(len(result.Stderr))
-		if result.Next > outEnd {
+		if result.Next > outEnd || result.ErrNext > errEnd {
 			p.stdout.resumeAt(result.Next - int64(len(result.Stdout)))
-		}
-		if result.ErrNext > errEnd {
 			p.stderr.resumeAt(result.ErrNext - int64(len(result.Stderr)))
+			p.stdout.waitForNextRead()
+			p.stderr.waitForNextRead()
 		}
 		_, _ = p.stdout.Write(result.Stdout)
+		if orderedTail && len(result.Stdout) != 0 {
+			p.stdout.waitForNextRead()
+		}
 		_, _ = p.stderr.Write(result.Stderr)
+		if orderedTail && len(result.Stderr) != 0 {
+			p.stderr.waitForNextRead()
+		}
 		req.Offset = max(outEnd, result.Next)
 		req.ErrOffset = max(errEnd, result.ErrNext)
 		if result.Done && len(result.Stdout) == 0 && len(result.Stderr) == 0 {

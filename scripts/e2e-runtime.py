@@ -205,12 +205,18 @@ def main():
                     tf.addfile(directory)
                     entry_header = tarfile.TarInfo("workspace/sample")
                     entry_header.size = len(content)
+                    entry_header.mtime = 1700000000
                     tf.addfile(entry_header, io.BytesIO(content))
+                    link = tarfile.TarInfo("workspace/link")
+                    link.type, link.linkname, link.mtime = tarfile.SYMTYPE, "sample", 1700000123
+                    tf.addfile(link)
                 request("PUT", base + "/files/archive?path=/tmp", raw.getvalue())
                 downloaded = request("GET", base + "/files/archive?path=/tmp/workspace")
                 with tarfile.open(fileobj=io.BytesIO(downloaded)) as tf:
                     assert tf.extractfile("workspace/sample").read() == content
                     assert tf.getmember("workspace").mtime == directory.mtime
+                    assert tf.getmember("workspace/sample").mtime == entry_header.mtime
+                    assert tf.getmember("workspace/link").mtime == link.mtime
                 assert (
                     cli(
                         "docker", "exec", cid, "sha256sum", "/tmp/workspace/sample"

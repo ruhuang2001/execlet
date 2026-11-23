@@ -16,6 +16,7 @@ import (
 
 	"github.com/ruhuang2001/tiny-sandbox/internal/filearchive"
 	"github.com/ruhuang2001/tiny-sandbox/internal/guestprotocol"
+	"golang.org/x/sys/unix"
 )
 
 func transfer(args []string) error {
@@ -95,7 +96,7 @@ func extractTar(dir string, src io.Reader) error {
 				return err
 			}
 			if h.Typeflag == tar.TypeSymlink {
-				err = root.Symlink(h.Linkname, name)
+				err = restoreSymlink(root, name, h)
 			} else {
 				err = root.Link(h.Linkname, name)
 			}
@@ -117,6 +118,22 @@ func extractTar(dir string, src io.Reader) error {
 		}
 	}
 	return nil
+}
+func restoreSymlink(root *os.Root, name string, h *tar.Header) error {
+	parent, err := root.OpenFile(filepath.Dir(name), unix.O_PATH|unix.O_DIRECTORY, 0)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = parent.Close() }()
+	fd, base := int(parent.Fd()), filepath.Base(name)
+	if err := unix.Symlinkat(h.Linkname, fd, base); err != nil {
+		return err
+	}
+	t, err := unix.TimeToTimespec(h.ModTime)
+	if err != nil {
+		return err
+	}
+	return unix.UtimesNanoAt(fd, base, []unix.Timespec{t, t}, unix.AT_SYMLINK_NOFOLLOW)
 }
 func replaceRegular(root *os.Root, name string, h *tar.Header, r io.Reader) error {
 	if f, err := root.Lstat(name); err == nil && f.IsDir() {

@@ -129,6 +129,9 @@ func restoreSymlink(root *os.Root, name string, h *tar.Header) error {
 	if err := unix.Symlinkat(h.Linkname, fd, base); err != nil {
 		return err
 	}
+	if err := unix.Fchownat(fd, base, h.Uid, h.Gid, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return err
+	}
 	t, err := unix.TimeToTimespec(h.ModTime)
 	if err != nil {
 		return err

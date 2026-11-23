@@ -28,17 +28,18 @@ type eventLog struct {
 	mu      sync.Mutex
 	changed chan struct{}
 
-	keepTail      bool
-	events        []Event
-	nextID        uint64
-	retained      int
-	outputEvents  int
-	truncated     bool
-	complete      bool
-	stdout        strings.Builder
-	stderr        strings.Builder
-	indexed       int
-	onFirstOutput func()
+	keepTail                   bool
+	events                     []Event
+	nextID                     uint64
+	stdoutOffset, stderrOffset int64
+	retained                   int
+	outputEvents               int
+	truncated                  bool
+	complete                   bool
+	stdout                     strings.Builder
+	stderr                     strings.Builder
+	indexed                    int
+	onFirstOutput              func()
 }
 
 func newEventLog() *eventLog {
@@ -107,7 +108,13 @@ func (l *eventLog) makeRoomForTailLocked(size int) {
 		first++
 	}
 	for l.retained+size > MaxOutputBytes || l.outputEvents >= MaxOutputEvents {
-		l.retained -= len(l.events[first].Data)
+		dropped := l.events[first]
+		if dropped.Type == EventStdout {
+			l.stdoutOffset += int64(len(dropped.Data))
+		} else {
+			l.stderrOffset += int64(len(dropped.Data))
+		}
+		l.retained -= len(dropped.Data)
 		l.events[first].Data = nil
 		l.outputEvents--
 		first++
@@ -219,10 +226,11 @@ func (l *eventLog) retainedBytes() int {
 	return l.retained
 }
 
-func (l *eventLog) output() (stdout, stderr string, truncated bool) {
+func (l *eventLog) output() (stdout, stderr string, truncated bool, stdoutOffset, stderrOffset int64) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.outputLocked()
+	stdout, stderr, truncated = l.outputLocked()
+	return stdout, stderr, truncated, l.stdoutOffset, l.stderrOffset
 }
 
 func (l *eventLog) outputLocked() (stdout, stderr string, truncated bool) {

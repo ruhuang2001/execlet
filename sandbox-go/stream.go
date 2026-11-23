@@ -15,6 +15,14 @@ import (
 )
 
 func (c *Client) StreamExecution(ctx context.Context, sandboxID, executionID string, onEvent func(Event) error) (*Execution, error) {
+	return c.streamExecution(ctx, sandboxID, executionID, onEvent, true)
+}
+
+func (c *Client) ObserveExecution(ctx context.Context, sandboxID, executionID string) (*Execution, error) {
+	return c.streamExecution(ctx, sandboxID, executionID, nil, false)
+}
+
+func (c *Client) streamExecution(ctx context.Context, sandboxID, executionID string, onEvent func(Event) error, cancelRemote bool) (*Execution, error) {
 	if onEvent == nil {
 		onEvent = func(Event) error { return nil }
 	}
@@ -30,6 +38,9 @@ func (c *Client) StreamExecution(ctx context.Context, sandboxID, executionID str
 			return nil, err
 		}
 		if ctx.Err() != nil {
+			if !cancelRemote {
+				return nil, ctx.Err()
+			}
 			return c.cancelAfterContext(ctx, sandboxID, executionID, err)
 		}
 		if err == nil || !retryableStreamError(err) {
@@ -46,6 +57,9 @@ func (c *Client) StreamExecution(ctx context.Context, sandboxID, executionID str
 			}
 		}
 		if !sleep(ctx, backoff(failures-1, 0)) {
+			if !cancelRemote {
+				return nil, ctx.Err()
+			}
 			return c.cancelAfterContext(ctx, sandboxID, executionID, err)
 		}
 	}

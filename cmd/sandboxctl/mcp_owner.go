@@ -50,7 +50,13 @@ func (s *sandboxTools) ownerScope(in *invocation) (string, error) {
 		slices.Sort(values)
 		return slices.Compact(values)
 	}
-	scope := []any{"sandboxctl-mcp-v1", workspace, strings.TrimRight(u.String(), "/"), cmp.Or(in.globals.apiKey, os.Getenv("SANDBOX_API_KEY")), sorted(s.images), sorted(s.networks)}
+	endpoint := []string{strings.TrimRight(u.String(), "/"), cmp.Or(in.globals.apiKey, os.Getenv("SANDBOX_API_KEY"))}
+	origin, err := json.Marshal(endpoint)
+	if err != nil {
+		return "", err
+	}
+	s.origin = fmt.Sprintf("%x", sha256.Sum256(origin))
+	scope := []any{"sandboxctl-mcp-v1", workspace, endpoint[0], endpoint[1], sorted(s.images), sorted(s.networks)}
 	data, err := json.Marshal(scope)
 	if err != nil {
 		return "", err
@@ -69,7 +75,7 @@ func (s *sandboxTools) saveReceipt(id string) error {
 		return err
 	}
 	defer func() { _ = os.Remove(tmp.Name()) }()
-	_, err = tmp.WriteString(s.scope)
+	_, err = tmp.WriteString(s.scope + "\n" + s.origin)
 	if err = errors.Join(err, tmp.Sync(), tmp.Close()); err != nil {
 		return err
 	}
@@ -77,6 +83,10 @@ func (s *sandboxTools) saveReceipt(id string) error {
 }
 
 func (s *sandboxTools) openReceipt(ctx context.Context, id string) (*os.File, error) {
+	return s.lockReceipt(ctx, id, s.scope)
+}
+
+func (s *sandboxTools) lockReceipt(ctx context.Context, id, authority string) (*os.File, error) {
 	f, err := os.OpenFile(s.receiptPath(id), os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, errUnknownSandbox
@@ -111,11 +121,16 @@ func (s *sandboxTools) openReceipt(ctx context.Context, id string) (*os.File, er
 	if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
 		return nil, errUnknownSandbox
 	}
-	content, err := io.ReadAll(io.LimitReader(f, 65))
+	content, err := io.ReadAll(io.LimitReader(f, 130))
 	if err != nil {
 		return nil, err
 	}
-	if !bytes.Equal(content, []byte(s.scope)) {
+	scope, origin, _ := bytes.Cut(content, []byte("\n"))
+	allowed := string(scope) == s.scope && (len(origin) == 0 || string(origin) == s.origin)
+	if authority == "" {
+		allowed = allowed || string(origin) == s.origin
+	}
+	if !allowed {
 		return nil, errUnknownSandbox
 	}
 	ok = true
@@ -158,4 +173,47 @@ func (s *sandboxTools) renew(ctx context.Context, id string) error {
 		return toolError("sandbox_not_running", "cannot renew sandbox: "+err.Error())
 	}
 	return toolError("sandbox_not_running", "sandbox is "+string(sb.State))
+}
+
+func (s *sandboxTools) gcReceipts(ctx context.Context) {
+	for {
+		s.cleanReceipts(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Minute):
+		}
+	}
+}
+
+func (s *sandboxTools) cleanReceipts(ctx context.Context) {
+	owners, err := filepath.Glob(filepath.Join(s.cache, "*.owner"))
+	if err != nil || len(owners) == 0 {
+		return
+	}
+	sandboxes, err := s.client.ListSandboxes(ctx)
+	if err != nil {
+		return
+	}
+	live := make(map[string]bool, len(sandboxes))
+	for _, sb := range sandboxes {
+		live[sb.ID] = sb.State != sandbox.StateKilled
+	}
+	for _, name := range owners {
+		id := strings.TrimSuffix(filepath.Base(name), ".owner")
+		if live[id] {
+			continue
+		}
+		file, err := s.lockReceipt(ctx, id, "")
+		if err != nil {
+			continue
+		}
+		if _, known := live[id]; known {
+			_, err = s.client.DestroySandbox(ctx, id)
+		}
+		if err == nil || errors.Is(err, sandbox.ErrNotFound) {
+			_ = s.forgetReceipt(id)
+		}
+		_ = file.Close()
+	}
 }

@@ -28,38 +28,28 @@ func (s *sandboxTools) runTool(ctx context.Context, in runInput) (toolOutput, er
 	}
 	wait, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
-	tick := time.NewTicker(200 * time.Millisecond)
-	defer tick.Stop()
-	for ex.State == "running" {
-		select {
-		case <-wait.Done():
-			if ctx.Err() != nil {
-				return toolOutput{}, ctx.Err()
-			}
-			return executionResult(ex, nil), nil
-		case <-tick.C:
-			next, err := s.client.GetExecution(wait, in.SandboxID, ex.ID)
-			if wait.Err() != nil && ctx.Err() == nil {
-				return executionResult(ex, nil), nil
-			}
-			if err != nil {
-				return toolOutput{}, err
-			}
-			ex = next
+	if ex.State == "running" {
+		final, err := s.client.ObserveExecution(wait, in.SandboxID, ex.ID)
+		if errors.Is(wait.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
+			return executionResult(ex, getInput{}), nil
 		}
+		if err != nil {
+			return toolOutput{}, err
+		}
+		ex = final
 	}
-	return executionResult(ex, nil), nil
+	return executionResult(ex, getInput{}), nil
 }
 
 func (s *sandboxTools) getTool(ctx context.Context, in getInput) (toolOutput, error) {
-	if in.Offset != nil && *in.Offset < 0 {
+	if (in.Offset != nil && *in.Offset < 0) || (in.StdoutOffset != nil && *in.StdoutOffset < 0) || (in.StderrOffset != nil && *in.StderrOffset < 0) {
 		return toolOutput{}, toolError("invalid_request", "offset must be non-negative")
 	}
 	ex, err := s.client.GetExecution(ctx, in.SandboxID, in.ExecutionID)
 	if err != nil {
 		return toolOutput{}, err
 	}
-	return executionResult(ex, in.Offset), nil
+	return executionResult(ex, in), nil
 }
 
 func (s *sandboxTools) cancelTool(ctx context.Context, in executionInput) (toolOutput, error) {
@@ -72,45 +62,49 @@ func (s *sandboxTools) cancelTool(ctx context.Context, in executionInput) (toolO
 
 const mcpPage = 64 << 10
 
-func executionResult(ex *sandbox.Execution, offset *int) toolOutput {
+func executionResult(ex *sandbox.Execution, in getInput) toolOutput {
 	out := map[string]any{"execution_id": ex.ID, "state": ex.State}
 	summary := "Execution " + ex.ID + " is " + ex.State
-	if ex.State == "running" && offset == nil {
+	if ex.State == "running" && in.Offset == nil && in.StdoutOffset == nil && in.StderrOffset == nil {
 		return toolOutput{summary, out}
 	}
 	if ex.ExitCode != nil {
 		summary += fmt.Sprintf(" (exit %d)", *ex.ExitCode)
 	}
-	length := max(len(ex.Stdout), len(ex.Stderr))
-	start, end := max(0, length-mcpPage), length
-	truncated := start > 0
-	next := length
-	if offset != nil {
-		start = min(*offset, length)
-		end = length
-		if length-start > mcpPage {
-			end = start + mcpPage
-			for _, stream := range []string{ex.Stdout, ex.Stderr} {
-				if end < len(stream) && !utf8.RuneStart(stream[end]) {
-					end = start + mcpPage - (utf8.UTFMax - 1)
-					break
-				}
+	stdoutRequest, stderrRequest := in.StdoutOffset, in.StderrOffset
+	if stdoutRequest == nil {
+		stdoutRequest = in.Offset
+	}
+	if stderrRequest == nil {
+		stderrRequest = in.Offset
+	}
+	sharedLimit := int64(mcpPage)
+	if in.Offset != nil && in.StdoutOffset == nil && in.StderrOffset == nil {
+		for _, stream := range []struct {
+			text string
+			base int64
+		}{{ex.Stdout, ex.StdoutOffset}, {ex.Stderr, ex.StderrOffset}} {
+			pos := max(0, *in.Offset-stream.base)
+			if pos < int64(len(stream.text))-mcpPage && !utf8.RuneStart(stream.text[pos+mcpPage]) {
+				sharedLimit -= utf8.UTFMax - 1
+				break
 			}
 		}
-		next = end
-		truncated = end < length
-	} else if truncated {
-		next = 0
 	}
-	window := func(stream string) string {
-		from, to := start, end
-		if offset == nil {
-			from = max(0, len(stream)-mcpPage)
-		}
-		return stream[runeBoundary(stream, from):runeBoundary(stream, to)]
+	stdout, so, sn, sc, sl := outputWindow(ex.Stdout, ex.StdoutOffset, stdoutRequest, sharedLimit)
+	stderr, eo, en, ec, el := outputWindow(ex.Stderr, ex.StderrOffset, stderrRequest, sharedLimit)
+	truncated := sc || ec
+	next := max(sn, en)
+	if in.Offset == nil && (sc || ec) {
+		next = min(ex.StdoutOffset, ex.StderrOffset)
 	}
-	stdout, stderr := window(ex.Stdout), window(ex.Stderr)
+	if sc && ec && in.Offset != nil {
+		next = min(sn, en)
+	}
 	out["stdout"], out["stderr"] = stdout, stderr
+	out["stdout_start_offset"], out["stderr_start_offset"] = so, eo
+	out["next_stdout_offset"], out["next_stderr_offset"] = sn, en
+	out["output_lost"] = sl || el
 	out["exit_code"], out["termination_reason"] = ex.ExitCode, ex.TerminationReason
 	out["output_truncated"], out["next_offset"] = truncated || ex.OutputTruncated, next
 	var display strings.Builder
@@ -138,4 +132,24 @@ func runeBoundary(s string, offset int) int {
 		offset++
 	}
 	return offset
+}
+
+func outputWindow(stream string, base int64, request *int64, limit int64) (text string, start, next int64, clipped, lost bool) {
+	if request == nil {
+		from := runeBoundary(stream, max(0, len(stream)-mcpPage))
+		next = base + int64(len(stream))
+		if from > 0 {
+			next = base
+		}
+		return stream[from:], base + int64(from), next, from > 0, false
+	}
+	from := runeBoundary(stream, int(min(int64(len(stream)), max(0, *request-base))))
+	to := runeBoundary(stream, min(len(stream), from+int(limit)))
+	if to-from > mcpPage {
+		to = from + mcpPage
+		for !utf8.RuneStart(stream[to]) {
+			to--
+		}
+	}
+	return stream[from:to], base + int64(from), base + int64(to), to < len(stream), *request < base
 }

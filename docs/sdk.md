@@ -251,6 +251,8 @@ new key to start a new execution with a different timeout.
 
 ## Streaming
 
+`ObserveExecution(ctx, sandboxID, executionID)` watches the SSE stream for completion. Expiration or cancellation of its context closes local observation and leaves the remote command available to inspect or cancel.
+
 - `StreamExecution` connects to the event endpoint and calls `onEvent` for `stdout`, `stderr`, `truncated`, and `complete`, in order, each exactly once.
 - On disconnect it reconnects with `Last-Event-ID` set to the last delivered ID and drops any event with an ID not greater than it.
 - Reconnect attempts use the retry backoff. The current implementation allows up to `MaxRetries` reconnects during one `StreamExecution` call; receiving output does not reset this budget.

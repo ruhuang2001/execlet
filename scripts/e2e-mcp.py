@@ -65,7 +65,12 @@ def run(tmp, evidence, record):
         "commit": revision,
         "project": "tiny-sandbox/sandbox-python",
     }
-    (work / ".gitignore").write_text("*.ignored\n")
+    (work / ".gitignore").write_text("*.ignored\n**/private.bin\n")
+    for name in ("private.bin", "ignored/nested/private.bin", "ignored/private.bin"):
+        f = work / name
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("ignored")
+
     (work / ".env").write_text("excluded")
     (work / "sample.ignored").write_text("excluded")
     (work / "outside-link").symlink_to(tmp / "sandboxctl")
@@ -76,6 +81,8 @@ def run(tmp, evidence, record):
     regression = correct.replace("round(value * 1000)", "round(value * 100)", 1)
     assert regression != correct
     source.write_text(regression)
+    cache_home = tmp / "client-home"
+    cache_home.mkdir()
     env = dict(os.environ, SANDBOX_DOMAIN=domain, SANDBOX_API_KEY="")
     with contextlib.ExitStack() as stack:
         log = stack.enter_context((evidence / "daemon.log").open("w"))
@@ -114,7 +121,7 @@ def run(tmp, evidence, record):
                 text=True,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
-                env={**env, "SANDBOX_DOMAIN": endpoint},
+                env={**env, "SANDBOX_DOMAIN": endpoint, "HOME": str(cache_home)},
             )
             stack.callback(proc.wait)
             stack.callback(proc.stdin.close)
@@ -231,15 +238,20 @@ def run(tmp, evidence, record):
                 "python3",
                 "-c",
                 "from pathlib import Path; assert not any(Path(p).exists() for p in "
-                "['.git', '.env', 'sample.ignored', 'outside-link', 'sandbox-python/remove me'])",
+                "['.git', '.env', 'sample.ignored', 'private.bin', 'ignored/private.bin', 'ignored/nested/private.bin', 'outside-link', 'sandbox-python/remove me'])",
             ],
         )
         assert gone["exit_code"] == 0, gone
         assert tool("write_file", path="/tmp/note", content="hello")["type"] == "file"
         assert tool("read_file", path="/tmp/note")["content"] == "hello"
-        manifest = pathlib.Path.home() / ".cache/tiny-sandbox/mcp" / (sb + ".json")
+        manifest = cache_home / ".cache/tiny-sandbox/mcp" / (sb + ".json")
+        assert tool("run_command", command=["touch", "guest-only"])["exit_code"] == 0
         manifest.write_text("{interrupted")
         assert tool("sync_workspace", reset=True)["uploaded"] == initial["uploaded"] - 1
+        assert (
+            tool("run_command", command=["test", "!", "-e", "guest-only"])["exit_code"]
+            == 0
+        )
         mixed = tool(
             "run_command",
             command=["python3", "-c", "print('a'*65535+'界'+'b'*2000,end='')"],
@@ -311,10 +323,57 @@ def run(tmp, evidence, record):
             "terminal_markers": ["stdout", "stderr"],
         }
         started = time.monotonic()
-        live = tool("run_command", command=["sh", "-c", "echo started; exec sleep 85"])
+        live = tool(
+            "run_command",
+            command=[
+                "python3",
+                "-uc",
+                "import pathlib,sys,time;print('started');"
+                "exec('while not pathlib.Path(\"/tmp/output-go\").exists(): time.sleep(.05)');"
+                "print('a'*1200000+'first');"
+                "exec('while not pathlib.Path(\"/tmp/output-more\").exists(): time.sleep(.05)');"
+                "print('b'*1250000+'second');time.sleep(90)",
+            ],
+        )
         assert live["state"] == "running" and time.monotonic() - started < 70, live
         polled = tool("get_execution", execution_id=live["execution_id"], offset=0)
         assert polled["state"] == "running" and "started" in polled["stdout"]
+        tool("write_file", path="/tmp/output-go", content="go")
+
+        def snapshot(marker):
+            for _ in range(100):
+                value = get(
+                    domain
+                    + "/v1/sandboxes/"
+                    + sb
+                    + "/executions/"
+                    + live["execution_id"]
+                )
+                if value["stdout"].endswith(marker + "\n"):
+                    return value
+                time.sleep(0.02)
+            raise AssertionError(marker)
+
+        snap = snapshot("first")
+        first = tool("get_execution", execution_id=live["execution_id"], offset=0)
+        assert (
+            first["output_lost"]
+            and first["stdout_start_offset"] == snap["stdout_offset"] > 0
+        )
+        cursor = first["next_offset"]
+        tool("write_file", path="/tmp/output-more", content="go")
+        snap = snapshot("second")
+        resumed = tool(
+            "get_execution", execution_id=live["execution_id"], offset=cursor
+        )
+        assert (
+            resumed["output_lost"]
+            and resumed["stdout_start_offset"] == snap["stdout_offset"] > cursor
+        )
+        assert (
+            resumed["stdout"] == snap["stdout"][:65536]
+            and resumed["next_offset"] == snap["stdout_offset"] + 65536
+        )
         terminal = tool("cancel_execution", execution_id=live["execution_id"])
         assert (
             terminal["state"] == "completed"
@@ -326,6 +385,12 @@ def run(tmp, evidence, record):
         after = get(domain + "/v1/sandboxes/" + sb)["expires_at"]
         assert after[:19] > before[:19]
         record["renewal"] = {"before": before, "after": after}
+        with urllib.request.urlopen(
+            urllib.request.Request(
+                domain + "/v1/sandboxes/" + sb + "/pause", method="POST"
+            )
+        ) as response:
+            assert json.load(response)["state"] == "paused"
         assert tool("destroy_sandbox")["state"] == "killed"
         records = get(domain + "/v1/sandboxes")["sandboxes"]
         containers = shell(
@@ -337,7 +402,7 @@ def run(tmp, evidence, record):
             capture_output=True,
             text=True,
         ).stdout.splitlines()
-        manifest = pathlib.Path.home() / ".cache/tiny-sandbox/mcp" / (sb + ".json")
+        manifest = cache_home / ".cache/tiny-sandbox/mcp" / (sb + ".json")
         record["cleanup"] = {
             "active_ids": [row["id"] for row in records if row["state"] != "killed"],
             "records": [(row["id"], row["state"]) for row in records],
@@ -417,6 +482,32 @@ def run(tmp, evidence, record):
         )
         assert not (manifest.parent / (stale + ".owner")).exists()
         assert not (manifest.parent / (stale + ".json")).exists()
+        disconnect(proc)
+        plain = tmp / "no-git"
+        (plain / "sub" / "deep").mkdir(parents=True)
+        (plain / ".gitignore").write_text("**/private.bin\n")
+        for name in ["private.bin", "sub/private.bin", "sub/deep/private.bin", "keep"]:
+            (plain / name).touch()
+        proc, _ = connect(plain, ttl=1)
+        expired = call("create_sandbox")["sandbox_id"]
+        upload = call("sync_workspace", sandbox_id=expired)
+        assert upload["uploaded"] == 2, upload
+        disconnect(proc)
+        until = time.monotonic() + 10
+        while time.monotonic() < until:
+            if get(domain + "/v1/sandboxes/" + expired)["state"] == "killed":
+                break
+            time.sleep(0.1)
+        proc, _ = connect(work)
+        until = time.monotonic() + 5
+        owner_path = manifest.parent / (expired + ".owner")
+        while owner_path.exists() and time.monotonic() < until:
+            time.sleep(0.05)
+        assert (
+            not owner_path.exists()
+            and not (manifest.parent / (expired + ".json")).exists()
+        )
+        record["expired_cache_collected_after_restart"] = True
         disconnect(proc)
         proc, _ = connect(ttl=5)
         ttl_sandbox = call("create_sandbox")
@@ -528,22 +619,30 @@ def archive_limit_cases(work, sid, call, tool, record):
         oversized.unlink()
         for n in range(4097):
             (batch / str(n)).touch()
-        msg = call("sync_workspace", error=True, sandbox_id=sid)
-        assert "payload_too_large" in msg and "4096" in msg, msg
+        result = tool("sync_workspace")
+        assert result["uploaded"] == 4097 and result["deleted"] == 1, result
         assert (
-            tool("run_command", command=["test", "!", "-e", "limits"])["exit_code"] == 0
+            tool(
+                "run_command",
+                command=[
+                    "sh",
+                    "-c",
+                    "test -f limits/batch/4096 && echo edited >> limits/batch/0",
+                ],
+            )["exit_code"]
+            == 0
         )
         (work / "sandbox-python/remove me").write_text("old")
         shutil.rmtree(batch)
         batch.mkdir()
         for n in range(108):
             (batch / f"item {n}").touch()
-        assert tool("sync_workspace")["uploaded"] == 108
+        assert tool("sync_workspace")["uploaded"] == 109
         shutil.rmtree(batch)
         assert tool("sync_workspace")["deleted"] == 108
         record["archive_limits"] = {
             "extracted_bytes_rejected": (16 << 20) + 1,
-            "members_rejected": 4097,
+            "members_uploaded": 4097,
             "deleted_in_batches": 108,
         }
     finally:

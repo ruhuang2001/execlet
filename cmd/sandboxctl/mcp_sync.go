@@ -2,7 +2,6 @@ package main
 
 import (
 	"archive/tar"
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -13,6 +12,7 @@ import (
 	"io/fs"
 	"maps"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"slices"
@@ -22,11 +22,16 @@ import (
 )
 
 type workspaceDelta struct {
-	hashes            map[string]string
-	archive           bytes.Buffer
-	dirs              map[string]bool
-	uploaded, skipped int
-	total             int64
+	hashes                 map[string]string
+	batches                []string
+	spool                  string
+	writer                 *tar.Writer
+	file                   *os.File
+	batchFiles, batchNames int
+	batchBytes             int64
+	dirs                   map[string]bool
+	uploaded, skipped      int
+	total                  int64
 }
 
 func (s *sandboxTools) manifestPath(id string) string { return filepath.Join(s.cache, id+".json") }
@@ -127,20 +132,74 @@ func ignored(name string, isDir bool, rules []ignoreRule) bool {
 		if rule.rooted {
 			candidate = name
 		}
-		if ok, _ := path.Match(rule.pattern, candidate); ok {
+		if globMatch(rule.pattern, candidate) {
 			exclude = !rule.include
 		}
 	}
 	return exclude
 }
 
-func (s *sandboxTools) scan(ctx context.Context, previous map[string]string, reset bool) (*workspaceDelta, error) {
-	rules, err := s.ignoreRules()
+func globMatch(pattern, name string) bool {
+	parts := strings.Split(pattern, "/")
+	names := strings.Split(name, "/")
+	matched := make([]bool, len(names)+1)
+	matched[0] = true
+	for _, part := range parts {
+		if part == "**" {
+			for i := range names {
+				matched[i+1] = matched[i+1] || matched[i]
+			}
+			continue
+		}
+		for i := len(names) - 1; i >= 0; i-- {
+			ok, _ := path.Match(part, names[i])
+			matched[i+1] = matched[i] && ok
+		}
+		matched[0] = false
+	}
+	return matched[len(names)]
+}
+
+func (s *sandboxTools) gitFiles(ctx context.Context) (map[string]bool, error) {
+	probe := exec.CommandContext(ctx, "git", "-C", s.workspace.Name(), "rev-parse", "--is-inside-work-tree")
+	if out, err := probe.Output(); err != nil || strings.TrimSpace(string(out)) != "true" {
+		return nil, ctx.Err()
+	}
+	cmd := exec.CommandContext(ctx, "git", "-C", s.workspace.Name(), "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", ".")
+	out, err := cmd.Output()
 	if err != nil {
 		return nil, err
 	}
-	d := &workspaceDelta{hashes: map[string]string{}, dirs: map[string]bool{}}
-	writer := tar.NewWriter(&d.archive)
+	files := map[string]bool{}
+	for name := range strings.SplitSeq(string(out), "\x00") {
+		if name != "" {
+			files[name] = true
+			for dir := path.Dir(name); dir != "." && !files[dir]; dir = path.Dir(dir) {
+				files[dir] = true
+			}
+		}
+	}
+	return files, nil
+}
+
+func (s *sandboxTools) scan(ctx context.Context, previous map[string]string, reset bool, spool string) (*workspaceDelta, error) {
+	files, err := s.gitFiles(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var rules []ignoreRule
+	if files == nil {
+		rules, err = s.ignoreRules()
+		if err != nil {
+			return nil, err
+		}
+	}
+	d := &workspaceDelta{spool: spool, hashes: map[string]string{}, dirs: map[string]bool{}}
+	defer func() {
+		if d.file != nil {
+			_ = d.file.Close()
+		}
+	}()
 	err = fs.WalkDir(s.workspace.FS(), ".", func(name string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -151,7 +210,7 @@ func (s *sandboxTools) scan(ctx context.Context, previous map[string]string, res
 		if name == "." {
 			return nil
 		}
-		if ignored(name, entry.IsDir(), rules) {
+		if ignored(name, entry.IsDir(), rules) || (files != nil && !files[name]) {
 			d.skipped++
 			if entry.IsDir() {
 				return fs.SkipDir
@@ -165,26 +224,18 @@ func (s *sandboxTools) scan(ctx context.Context, previous map[string]string, res
 			d.skipped++
 			return nil
 		}
-		return s.addWorkspaceFile(d, writer, name, previous[name], reset)
+		return s.addWorkspaceFile(d, name, previous[name], reset)
 	})
 	if err != nil {
 		return nil, err
 	}
-	if err := writer.Close(); err != nil {
+	if err := d.finishBatch(); err != nil {
 		return nil, err
-	}
-	if d.uploaded != 0 {
-		if _, err := filearchive.Parse(d.archive.Bytes()); err != nil {
-			if e, ok := errors.AsType[*filearchive.Error](err); ok && e.TooLarge {
-				return nil, toolError("payload_too_large", err.Error())
-			}
-			return nil, err
-		}
 	}
 	return d, nil
 }
 
-func (s *sandboxTools) addWorkspaceFile(d *workspaceDelta, w *tar.Writer, name, previous string, reset bool) error {
+func (s *sandboxTools) addWorkspaceFile(d *workspaceDelta, name, previous string, reset bool) error {
 	f, err := s.workspace.Open(name)
 	if err != nil {
 		return err
@@ -214,30 +265,64 @@ func (s *sandboxTools) addWorkspaceFile(d *workspaceDelta, w *tar.Writer, name, 
 		d.skipped++
 		return nil
 	}
+	if len(data) > filearchive.MaxExtractedBytes {
+		return toolError("payload_too_large", "workspace file exceeds 16 MiB extracted limit")
+	}
+	if d.batchFiles >= filearchive.MaxEntries || d.batchBytes+int64(len(data)) > filearchive.MaxExtractedBytes || d.batchNames+len(name) > filearchive.MaxPathBytes {
+		if err := d.finishBatch(); err != nil {
+			return err
+		}
+	}
+	if d.file == nil {
+		d.file, err = os.CreateTemp(d.spool, "archive-*")
+		if err != nil {
+			return err
+		}
+		d.writer = tar.NewWriter(d.file)
+		d.batches = append(d.batches, d.file.Name())
+	}
 	d.total += int64(len(data))
+	d.batchBytes += int64(len(data))
+	d.batchFiles++
+	d.batchNames += len(name)
 	d.uploaded++
-	if d.total > filearchive.MaxExtractedBytes {
-		return toolError("payload_too_large", "changed files exceed 16 MiB extracted limit")
-	}
-	if d.uploaded > filearchive.MaxEntries {
-		return toolError("payload_too_large", "changed files exceed 4096 archive members")
-	}
 	mode := int64(0644)
 	if info.Mode()&0111 != 0 {
 		mode = 0755
 	}
-	if err := w.WriteHeader(&tar.Header{Name: name, Mode: mode, Size: int64(len(data)), ModTime: info.ModTime(), Format: tar.FormatPAX}); err != nil {
+	if err := d.writer.WriteHeader(&tar.Header{Name: name, Mode: mode, Size: int64(len(data)), ModTime: info.ModTime(), Format: tar.FormatPAX}); err != nil {
 		return err
 	}
-	if _, err := w.Write(data); err != nil {
+	if _, err := d.writer.Write(data); err != nil {
 		return err
 	}
 	if dir := path.Dir(name); dir != "." {
 		d.dirs[dir] = true
 	}
-	if d.archive.Len() > filearchive.MaxBytes {
-		return toolError("payload_too_large", "archive exceeds 32 MiB encoded limit")
+	return nil
+}
+
+func (d *workspaceDelta) finishBatch() error {
+	if d.file == nil {
+		return nil
 	}
+	name := d.file.Name()
+	err := errors.Join(d.writer.Close(), d.file.Close())
+	d.file = nil
+	if err != nil {
+		return err
+	}
+	data, err := os.ReadFile(name)
+	if err != nil {
+		return err
+	}
+	if _, err := filearchive.Parse(data); err != nil {
+		if e, ok := errors.AsType[*filearchive.Error](err); ok && e.TooLarge {
+			return toolError("payload_too_large", e.Error())
+		}
+		return err
+	}
+	d.batchBytes, d.batchFiles, d.batchNames = 0, 0, 0
 	return nil
 }
 
@@ -250,7 +335,12 @@ func (s *sandboxTools) syncWorkspace(ctx context.Context, in syncInput) (toolOut
 			return toolOutput{}, err
 		}
 	}
-	d, err := s.scan(ctx, previous, in.Reset)
+	spool, err := os.MkdirTemp("", "tiny-mcp-sync-*")
+	if err != nil {
+		return toolOutput{}, err
+	}
+	defer func() { _ = os.RemoveAll(spool) }()
+	d, err := s.scan(ctx, previous, in.Reset, spool)
 	if err != nil {
 		return toolOutput{}, err
 	}
@@ -272,6 +362,11 @@ func (s *sandboxTools) syncWorkspace(ctx context.Context, in syncInput) (toolOut
 			pending[name] = ""
 		}
 		if err := s.saveManifest(in.SandboxID, pending); err != nil {
+			return toolOutput{}, err
+		}
+	}
+	if in.Reset {
+		if err := s.guestExec(ctx, in.SandboxID, []string{"rm", "-rf", "--", guestWorkspace}); err != nil {
 			return toolOutput{}, err
 		}
 	}
@@ -351,10 +446,16 @@ func (s *sandboxTools) applyWorkspaceDelta(ctx context.Context, id string, d *wo
 	if err := s.syncDirectories(ctx, id, "mkdir", slices.Sorted(maps.Keys(d.dirs))); err != nil {
 		return err
 	}
-	if d.uploaded == 0 {
-		return nil
+	for _, name := range d.batches {
+		data, err := os.ReadFile(name)
+		if err != nil {
+			return err
+		}
+		if err := s.client.WriteArchive(ctx, id, guestWorkspace, data); err != nil {
+			return err
+		}
 	}
-	return s.client.WriteArchive(ctx, id, guestWorkspace, d.archive.Bytes())
+	return nil
 }
 
 func (s *sandboxTools) syncDirectories(ctx context.Context, id, action string, dirs []string) error {

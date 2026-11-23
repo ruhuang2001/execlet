@@ -28,6 +28,7 @@ type sandboxTools struct {
 	images, networks []string
 	ttl              int
 	scope            string
+	origin           string
 }
 
 func (in *invocation) mcpServer(args []string) int {
@@ -85,6 +86,7 @@ func (in *invocation) mcpServer(args []string) int {
 	tools.register(server)
 	ctx, stop := contextWithSignals()
 	defer stop()
+	go tools.gcReceipts(ctx)
 	if err := server.Run(ctx, &mcp.StdioTransport{}); err != nil && ctx.Err() == nil {
 		return in.fail(err)
 	}
@@ -122,8 +124,10 @@ type executionInput struct {
 	ExecutionID string `json:"execution_id"`
 }
 type getInput struct {
+	StdoutOffset *int64 `json:"stdout_offset,omitempty" jsonschema:"absolute stdout cursor from next_stdout_offset; overrides offset"`
+	StderrOffset *int64 `json:"stderr_offset,omitempty" jsonschema:"absolute stderr cursor from next_stderr_offset; overrides offset"`
 	executionInput
-	Offset *int `json:"offset,omitempty" jsonschema:"byte position in each retained output stream; use next_offset for another page"`
+	Offset *int64 `json:"offset,omitempty" jsonschema:"byte position in each retained output stream; use next_offset for another page"`
 }
 type syncInput struct {
 	sandboxInput
@@ -160,11 +164,10 @@ func (s *sandboxTools) add[In interface{ sandboxID() string }](server *mcp.Serve
 			return respond(toolOutput{}, err)
 		}
 		defer func() { _ = receipt.Close() }()
-		if err := s.renew(ctx, id); err != nil {
-			if name == "destroy_sandbox" && errors.Is(err, errSandboxGone) {
-				return respond(destroyed(id), nil)
+		if name != "destroy_sandbox" {
+			if err := s.renew(ctx, id); err != nil {
+				return respond(toolOutput{}, err)
 			}
-			return respond(toolOutput{}, err)
 		}
 		if name != "sync_workspace" && name != "destroy_sandbox" {
 			if err := syscall.Flock(int(receipt.Fd()), syscall.LOCK_UN); err != nil {

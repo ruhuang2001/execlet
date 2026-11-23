@@ -342,6 +342,7 @@ func (s *Sandboxes) Recover(ctx context.Context, j *Journal, backend RecoveryBac
 			ex.forget = func() error { return s.forgetExecution(sb, ex) }
 			ex.outputLost = item.OutputLost || v.State == ExecRunning
 			ex.log.keepTail = item.OutputTail
+			ex.log.stdoutOffset, ex.log.stderrOffset = v.StdoutOffset, v.StderrOffset
 			ex.log.truncated = v.OutputTruncated
 			for _, ev := range item.Events {
 				ex.log.events = append(ex.log.events, ev)

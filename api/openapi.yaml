@@ -1397,6 +1397,16 @@ components:
             Retained output. It is exactly the data delivered in events, so a
             replay from ID 0 reproduces stdout and stderr.
           properties:
+            stdout_offset:
+              type: integer
+              format: int64
+              minimum: 0
+              description: Absolute byte position of the beginning of retained stdout. Defaults to zero.
+            stderr_offset:
+              type: integer
+              format: int64
+              minimum: 0
+              description: Absolute byte position of the beginning of retained stderr. Defaults to zero.
             stdout:
               type: string
             stderr:

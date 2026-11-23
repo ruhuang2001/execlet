@@ -80,6 +80,7 @@ Creation is never automatically retried; see the respective SDK contracts.
 | `exit_code` | int or null | null while running, or if the runtime could not report one |
 | `termination_reason` | string or null | null while running; see below |
 | `stdout`, `stderr` | string | retained output; omitted in list responses |
+| `stdout_offset`, `stderr_offset` | integer | absolute byte index of the first retained byte in each stream when tail retention evicts output, default zero |
 | `output_truncated` | bool | true when output exceeded retention or live output was lost during recovery |
 | `pid` | int, optional | confirmed positive guest PID for managed commands; absent on native executions or unconfirmed start |
 | `started_at` | string | |

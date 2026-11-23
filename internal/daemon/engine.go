@@ -95,6 +95,7 @@ func (ex *execution) finish(at time.Time, exitCode int, outcome ExecOutcome) boo
 		FinishedAt:        ex.finished,
 	}
 	ex.log.mu.Lock()
+	terminal.StdoutOffset, terminal.StderrOffset = ex.log.stdoutOffset, ex.log.stderrOffset
 	if ex.persist != nil {
 		events := append(append([]Event(nil), ex.log.events...), Event{ID: ex.log.nextID + 1, Type: EventComplete, Execution: &terminal})
 		terminal.OutputTruncated = ex.log.truncated
@@ -134,7 +135,7 @@ func (ex *execution) snapshot() Execution {
 }
 
 func (ex *execution) snapshotLocked() Execution {
-	stdout, stderr, truncated := ex.log.output()
+	stdout, stderr, truncated, stdoutOffset, stderrOffset := ex.log.output()
 	return Execution{
 		ID:                ex.id,
 		PID:               ex.pid,
@@ -144,11 +145,12 @@ func (ex *execution) snapshotLocked() Execution {
 		State:             ex.state,
 		ExitCode:          cloneInt(ex.exitCode),
 		TerminationReason: cloneReason2(ex.reason),
-		Stdout:            stdout,
-		Stderr:            stderr,
-		OutputTruncated:   truncated,
-		StartedAt:         ex.startedAt,
-		FinishedAt:        cloneTime(ex.finished),
+		StdoutOffset:      stdoutOffset, StderrOffset: stderrOffset,
+		Stdout:          stdout,
+		Stderr:          stderr,
+		OutputTruncated: truncated,
+		StartedAt:       ex.startedAt,
+		FinishedAt:      cloneTime(ex.finished),
 	}
 }
 

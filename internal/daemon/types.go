@@ -112,6 +112,9 @@ type Sandbox struct {
 }
 
 type Execution struct {
+	StdoutOffset int64 `json:"stdout_offset,omitzero"`
+	StderrOffset int64 `json:"stderr_offset,omitzero"`
+
 	ID                string     `json:"id"`
 	PID               int        `json:"pid,omitzero"`
 	SandboxID         string     `json:"sandbox_id"`

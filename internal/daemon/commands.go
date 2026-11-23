@@ -60,6 +60,7 @@ func (s *Sandboxes) AttachCommand(sandboxID string, pid int) (CommandAttachment,
 		snapshot := ex.snapshotLocked()
 		ex.log.mu.Lock()
 		snapshot.Stdout, snapshot.Stderr, snapshot.OutputTruncated = ex.log.outputLocked()
+		snapshot.StdoutOffset, snapshot.StderrOffset = ex.log.stdoutOffset, ex.log.stderrOffset
 		attached := CommandAttachment{snapshot, ex.log.nextID}
 		ex.log.mu.Unlock()
 		ex.mu.Unlock()

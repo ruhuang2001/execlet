@@ -198,6 +198,11 @@ def main():
                 content = b"repeated transfer data" * 32768
                 raw = io.BytesIO()
                 with tarfile.open(fileobj=raw, mode="w") as tf:
+                    directory = tarfile.TarInfo("workspace")
+                    directory.type = tarfile.DIRTYPE
+                    directory.mode = 0o755
+                    directory.mtime = 1735689600
+                    tf.addfile(directory)
                     entry_header = tarfile.TarInfo("workspace/sample")
                     entry_header.size = len(content)
                     tf.addfile(entry_header, io.BytesIO(content))
@@ -205,6 +210,7 @@ def main():
                 downloaded = request("GET", base + "/files/archive?path=/tmp/workspace")
                 with tarfile.open(fileobj=io.BytesIO(downloaded)) as tf:
                     assert tf.extractfile("workspace/sample").read() == content
+                    assert tf.getmember("workspace").mtime == directory.mtime
                 assert (
                     cli(
                         "docker", "exec", cid, "sha256sum", "/tmp/workspace/sample"

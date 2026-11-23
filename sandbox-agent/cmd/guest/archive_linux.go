@@ -9,7 +9,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/ruhuang2001/tiny-sandbox/internal/filearchive"
@@ -60,10 +62,11 @@ func extractTar(dir string, src io.Reader) error {
 	}
 	defer func() { _ = root.Close() }()
 	r := tar.NewReader(src)
+	var directories []*tar.Header
 	for {
 		h, err := r.Next()
 		if errors.Is(err, io.EOF) {
-			return nil
+			break
 		}
 		if err != nil {
 			return err
@@ -77,9 +80,11 @@ func extractTar(dir string, src io.Reader) error {
 		}
 		switch h.Typeflag {
 		case tar.TypeDir:
-			if err = root.MkdirAll(name, os.FileMode(h.Mode)&0777); err != nil {
+			if err = root.MkdirAll(name, 0700); err != nil {
 				return err
 			}
+			h.Name = name
+			directories = append(directories, h)
 		case tar.TypeReg:
 			if err := replaceRegular(root, name, h, r); err != nil {
 				return err
@@ -100,18 +105,18 @@ func extractTar(dir string, src io.Reader) error {
 		default:
 			return errors.New("unsupported archive member")
 		}
-		if h.Typeflag == tar.TypeDir {
-			fd, err := root.OpenFile(name, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
-			if err != nil {
-				return err
-			}
-			err = setMetadata(fd, h)
-			_ = fd.Close()
-			if err != nil {
-				return err
-			}
+	}
+	slices.SortFunc(directories, func(a, b *tar.Header) int { return strings.Compare(b.Name, a.Name) })
+	for _, h := range directories {
+		fd, err := root.OpenFile(h.Name, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
+		if err != nil {
+			return err
+		}
+		if err := errors.Join(setMetadata(fd, h), fd.Close()); err != nil {
+			return err
 		}
 	}
+	return nil
 }
 func replaceRegular(root *os.Root, name string, h *tar.Header, r io.Reader) error {
 	if f, err := root.Lstat(name); err == nil && f.IsDir() {

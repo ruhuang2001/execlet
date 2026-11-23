@@ -100,7 +100,7 @@ def main():
 
     def create(name):
         sb = client.create_sandbox(
-            CreateSandboxRequest(image="template:" + name, memory_mb=128)
+            CreateSandboxRequest(image="template:" + name, memory_mb=256 if args.runtime == "runsc" else 128)
         )
         assert sb.image.startswith("sha256:"), sb
         return sb.id

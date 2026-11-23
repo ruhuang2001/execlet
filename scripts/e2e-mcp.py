@@ -231,6 +231,22 @@ def run(tmp, evidence, record):
         assert passed["exit_code"] == 0 and "1 passed" in passed["stdout"], passed
         archive_limit_cases(work, sb, call, tool, record)
         (pkg / "remove me").unlink()
+        blocked = "/tmp/tiny-sandbox-workspace.failed"
+        block_swap = tool(
+            "run_command",
+            command=["sh", "-ec", 'mkdir "$1"; touch "$1/file"; chmod 500 "$1"', "sh", blocked],
+        )
+        assert block_swap["exit_code"] == 0, block_swap
+        failed_reset = call("sync_workspace", error=True, sandbox_id=sb, reset=True)
+        assert blocked in failed_reset, failed_reset
+        still_present = tool(
+            "run_command", command=["test", "-f", "sandbox-python/remove me"]
+        )
+        assert still_present["exit_code"] == 0, still_present
+        unblock_swap = tool(
+            "run_command", command=["chmod", "700", blocked]
+        )
+        assert unblock_swap["exit_code"] == 0, unblock_swap
         assert tool("sync_workspace")["deleted"] == 1
         gone = tool(
             "run_command",

@@ -381,10 +381,10 @@ func (s *sandboxTools) syncWorkspace(ctx context.Context, in syncInput) (toolOut
 		}
 	}
 	slices.Sort(removed)
-	if d.uploaded != 0 || len(removed) != 0 {
+	if !in.Reset && (d.uploaded != 0 || len(removed) != 0) {
 		pending := maps.Clone(previous)
 		for name, hash := range d.hashes {
-			if hash != previous[name] || in.Reset {
+			if hash != previous[name] {
 				pending[name] = ""
 			}
 		}
@@ -409,6 +409,20 @@ func (s *sandboxTools) syncWorkspace(ctx context.Context, in syncInput) (toolOut
 		return toolOutput{}, err
 	}
 	if in.Reset {
+		committed, err := s.loadManifest(in.SandboxID)
+		if _, ioErr := errors.AsType[*fs.PathError](err); ioErr {
+			return toolOutput{}, err
+		}
+		pending := make(map[string]string, len(d.hashes))
+		for name := range committed {
+			pending[name] = ""
+		}
+		for name := range d.hashes {
+			pending[name] = ""
+		}
+		if err := s.saveManifest(in.SandboxID, pending); err != nil {
+			return toolOutput{}, err
+		}
 		if err := s.commitWorkspace(ctx, in.SandboxID); err != nil {
 			return toolOutput{}, err
 		}

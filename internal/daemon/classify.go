@@ -39,7 +39,7 @@ func classifyWithAttribution(ctx context.Context, s sampler, containerID string,
 		}
 	}
 
-	ambiguous := exitCode == 137
+	ambiguous := exitCode == 137 || exitCode < 0
 	samples := 1
 	if ambiguous {
 		samples = ambiguousSamples

@@ -53,11 +53,24 @@ func (p lostGuestProcess) Wait() (int, error) {
 	return -1, daemon.ErrGuestLost
 }
 
-type lostGuestBackend struct{ *membackend.Backend }
+type lostGuestBackend struct{ daemon.Backend }
 
 func (b lostGuestBackend) Exec(ctx context.Context, id string, spec daemon.ExecSpec) (daemon.Process, error) {
 	p, err := b.Backend.Exec(ctx, id, spec)
 	return lostGuestProcess{p}, err
+}
+
+func TestLostGuestDuringContainerExitReportsEvicted(t *testing.T) {
+	h, be := newScripted(t, daemon.LivenessRunning, daemon.LivenessRunning, daemon.LivenessStopped)
+	be.Programs["exit"] = memExit
+	h.s = daemon.New(lostGuestBackend{be}, daemon.WithClassifierSleep(noSleep))
+	sb := h.create(daemon.CreateRequest{})
+	ex, _, err := h.s.StartExecution(t.Context(), sb.ID, daemon.ExecuteRequest{Command: []string{"exit", "0"}})
+	wantNoError(t, err)
+	done := h.waitCompleted(sb.ID, ex.ID)
+	if *done.TerminationReason != daemon.ReasonEvicted || done.OutputTruncated || done.ExitCode != nil {
+		t.Fatalf("execution=%+v reason=%s", done, *done.TerminationReason)
+	}
 }
 
 func TestCancelWithLostGuestRetiresSandbox(t *testing.T) {

@@ -59,7 +59,16 @@ func proxyAccept() error {
 		return err
 	}
 	defer func() { _ = conn.Close() }()
-	go func() { _, _ = io.Copy(conn, os.Stdin); _ = conn.Close() }()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = io.Copy(conn, os.Stdin)
+		_ = conn.(*net.UnixConn).CloseWrite()
+	}()
 	_, err = io.Copy(os.Stdout, conn)
+	_ = os.Stdout.Close()
+	if err == nil {
+		<-done
+	}
 	return err
 }

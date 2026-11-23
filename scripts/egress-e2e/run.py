@@ -35,6 +35,10 @@ def main():
         work = Path(tmp)
         arch = command("docker", "info", "--format", "{{.Architecture}}")
         arch = {"aarch64": "arm64", "x86_64": "amd64"}.get(arch, arch)
+        command("docker", "run", "--rm", "--network", "none",
+                "-v", f"{ROOT}/internal/dockerbackend/guestbin/guest-linux-{arch}:/guest:ro",
+                "-v", f"{Path(__file__).with_name('relay.py').resolve()}:/relay.py:ro",
+                IMAGE, "timeout", "15", "python3", "/relay.py", "/guest")
         coverage = os.environ.get("GOCOVERDIR")
         coverage_flags = (
             [

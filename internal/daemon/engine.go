@@ -438,7 +438,9 @@ func (s *Sandboxes) run(ctx context.Context, sb *sandbox, ex *execution) {
 		}
 	}
 
-	if errors.Is(waitErr, ErrGuestLost) && !outcome.SandboxLost {
+	now := s.now()
+	sb.mu.Lock()
+	if errors.Is(waitErr, ErrGuestLost) && sb.state != StateKilled && !outcome.SandboxLost {
 		exitCode = -1
 		outcome = ExecOutcome{Reason: ReasonUnknown, SandboxLost: true}
 		ex.log.mu.Lock()
@@ -447,8 +449,6 @@ func (s *Sandboxes) run(ctx context.Context, sb *sandbox, ex *execution) {
 		}
 		ex.log.mu.Unlock()
 	}
-	now := s.now()
-	sb.mu.Lock()
 	if ex.finish(now, exitCode, outcome) {
 		delete(sb.running, ex.id)
 		sb.lastActivity = now

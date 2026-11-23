@@ -35,6 +35,7 @@ class FaultProxy:
         self.faults: list[Fault] = []
         self.records: list[dict] = []
         self._request_count = 0
+        self._mutation_count = 0
         self.scenario = "setup"
         owner = self
 
@@ -62,6 +63,8 @@ class FaultProxy:
             def forward(self):
                 with owner.lock:
                     owner._request_count += 1
+                    if self.command not in ("GET", "HEAD"):
+                        owner._mutation_count += 1
                 body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
                 headers = {k: v for k, v in self.headers.items() if k.lower() not in {"host", "connection"}}
                 record = {"scenario": owner.scenario, "at": time.monotonic(),
@@ -259,6 +262,10 @@ class FaultProxy:
     def request_count(self):
         with self.lock:
             return self._request_count
+
+    def mutation_count(self):
+        with self.lock:
+            return self._mutation_count
 
     def requests(self, scenario: str, method: str | None = None, suffix: str | None = None):
         with self.lock:

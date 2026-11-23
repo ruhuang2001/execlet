@@ -263,10 +263,11 @@ def transfer(ctx, target, mode='success'):
     owner.close()
     receiver = fresh(ctx, job.sid, target)
     assert receiver.identity['pid'] != old_pid
-    before = len(mutations(ctx))
+    before = ctx.local.faults.mutation_count()
     new = attached(ctx, job.sid, info['pid'], receiver, wait=.3 if mode == 'timeout' else 0,
                    callbacks=target == 'typescript')
-    assert new['execution_id'] == info['execution_id'] and len(mutations(ctx)) == before
+    assert new['execution_id'] == info['execution_id'], (new, info)
+    assert ctx.local.faults.mutation_count() == before, mutations(ctx)
     if mode == 'timeout':
         reply = wait(ctx, receiver, 'attached')
         assert not reply['ok'] and reply['error']['family'] == 'timeout', reply

@@ -139,7 +139,7 @@ keyword-only `cancel=token`; omitting it means no caller deadline.
 | Executions | `start_execution(sandbox_id, request)`, `get_execution(sandbox_id, execution_id)`, `list_executions(sandbox_id)`, `cancel_execution(sandbox_id, execution_id)` |
 | Streaming | `stream_execution(sandbox_id, execution_id, *, on_event=None, on_stdout=None, on_stderr=None)` |
 | Conveniences | `exec(sandbox_id, command)`, `exec_stream(sandbox_id, command, *, on_event=None, on_stdout=None, on_stderr=None)` |
-| Files | `read_file(sandbox_id, path) -> bytes`, `write_file(sandbox_id, path, data) -> FileEntry`, `list_files(sandbox_id, path, *, limit=100, cursor="", cancel=None) -> FileList`, `read_archive(sandbox_id, path) -> bytes`, `write_archive(sandbox_id, path, data)` |
+| Files | `read_file(sandbox_id, path) -> bytes`, `write_file(sandbox_id, path, data) -> Optional[FileEntry]`, `list_files(sandbox_id, path, *, limit=100, cursor="", cancel=None) -> FileList`, `read_archive(sandbox_id, path) -> bytes`, `write_archive(sandbox_id, path, data)` |
 
 Files preserve raw bytes; paths must be absolute. Sandbox and execution lists return lists of
 typed resources; directory listing returns a `FileList` page. Execution lists

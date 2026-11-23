@@ -358,14 +358,14 @@ class SandboxAPI(Transport, ABC):
         data: bytes,
         *,
         cancel: CancellationToken | None = None,
-    ) -> FileEntry:
+    ) -> FileEntry | None:
         payload = self._json(
             "PUT",
             self._sandbox_path(sandbox_id) + "/files?" + urlencode({"path": path}),
             body=data,
-            cancel=cancel,
+            cancel=cancel, optional_no_content=True,
         )
-        return FileEntry.from_dict(payload)
+        return FileEntry.from_dict(payload) if payload is not None else None
 
     @contextmanager
     def sandbox(

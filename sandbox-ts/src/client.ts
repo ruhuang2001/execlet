@@ -261,9 +261,10 @@ export class Client {
     return this.transport.request('GET', sandboxPath(sandboxID) + '/files?path=' + encodeURIComponent(path), true, options.signal);
   }
 
-  async writeFile(sandboxID: string, path: string, data: Uint8Array, options: RequestOptions = {}): Promise<FileEntry> {
-    const bytes = await this.transport.request('PUT', sandboxPath(sandboxID) + '/files?path=' + encodeURIComponent(path), true,
+  async writeFile(sandboxID: string, path: string, data: Uint8Array, options: RequestOptions = {}): Promise<FileEntry | undefined> {
+    const { status, bytes } = await this.transport.requestStatus('PUT', sandboxPath(sandboxID) + '/files?path=' + encodeURIComponent(path), true,
       options.signal, new Uint8Array(data));
+    if (status === 204) return undefined;
     const written = decodeJSON<FileEntry>(bytes);
     validateFileEntry(written);
     return written;

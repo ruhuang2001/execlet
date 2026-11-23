@@ -748,6 +748,11 @@ class BackgroundCommandsTests(unittest.TestCase):
         self.assertEqual((written.name, written.type.value, written.path), ("file", "symlink", "/work/file"))
         self.assertEqual([(r["method"], r["path"]) for r in self.http.records], [("PUT", route)])
 
+    def test_write_to_legacy_server_returns_destination(self):
+        self.http.put("PUT", BASE + "/files?path=%2Fwork%2Ffile", Reply(b"", 204))
+        written = self.sandbox.files.write("/work/file", "replacement")
+        self.assertEqual((written.name, written.type, written.path), ("file", None, "/work/file"))
+
     def test_cancel_validates_every_snapshot_before_polling(self):
         token = CancellationToken()
         token.cancel()

@@ -87,7 +87,7 @@ listFiles(sandboxID, path, options?: ListFilesOptions): Promise<FileList>
 readArchive(sandboxID, path, options?): Promise<Uint8Array>
 writeArchive(sandboxID, path, bytes: Uint8Array, options?): Promise<void>
 readFile(sandboxID, path, options?): Promise<Uint8Array>
-writeFile(sandboxID, path, bytes: Uint8Array, options?): Promise<FileEntry>
+writeFile(sandboxID, path, bytes: Uint8Array, options?): Promise<FileEntry | undefined>
 ~~~
 
 EventHandler returns void or Promise<void>; callbacks are awaited in order.

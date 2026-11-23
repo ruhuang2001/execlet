@@ -95,6 +95,12 @@ test('E2B writes return observed symlink metadata without listing', async t => {
   assert.deepEqual(calls.map(c => c.method), ['PUT']);
 });
 
+test('E2B writes return the destination on a legacy empty response', async t => {
+  const { create } = fixture(t, c => c.method === 'PUT' ? new Response(null, { status: 204 }) : undefined);
+  const sb = await create();
+  assert.deepEqual(await sb.files.write('/work/file', 'replacement'), {name: 'file', path: '/work/file'});
+});
+
 test('native additive fields fail before mutation on old servers; basic execution still works', async t => {
   const { calls } = fixture(t, c => c.path === '/v1/capabilities' ? failure('not_found', 404) : undefined);
   const native = new Client({ domain: 'http://sdk.test', maxRetries: -1 });

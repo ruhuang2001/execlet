@@ -27,9 +27,7 @@ iterator cleanup. Wire additions must remain usable by existing consumers.
 
 `PUT /v1/sandboxes/{sandbox_id}/files` now returns HTTP 200 with a JSON
 `FileEntry`. Earlier releases returned HTTP 204 with an empty body. Update
-callers that check for 204. The Python and TypeScript SDK write methods and
-Go `WriteFileInfo` require the new response. Go `WriteFile` accepts both.
-Both E2B adapters now build `WriteInfo` directly from the response.
+callers that check for 204. Go `WriteFileInfo` returns nil metadata for legacy 204 responses, Python returns `None`, and TypeScript returns `undefined`. Go `WriteFile` accepts either successful response. E2B adapters return the destination name and path on legacy daemons and include the observed type when the response supplies metadata.
 
 ## Version numbers
 

@@ -95,7 +95,9 @@ func (b *PolicyBackend) discardReady(ctx context.Context, k prewarmKey, id strin
 		delete(b.ready, k)
 	}
 	b.mu.Unlock()
-	if err := b.Remove(ctx, id); err != nil && !errors.Is(err, ErrNotFound) {
+	cleanup, cancel := backendCtx(ctx)
+	defer cancel()
+	if err := b.Remove(cleanup, id); err != nil && !errors.Is(err, ErrNotFound) {
 		retry(id)
 	}
 }
@@ -127,9 +129,7 @@ func (b *PolicyBackend) trimPrewarm(ctx context.Context, targets map[prewarmKey]
 	for _, key := range keys {
 		ids := b.readyIDs(key)
 		for _, id := range ids[min(len(ids), targets[key]):] {
-			cleanup, cancel := context.WithTimeout(ctx, BackendCallTimeout)
-			b.discardReady(cleanup, key, id, retry)
-			cancel()
+			b.discardReady(ctx, key, id, retry)
 		}
 	}
 }
@@ -165,7 +165,9 @@ func (b *PolicyBackend) maintainPrewarm(ctx context.Context, owner string, retry
 				}
 				sandboxID := newID("sbx_")
 				spec := ContainerSpec{Image: key.image, MemoryMB: key.memoryMB, PidsLimit: key.pidsLimit, NanoCPUs: key.nanoCPUs, Network: key.network, Runtime: key.runtime, Name: "tiny-sandbox-" + sandboxID, Labels: map[string]string{OwnerLabelKey: owner, SandboxIDLabelKey: sandboxID}}
-				id, err := b.createFresh(ctx, spec)
+				create, cancel := context.WithTimeout(ctx, 2*time.Minute)
+				id, err := b.createFresh(create, spec)
+				cancel()
 				if err != nil {
 					if ctx.Err() == nil {
 						delay := min(time.Minute, max(2*time.Second, 2*failures[key].delay))

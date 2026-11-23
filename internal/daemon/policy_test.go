@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/ruhuang2001/tiny-sandbox/internal/daemon"
 	"github.com/ruhuang2001/tiny-sandbox/internal/daemon/membackend"
@@ -27,6 +30,50 @@ func (b *policyRuntime) Remove(ctx context.Context, id string) error {
 		return b.removal
 	}
 	return b.Backend.Remove(ctx, id)
+}
+
+type stalledPrewarm struct {
+	*policyRuntime
+	stalled string
+	started chan struct{}
+}
+
+func (b *stalledPrewarm) Create(ctx context.Context, spec daemon.ContainerSpec) (string, error) {
+	if spec.Image == b.stalled {
+		select {
+		case b.started <- struct{}{}:
+		default:
+		}
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
+	return b.Backend.Create(ctx, spec)
+}
+
+func TestStalledPrewarmReleasesReservation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		bad, good := "sha256:"+strings.Repeat("a", 64), "sha256:"+strings.Repeat("b", 64)
+		be := &stalledPrewarm{&policyRuntime{Backend: membackend.New()}, bad, make(chan struct{}, 1)}
+		policy := daemon.DeploymentPolicy{MaxSandboxes: 2, MemoryMB: 1024, NanoCPUs: 2_000_000_000, Pids: 4096,
+			Images: []string{bad, good}, Networks: []daemon.NetworkMode{daemon.NetworkNone},
+			Prewarm: []daemon.PrewarmTarget{{Image: bad, Count: 1}, {Image: good, Count: 1}}}
+		limited, err := daemon.NewPolicyBackend(be, policy)
+		wantNoError(t, err)
+		ctx, stop := context.WithCancel(t.Context())
+		defer stop()
+		go daemon.New(limited).Run(ctx)
+		<-be.started
+		time.Sleep(2*time.Minute + time.Millisecond)
+		synctest.Wait()
+		if got := limited.Usage().Sandboxes; got != 1 {
+			t.Fatalf("expected only healthy standby, got %d reservations", got)
+		}
+		stop()
+		synctest.Wait()
+		if got := limited.Usage().Sandboxes; got != 0 {
+			t.Fatalf("shutdown retained %d reservations", got)
+		}
+	})
 }
 
 func TestDeploymentPolicyAdmissionAndCleanup(t *testing.T) {

@@ -249,10 +249,14 @@ def persist(path, policy, *, published=None):
     fd, tmp = tempfile.mkstemp(prefix=".template-", dir=path.parent)
     try:
         with os.fdopen(fd, "w") as out:
-            os.fchmod(out.fileno(), stat.S_IMODE(path.stat().st_mode))
+            previous = path.stat()
+            current = os.fstat(fd)
             json.dump(policy, out, indent=2)
             out.write("\n")
             out.flush()
+            if (current.st_uid, current.st_gid) != (previous.st_uid, previous.st_gid):
+                os.fchown(fd, previous.st_uid, previous.st_gid)
+            os.fchmod(fd, stat.S_IMODE(previous.st_mode))
             os.fsync(out.fileno())
         os.replace(tmp, path)
         if published is not None:

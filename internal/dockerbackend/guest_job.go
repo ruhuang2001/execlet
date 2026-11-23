@@ -27,14 +27,22 @@ func (b *Backend) execGuest(ctx context.Context, g *guestSession, spec daemon.Ex
 	if id == "" {
 		id = rand.Text()
 	}
+	reader := g.reader(id)
+	var hello protocol.Result
+	if err := reader.call(ctx, 'H', protocol.Request{}, &hello); err != nil {
+		g.closeReader(id)
+		return nil, err
+	}
 	req := protocol.Request{ID: id, Op: "start", OutputTail: spec.OutputTail, Command: spec.Command, Env: spec.Env, Dir: spec.Dir, TimeoutMS: *spec.TimeoutMS}
 	var result protocol.Result
 	if err := g.call(ctx, 'C', req, &result); err != nil {
 		var known *daemon.Error
 		if errors.As(err, &known) {
+			g.closeReader(id)
 			return nil, err
 		}
 		if err = g.call(context.WithoutCancel(ctx), 'C', protocol.Request{ID: id, Op: "read"}, &result); err != nil {
+			g.closeReader(id)
 			return nil, errors.Join(daemon.ErrStartUnconfirmed, err)
 		}
 	}
@@ -46,11 +54,13 @@ func (p *guestProcess) follow() {
 	defer close(p.done)
 	defer func() { _ = p.stdout.Close() }()
 	defer func() { _ = p.stderr.Close() }()
-	req := protocol.Request{ID: p.id, Op: "read"}
+	reader := p.g.reader(p.id)
+	defer p.g.closeReader(p.id)
+	req := protocol.Request{ID: p.id, Op: "read", WaitMS: 750}
 	idleDelay := time.Millisecond
 	for {
 		var result protocol.Result
-		err := p.g.call(context.Background(), 'C', req, &result)
+		err := reader.call(context.Background(), 'C', req, &result)
 		if err != nil {
 			check, stop := context.WithTimeout(context.Background(), daemon.BackendCallTimeout)
 			state, livenessErr := p.g.b.Liveness(check, p.g.id)
@@ -59,7 +69,7 @@ func (p *guestProcess) follow() {
 				time.Sleep(100 * time.Millisecond)
 				continue
 			}
-			if err = p.g.call(context.Background(), 'C', req, &result); err != nil {
+			if err = reader.call(context.Background(), 'C', req, &result); err != nil {
 				p.err = errors.Join(daemon.ErrGuestLost, err)
 				return
 			}
@@ -76,7 +86,7 @@ func (p *guestProcess) follow() {
 			_ = p.g.call(context.Background(), 'C', protocol.Request{ID: p.id, Op: "forget"}, &result)
 			return
 		}
-		if len(result.Stdout) == 0 && len(result.Stderr) == 0 {
+		if len(result.Stdout) == 0 && len(result.Stderr) == 0 && !result.Done {
 			time.Sleep(idleDelay)
 			idleDelay = min(25*time.Millisecond, 2*idleDelay)
 		} else {
@@ -143,7 +153,12 @@ func (b *Backend) TerminalResize(ctx context.Context, container, id string, rows
 	return err
 }
 func (b *Backend) ReadTerminal(ctx context.Context, container, id string, offset int64) ([]byte, int64, bool, error) {
-	r, err := b.terminal(ctx, container, protocol.Request{ID: id, Op: "read", Offset: offset})
+	g := b.guest(container)
+	if g == nil {
+		return nil, 0, false, &daemon.Error{Code: daemon.CodeUnavailable, Message: "terminal requires guest agent"}
+	}
+	var r protocol.Result
+	err := g.reader(id).call(ctx, 'P', protocol.Request{ID: id, Op: "read", Offset: offset, WaitMS: 750}, &r)
 	return r.Stdout, r.Next, r.Done && len(r.Stdout) == 0, err
 }
 func (b *Backend) CloseTerminal(ctx context.Context, container, id string) error {
@@ -156,6 +171,9 @@ func (b *Backend) CloseTerminal(ctx context.Context, container, id string) error
 	for {
 		r, err := b.terminal(ctx, container, protocol.Request{ID: id, Op: "forget"})
 		if err != nil || r.Done {
+			if g := b.guest(container); g != nil {
+				g.closeReader(id)
+			}
 			return err
 		}
 		select {
@@ -165,3 +183,10 @@ func (b *Backend) CloseTerminal(ctx context.Context, container, id string) error
 		}
 	}
 }
+
+func (b *Backend) TerminalDone(ctx context.Context, container, id string) (bool, error) {
+	r, err := b.terminal(ctx, container, protocol.Request{ID: id, Op: "status"})
+	return r.Done, err
+}
+
+func (b *Backend) TerminalsEnabled() bool { return b.guestMode == "auto" }

@@ -15,19 +15,32 @@ import (
 	"github.com/ruhuang2001/tiny-sandbox/internal/guestprotocol"
 )
 
-func stat(path string) (protocol.FileEntry, error) {
+type accounts struct{ users, groups map[int]string }
+
+func newAccounts() accounts                        { return accounts{make(map[int]string), make(map[int]string)} }
+func stat(path string) (protocol.FileEntry, error) { return newAccounts().stat(path) }
+func (a accounts) stat(path string) (protocol.FileEntry, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
 		return protocol.FileEntry{}, err
 	}
 	st := info.Sys().(*syscall.Stat_t)
 	f := protocol.FileEntry{Name: filepath.Base(path), Mode: int64(st.Mode & 07777), Size: info.Size(), UID: int(st.Uid), GID: int(st.Gid), Mtime: info.ModTime().UTC().Truncate(time.Second), IsDir: info.IsDir(), Type: "other"}
-	if u, err := user.LookupId(strconv.Itoa(f.UID)); err == nil {
-		f.Owner = u.Username
+	if _, ok := a.users[f.UID]; !ok {
+		name := ""
+		if u, err := user.LookupId(strconv.Itoa(f.UID)); err == nil {
+			name = u.Username
+		}
+		a.users[f.UID] = name
 	}
-	if g, err := user.LookupGroupId(strconv.Itoa(f.GID)); err == nil {
-		f.Group = g.Name
+	if _, ok := a.groups[f.GID]; !ok {
+		name := ""
+		if g, err := user.LookupGroupId(strconv.Itoa(f.GID)); err == nil {
+			name = g.Name
+		}
+		a.groups[f.GID] = name
 	}
+	f.Owner, f.Group = a.users[f.UID], a.groups[f.GID]
 	switch {
 	case f.IsDir:
 		f.Size = 0
@@ -68,6 +81,7 @@ func list(path, after string, limit int) ([]protocol.FileEntry, error) {
 	}
 	slices.Sort(names)
 	entries := make([]protocol.FileEntry, 0, min(len(names), limit+1))
+	owners := newAccounts()
 	for _, name := range names {
 		if !utf8.ValidString(name) {
 			return nil, &protocol.Error{Code: "invalid_request", Message: "directory contains a non-UTF-8 name"}
@@ -75,7 +89,7 @@ func list(path, after string, limit int) ([]protocol.FileEntry, error) {
 		if name <= after || len(entries) > limit {
 			continue
 		}
-		entry, err := stat(filepath.Join("/proc/self/fd", strconv.Itoa(fd), name))
+		entry, err := owners.stat(filepath.Join("/proc/self/fd", strconv.Itoa(fd), name))
 		if err != nil {
 			return nil, err
 		}

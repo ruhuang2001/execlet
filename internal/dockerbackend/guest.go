@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"runtime"
 	"strings"
@@ -24,6 +25,8 @@ import (
 var binaries embed.FS
 
 type guestSession struct {
+	closed    bool
+	readers   sync.Map
 	b         *Backend
 	id        string
 	lock      chan struct{}
@@ -35,6 +38,11 @@ type guestSession struct {
 func (b *Backend) SetGuestAgent(mode string) error {
 	switch mode {
 	case "auto", "off":
+		if mode == "auto" {
+			if entries, _ := fs.Glob(binaries, "guestbin/guest-linux-*"); len(entries) == 0 {
+				mode = "off"
+			}
+		}
 		b.guestMode = mode
 		return nil
 	}
@@ -161,9 +169,23 @@ func (b *Backend) AgentInfo(id string) (string, bool) {
 	}
 	return "legacy", false
 }
+func (g *guestSession) reader(id string) *guestSession {
+	if child, ok := g.readers.Load(id); ok {
+		return child.(*guestSession)
+	}
+	child, _ := g.readers.LoadOrStore(id, &guestSession{b: g.b, id: g.id, lock: make(chan struct{}, 1)})
+	return child.(*guestSession)
+}
+func (g *guestSession) closeReader(id string) {
+	if r, ok := g.readers.LoadAndDelete(id); ok {
+		r.(*guestSession).close()
+	}
+}
 func (g *guestSession) close() {
+	g.readers.Range(func(k, _ any) bool { g.closeReader(k.(string)); return true })
 	g.lock <- struct{}{}
 	defer func() { <-g.lock }()
+	g.closed = true
 	if g.stream != nil {
 		_ = g.stream.Close()
 		g.stream = nil
@@ -177,6 +199,9 @@ func (g *guestSession) call(ctx context.Context, kind byte, req protocol.Request
 		defer func() { <-g.lock }()
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+	if g.closed {
+		return errors.New("guest relay closed")
 	}
 	if g.stream != nil {
 		state, err := g.b.api.ContainerInspect(ctx, g.id)

@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/ruhuang2001/tiny-sandbox/internal/wirejson"
 )
@@ -53,7 +52,7 @@ func (s *Sandboxes) terminal(sbID, id string) (terminalRef, error) {
 	if sb.state != StateRunning {
 		return terminalRef{}, sb.invalidState()
 	}
-	if !sb.terminals[id] {
+	if _, known := sb.terminals[id]; !known {
 		return terminalRef{}, errorf(CodeNotFound, "terminal does not exist")
 	}
 	sb.touchLocked(s.now())
@@ -109,9 +108,19 @@ func (s *Sandboxes) openTerminal(ctx context.Context, sandboxID string, spec Exe
 	if sb.state != StateRunning {
 		return "", sb.invalidState()
 	}
-	if len(sb.terminals) >= 8 {
+	if err := s.refreshTerminals(ctx, sb); err != nil {
+		return "", err
+	}
+	active := 0
+	for _, running := range sb.terminals {
+		if running {
+			active++
+		}
+	}
+	if active >= 8 {
 		return "", errorf(CodeRateLimited, "terminal limit reached")
 	}
+
 	if sb.terminals == nil {
 		sb.terminals = make(map[string]bool)
 	}
@@ -247,15 +256,53 @@ func (h *Handler) terminalEvents(w http.ResponseWriter, r *http.Request) {
 		if err := controller.Flush(); err != nil || closed {
 			return
 		}
-		if len(data) > 0 {
-			continue
-		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-h.shuttingDown:
 			return
-		case <-time.After(100 * time.Millisecond):
+		default:
 		}
 	}
+}
+
+type terminalStatus interface {
+	TerminalDone(context.Context, string, string) (bool, error)
+}
+
+func (s *Sandboxes) refreshTerminals(ctx context.Context, sb *sandbox) error {
+	if len(sb.terminals) == 0 {
+		return nil
+	}
+	b, err := s.terminalBackend()
+	if err != nil {
+		return err
+	}
+	status, ok := b.(terminalStatus)
+	if !ok {
+		return nil
+	}
+	finished := 0
+	for id, running := range sb.terminals {
+		if running {
+			done, err := status.TerminalDone(ctx, sb.container, id)
+			if err != nil {
+				return backendError(err)
+			}
+			if done {
+				sb.terminals[id] = false
+				sb.dirty = true
+			}
+		}
+		if !sb.terminals[id] {
+			finished++
+			if finished > 8 {
+				if err := b.CloseTerminal(ctx, sb.container, id); err != nil {
+					return backendError(err)
+				}
+				delete(sb.terminals, id)
+			}
+		}
+	}
+	return nil
 }

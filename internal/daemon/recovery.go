@@ -30,6 +30,7 @@ type Journal struct {
 }
 
 type storedSandbox struct {
+	TerminalIDs  []string          `json:"terminal_ids,omitempty"`
 	HasTerminals bool              `json:"has_terminals,omitzero"`
 	Version      int               `json:"version"`
 	Sandbox      Sandbox           `json:"sandbox"`
@@ -217,7 +218,14 @@ func (s *Sandboxes) saveSandboxExceptLocked(sb *sandbox, omit string) error {
 			ids = append(ids, ex.id)
 		}
 	}
-	err := s.journal.write(sb.id+".json", storedSandbox{Version: 1, Sandbox: sb.snapshot(), Container: sb.container, Env: sb.opts.env, LastActivity: sb.lastActivity, Executions: ids, HasTerminals: len(sb.terminals) > 0})
+	terminalIDs := []string{}
+	for id, running := range sb.terminals {
+		if running {
+			terminalIDs = append(terminalIDs, id)
+		}
+	}
+	slices.Sort(terminalIDs)
+	err := s.journal.write(sb.id+".json", storedSandbox{TerminalIDs: terminalIDs, Version: 1, Sandbox: sb.snapshot(), Container: sb.container, Env: sb.opts.env, LastActivity: sb.lastActivity, Executions: ids, HasTerminals: len(terminalIDs) > 0})
 	if err != nil {
 		return errorf(CodeUnavailable, "cannot persist sandbox state")
 	}
@@ -329,7 +337,7 @@ func (s *Sandboxes) Recover(ctx context.Context, j *Journal, backend RecoveryBac
 			return errors.New("invalid recovered sandbox options")
 		}
 		sb := &sandbox{id: v.ID, agentMode: v.AgentMode, protected: v.Protected, container: value.Container, opts: opts, createdAt: v.CreatedAt, state: v.State, killReason: v.KillReason, expiresAt: v.ExpiresAt, lastActivity: value.LastActivity, running: map[string]*execution{}, idempotency: map[string]*execution{}}
-		unsafe := value.HasTerminals || v.Network == NetworkFiltered || sb.state == StatePending || sb.state == StateKilled
+		unsafe := (value.HasTerminals && len(value.TerminalIDs) == 0) || v.Network == NetworkFiltered || sb.state == StatePending || sb.state == StateKilled
 		items := executions[sb.id]
 		slices.SortFunc(items, func(a, b storedExecution) int { return a.Execution.StartedAt.Compare(b.Execution.StartedAt) })
 		for _, item := range items {
@@ -401,6 +409,16 @@ func (s *Sandboxes) Recover(ctx context.Context, j *Journal, backend RecoveryBac
 				if err := restorer.RestoreGuest(ctx, sb.container, sb.protected, sb.opts.runtime); err != nil {
 					return err
 				}
+			}
+		}
+		if !unsafe && len(value.TerminalIDs) > 0 {
+			sb.terminals = make(map[string]bool, len(value.TerminalIDs))
+			for _, id := range value.TerminalIDs {
+				sb.terminals[id] = true
+			}
+			unsafe = sb.state == StatePaused || s.refreshTerminals(ctx, sb) != nil
+			for _, running := range sb.terminals {
+				unsafe = unsafe || running
 			}
 		}
 		if !unsafe {

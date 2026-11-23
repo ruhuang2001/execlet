@@ -21,7 +21,8 @@ type Identity struct {
 	Home   string
 }
 type Request struct {
-	OutputTail bool `json:",omitzero"`
+	WaitMS     int64 `json:",omitzero"`
+	OutputTail bool  `json:",omitzero"`
 	ID         string
 	Op         string
 	Path       string

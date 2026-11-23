@@ -52,7 +52,7 @@ func Dial(ctx context.Context, socketPath string) (*Backend, error) {
 		return nil, err
 	}
 	b := New(api)
-	b.guestMode = "auto"
+	_ = b.SetGuestAgent("auto")
 	if runtime.GOOS == "linux" {
 		b.cgroupRoot = "/sys/fs/cgroup"
 	}

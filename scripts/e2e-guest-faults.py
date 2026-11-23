@@ -116,8 +116,9 @@ def main():
             "-c",
             'pgrep -f "^/.tiny-sandbox/guest connect$"',
         )
-        assert relay.isdigit(), relay
-        docker("exec", "-u", "0", cid, "kill", "-KILL", relay)
+        relays = relay.split()
+        assert relays and all(pid.isdigit() for pid in relays), relay
+        docker("exec", "-u", "0", cid, "kill", "-KILL", *relays)
         replay = start(base, counter, idempotency_key="relay-reconnect")
         assert replay == ex_path, (ex_path, replay)
         docker("exec", cid, "touch", "/tmp/release")

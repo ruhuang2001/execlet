@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,6 +25,7 @@ type server struct {
 	jobs     map[string]*job
 }
 type job struct {
+	changed        chan struct{}
 	mu             sync.Mutex
 	pid            int
 	terminal       *os.File
@@ -35,6 +35,8 @@ type job struct {
 	stdout, stderr output
 }
 type output struct {
+	changed chan struct{}
+	head    int
 	mu      sync.Mutex
 	data    []byte
 	base    int64
@@ -45,14 +47,26 @@ func (o *output) Write(p []byte) (int, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	const capBytes = (1 << 20) + 1
-	if o.rolling {
-		o.data = append(o.data, p...)
-		if over := len(o.data) - capBytes; over > 0 {
-			o.base += int64(over)
-			o.data = slices.Clone(o.data[over:])
-		}
+	n := len(p)
+	if o.rolling && n >= capBytes {
+		o.base += int64(len(o.data) + n - capBytes)
+		o.data = append(o.data[:0], p[n-capBytes:]...)
+		o.head = 0
 	} else {
-		o.data = append(o.data, p[:min(len(p), capBytes-len(o.data))]...)
+		room := capBytes - len(o.data)
+		take := min(room, n)
+		o.data = append(o.data, p[:take]...)
+		if o.rolling && n > take {
+			rest := p[take:]
+			first := copy(o.data[o.head:], rest)
+			copy(o.data, rest[first:])
+			o.head = (o.head + len(rest)) % capBytes
+			o.base += int64(len(rest))
+		}
+	}
+	select {
+	case o.changed <- struct{}{}:
+	default:
 	}
 	return len(p), nil
 }
@@ -60,7 +74,13 @@ func (o *output) read(offset int64) (data []byte, next int64) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	start := max(0, min(offset-o.base, int64(len(o.data))))
-	data = slices.Clone(o.data[start:min(int64(len(o.data)), start+64*1024)])
+	size := min(int64(len(o.data))-start, int64(64<<10))
+	if size > 0 {
+		index := (o.head + int(start)) % len(o.data)
+		data = make([]byte, size)
+		n := copy(data, o.data[index:])
+		copy(data[n:], o.data[:size-int64(n)])
+	}
 	return data, o.base + start + int64(len(data))
 }
 func (s *server) dispatch(kind byte, r protocol.Request) (protocol.Result, error) {
@@ -90,6 +110,17 @@ func (s *server) dispatch(kind byte, r protocol.Request) (protocol.Result, error
 		j.mu.Unlock()
 	}
 	s.mu.Unlock()
+	if r.Op == "read" {
+		result := j.snapshot(r)
+		if !result.Done && len(result.Stdout)+len(result.Stderr) == 0 && r.WaitMS > 0 {
+			select {
+			case <-j.changed:
+			case <-time.After(time.Duration(min(r.WaitMS, 1000)) * time.Millisecond):
+			}
+			result = j.snapshot(r)
+		}
+		return result, nil
+	}
 	if r.Op == "input" {
 		return protocol.Result{}, j.input(r.Data)
 	}
@@ -97,10 +128,7 @@ func (s *server) dispatch(kind byte, r protocol.Request) (protocol.Result, error
 	defer j.mu.Unlock()
 	result := protocol.Result{PID: j.pid, Done: j.done, ExitCode: j.exit, Reason: j.reason}
 	switch r.Op {
-	case "start", "forget":
-	case "read":
-		result.Stdout, result.Next = j.stdout.read(r.Offset)
-		result.Stderr, result.ErrNext = j.stderr.read(r.ErrOffset)
+	case "start", "forget", "status":
 	case "close", "kill", "term":
 		if !j.done {
 			var err error
@@ -131,9 +159,14 @@ func (s *server) start(r protocol.Request, terminal bool) (*job, error) {
 	cmd := exec.CommandContext(context.Background(), protocol.Binary, args...)
 	cmd.WaitDelay = time.Second
 	cmd.Env = append(os.Environ(), "HOME="+id.Home)
+	if terminal && os.Getenv("TERM") == "" {
+		cmd.Env = append(cmd.Env, "TERM=xterm-256color")
+	}
 	cmd.Env = append(cmd.Env, r.Env...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Credential: &syscall.Credential{Uid: id.UID, Gid: id.GID, Groups: id.Groups}}
-	j := &job{}
+	j := &job{changed: make(chan struct{}, 1)}
+	j.stdout.changed, j.stderr.changed = j.changed, j.changed
+
 	j.stdout.rolling, j.stderr.rolling = r.OutputTail, r.OutputTail
 	var readDone chan struct{}
 	if terminal {
@@ -277,6 +310,10 @@ func (j *job) wait(cmd *exec.Cmd, readDone chan struct{}, timeoutMS int64) {
 		_ = j.terminal.Close()
 	}
 	j.done = true
+	select {
+	case j.changed <- struct{}{}:
+	default:
+	}
 	j.mu.Unlock()
 }
 
@@ -295,4 +332,13 @@ func (j *job) input(data []byte) error {
 		return fmt.Errorf("terminal accepted %d of %d input bytes: %w", n, len(data), err)
 	}
 	return nil
+}
+
+func (j *job) snapshot(r protocol.Request) protocol.Result {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	out := protocol.Result{PID: j.pid, Done: j.done, ExitCode: j.exit, Reason: j.reason}
+	out.Stdout, out.Next = j.stdout.read(r.Offset)
+	out.Stderr, out.ErrNext = j.stderr.read(r.ErrOffset)
+	return out
 }

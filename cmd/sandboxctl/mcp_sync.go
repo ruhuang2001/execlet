@@ -458,6 +458,7 @@ walk() {
    if [ "$action" != mkdir ]; then exit 0; fi
    mkdir -- "./$component"
   fi
+  if [ "$action" != mkdir ] && [ -f "./$component" ]; then exit 0; fi
   cd -P "./$component"
   if [ "$PWD" != "$expected" ]; then echo "sync directory moved: $expected" >&2; exit 1; fi
  done

@@ -258,6 +258,38 @@ def run(tmp, evidence, record):
         shutil.rmtree(transition)
         blocker.unlink()
         assert tool("sync_workspace")["deleted"] == 2
+
+        reverse = work / "reverse-transition"
+        reverse.mkdir()
+        (reverse / "old-child").write_text("old child")
+        assert tool("sync_workspace")["uploaded"] == 1
+        shutil.rmtree(reverse)
+        with reverse.open("wb") as f:
+            f.truncate(16 << 20)
+        blocker = work / "z-upload-blocker"
+        blocker.write_text("second batch")
+        block_upload = tool(
+            "run_command", command=["ln", "-s", "missing", blocker.name]
+        )
+        assert block_upload["exit_code"] == 0, block_upload
+        failed_upload = call("sync_workspace", error=True, sandbox_id=sb)
+        assert "archive destination" in failed_upload and blocker.name in failed_upload
+        replacement = tool(
+            "run_command", command=["stat", "-c", "%s", reverse.name]
+        )
+        assert replacement["exit_code"] == 0, replacement
+        assert replacement["stdout"].strip() == str(16 << 20), replacement
+        unblock_upload = tool("run_command", command=["rm", "--", blocker.name])
+        assert unblock_upload["exit_code"] == 0, unblock_upload
+        retried = tool("sync_workspace")
+        assert retried["uploaded"] == 2 and retried["deleted"] == 1, retried
+        second = tool("read_file", path="/tmp/tiny-sandbox-workspace/" + blocker.name)
+        assert second["content"] == "second batch", second
+        assert tool("sync_workspace")["uploaded"] == 0
+        reverse.unlink()
+        blocker.unlink()
+        assert tool("sync_workspace")["deleted"] == 2
+
         (pkg / "remove me").unlink()
         blocked = "/tmp/tiny-sandbox-workspace.failed"
         block_swap = tool(

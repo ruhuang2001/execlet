@@ -75,8 +75,10 @@ class Forward(socketserver.BaseRequestHandler):
         with socket.socket(socket.AF_UNIX) as upstream:
             upstream.connect(socket_path)
             head, body = data.split(b'\r\n\r\n', 1)
-            head = b'\r\n'.join(line for line in head.split(b'\r\n') if not line.lower().startswith(b'connection:'))
-            upstream.sendall(head + b'\r\nConnection: close\r\n\r\n' + body)
+            if not any(line.lower().startswith(b'upgrade:') for line in head.split(b'\r\n')):
+                head = b'\r\n'.join(line for line in head.split(b'\r\n') if not line.lower().startswith(b'connection:'))
+                head += b'\r\nConnection: close'
+            upstream.sendall(head + b'\r\n\r\n' + body)
             peers = [upstream, self.request]
             while True:
                 ready, _, _ = select.select(peers, [], [], 30)

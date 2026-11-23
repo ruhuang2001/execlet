@@ -64,4 +64,22 @@ typescript-e2e:
 agent: internal/dockerbackend/guestbin/guest-linux-amd64 internal/dockerbackend/guestbin/guest-linux-arm64
 
 internal/dockerbackend/guestbin/guest-linux-%: $(wildcard sandbox-agent/cmd/guest/*.go internal/guestprotocol/*.go sandbox-agent/go.*)
-	cd sandbox-agent && CGO_ENABLED=0 GOOS=linux GOARCH=$* go build -trimpath -ldflags='-s -w' -o ../$@ ./cmd/guest
+	cd sandbox-agent && GOFLAGS= CGO_ENABLED=0 GOOS=linux GOARCH=$* go build -trimpath -ldflags='-s -w' -o ../$@ ./cmd/guest
+
+.PHONY: feature-e2e runtime-e2e
+
+feature-e2e: build
+	$(PYTHON) scripts/e2e-mcp.py
+	$(PYTHON) scripts/e2e-guest.py --samples 2
+	$(PYTHON) scripts/e2e-guest-faults.py
+	$(PYTHON) scripts/e2e-guest-boundaries.py
+	$(PYTHON) scripts/e2e-terminal.py
+	$(PYTHON) scripts/e2e-output-retention.py
+	$(PYTHON) scripts/egress-e2e/run.py
+	$(PYTHON) scripts/e2e-templates.py
+	$(PYTHON) scripts/e2e-prewarm.py --samples 2
+
+runtime-e2e: build
+	docker build --target minimal -t tiny-sandbox-guest:minimal -f examples/guest/Dockerfile.agent-minimal examples/guest
+	$(PYTHON) scripts/e2e-runtime.py
+	$(PYTHON) scripts/e2e-templates.py --runtime runsc --out artifacts/runsc-template

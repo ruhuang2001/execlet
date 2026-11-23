@@ -63,6 +63,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: embed guest agents for integration
+        if: hashFiles('sandbox-agent/go.mod') != ''
+        run: make agent
       - uses: actions/setup-node@v4
         if: steps.suite.outputs.present == 'true'
         with:
@@ -155,6 +158,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: embed guest agents for integration
+        if: hashFiles('sandbox-agent/go.mod') != ''
+        run: make agent
       - env:
           HISTORICAL_REF: ${{ inputs.ref }}
         run: |
@@ -196,6 +202,9 @@ jobs:
         if: steps.files.outputs.present == 'true'
         with:
           go-version-file: go.mod
+      - name: embed guest agents for integration
+        if: hashFiles('sandbox-agent/go.mod') != ''
+        run: make agent
       - uses: actions/setup-node@v4
         if: steps.files.outputs.present == 'true'
         with:
@@ -233,6 +242,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: embed guest agents for integration
+        if: hashFiles('sandbox-agent/go.mod') != ''
+        run: make agent
       - uses: actions/setup-node@v4
         if: steps.sdk.outputs.present == 'true'
         with:
@@ -377,6 +389,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: embed guest agents for integration
+        if: hashFiles('sandbox-agent/go.mod') != ''
+        run: make agent
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -407,9 +422,96 @@ jobs:
           path: artifacts/
           retention-days: 7
 
+  feature-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.15'
+      - name: exercise MCP, guest commands and deployment features
+        if: hashFiles('sandbox-agent/go.mod') != ''
+        run: |
+          docker pull python:3.12-alpine
+          mkdir -p artifacts/feature-coverage
+          export GOCOVERDIR="$PWD/artifacts/feature-coverage"
+          GOFLAGS='-cover -covermode=atomic -coverpkg=./...' make feature-e2e
+      - uses: actions/upload-artifact@v4
+        if: success() && hashFiles('sandbox-agent/go.mod') != ''
+        with:
+          name: coverage-features
+          path: artifacts/feature-coverage
+          if-no-files-found: error
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        if: always() && hashFiles('sandbox-agent/go.mod') != ''
+        with:
+          name: feature-evidence
+          path: |
+            artifacts/**/*.json
+            artifacts/**/*.log
+          retention-days: 7
+
+  runtime-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.15'
+      - name: configure runsc on the disposable Linux runner
+        if: hashFiles('sandbox-agent/go.mod') != ''
+        run: |
+          cd "$RUNNER_TEMP"
+          base=https://storage.googleapis.com/gvisor/releases/release/20261116.0/x86_64
+          curl --fail --retry 3 -sSLO "$base/gvisor.tar.zstd"
+          curl --fail --retry 3 -sSLO "$base/gvisor.tar.zstd.sha512"
+          sha512sum -c gvisor.tar.zstd.sha512
+          mkdir gvisor
+          tar -I zstd -xf gvisor.tar.zstd -C gvisor
+          sudo install -m 0755 "$(find gvisor -type f -name runsc -print -quit)" /usr/local/bin/runsc
+          sudo runsc install
+          sudo systemctl restart docker
+      - name: verify kernel limits and filesystem snapshots with both runtimes
+        if: hashFiles('sandbox-agent/go.mod') != ''
+        run: |
+          docker pull python:3.12-alpine
+          mkdir -p artifacts/runtime-coverage
+          export GOCOVERDIR="$PWD/artifacts/runtime-coverage"
+          GOFLAGS='-cover -covermode=atomic -coverpkg=./...' make build
+          docker build --target minimal -t tiny-sandbox-guest:minimal -f examples/guest/Dockerfile.agent-minimal examples/guest
+          sudo env "PATH=$PATH" "GOCOVERDIR=$GOCOVERDIR" python3 scripts/e2e-runtime.py
+          sudo env "PATH=$PATH" "GOCOVERDIR=$GOCOVERDIR" python3 scripts/e2e-templates.py --runtime runsc --out artifacts/runsc-template
+          sudo chown -R "$(id -u):$(id -g)" artifacts
+      - uses: actions/upload-artifact@v4
+        if: success() && hashFiles('sandbox-agent/go.mod') != ''
+        with:
+          name: coverage-runtimes
+          path: artifacts/runtime-coverage
+          if-no-files-found: error
+          retention-days: 3
+      - uses: actions/upload-artifact@v4
+        if: always() && hashFiles('sandbox-agent/go.mod') != ''
+        with:
+          name: runtime-evidence
+          path: |
+            artifacts/runtime/*.json
+            artifacts/runsc-template/*.json
+          retention-days: 7
+
   coverage:
     runs-on: ubuntu-latest
-    needs: [test, e2e, e2b-compatibility]
+    needs: [test, e2e, e2b-compatibility, feature-e2e, runtime-e2e]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -431,12 +533,24 @@ jobs:
         with:
           name: coverage-operations
           path: artifacts/operations
+      - uses: actions/download-artifact@v4
+        if: hashFiles('sandbox-agent/go.mod') != ''
+        with:
+          name: coverage-features
+          path: artifacts/features
+      - uses: actions/download-artifact@v4
+        if: hashFiles('sandbox-agent/go.mod') != ''
+        with:
+          name: coverage-runtimes
+          path: artifacts/runtimes
       - name: merge coverage and enforce the gate
         run: |
           e2e=artifacts/e2e
           if test -f scripts/e2e-operations.py; then
             mkdir -p artifacts/combined
-            go tool covdata merge -i=artifacts/e2e,artifacts/operations -o=artifacts/combined
+            inputs=artifacts/e2e,artifacts/operations
+            if test -d artifacts/features; then inputs+=,artifacts/features,artifacts/runtimes; fi
+            go tool covdata merge -i="$inputs" -o=artifacts/combined
             e2e=artifacts/combined
           fi
           bash scripts/coverage.sh artifacts/unit "$e2e" 70
@@ -455,6 +569,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: embed guest agents for integration
+        if: hashFiles('sandbox-agent/go.mod') != ''
+        run: make agent
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}

@@ -30,6 +30,17 @@ def main():
         work = Path(tmp)
         arch = command("docker", "info", "--format", "{{.Architecture}}")
         arch = {"aarch64": "arm64", "x86_64": "amd64"}.get(arch, arch)
+        coverage = os.environ.get("GOCOVERDIR")
+        coverage_flags = (
+            [
+                "-v",
+                f"{Path(coverage).resolve()}:/coverage",
+                "-e",
+                "GOCOVERDIR=/coverage",
+            ]
+            if coverage
+            else []
+        )
         subprocess.run(
             ["go", "build", "-o", work / "sandboxd", "./cmd/sandboxd"],
             cwd=ROOT,
@@ -140,6 +151,7 @@ def main():
                 "-d",
                 "--name",
                 controller,
+                *coverage_flags,
                 "--network",
                 network,
                 "--add-host",
@@ -160,6 +172,8 @@ def main():
                 owner,
                 "-policy",
                 "/fixture/policy.json",
+                "-state-dir",
+                "/tmp/sandboxd-state",
                 env=fixture_env,
             )
 
@@ -297,7 +311,7 @@ with tempfile.TemporaryDirectory() as tmp:
                 "POST", "/v1/sandboxes", {"image": IMAGE, "network": "filtered"}
             )
             second_container = "tiny-sandbox-" + second["id"]
-            command("docker", "kill", controller)
+            command("docker", "stop", "--time", "20", controller)
             output = command(
                 "docker",
                 "exec",

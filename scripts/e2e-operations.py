@@ -88,7 +88,7 @@ def main():
         log = (out / ('server-%d.log' % len(processes))).open('w')
         logs.append(log)
         server = subprocess.Popen([binary, '-addr', '127.0.0.1:' + str(port),
-            '-owner', owner, '-docker', proxy.path if legacy_faults else docker.removeprefix('unix://'),
+            '-owner', owner, '-docker', proxy.path,
             '-guest-agent', 'off' if legacy_faults else args.guest_agent, *extra],
             env=env, stdout=log, stderr=log)
         processes.append(server)

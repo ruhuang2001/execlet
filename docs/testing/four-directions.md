@@ -17,6 +17,16 @@ Build from the checkout with `make build` to embed the Linux amd64 and arm64 gue
 
 The MCP example image and client launch configuration are documented in the [MCP example](../../examples/mcp/README.md). Deployment policy settings, snapshot exclusions and the per-runtime capability matrix are in [operations](../operations.md). Installed-package E2B comparisons use the [existing compatibility runner](../../scripts/e2b-compatibility/README.md).
 
+## Coverage from a clean checkout
+
+`make feature-e2e` builds both Linux guest agents before running the local
+Docker scenarios. For Go coverage, set `GOFLAGS="-cover -covermode=atomic -coverpkg=./..."`
+and point `GOCOVERDIR` at an existing absolute output directory. Child daemon,
+CLI and fixture builds inherit the instrumentation. The Linux runtime job also
+checks the kernel limits and captures counters for runc and runsc.
+The coverage job merges those counters with race tests, the main E2E suite and
+the operations suite, then runs the existing 70% block gate.
+
 ## Performance measurements
 
 The local four-way benchmark measured the time from a create request to completion of the first echo command. Each group used ten samples. Its cold image had a unique layer in a local registry. Times include the client and daemon.

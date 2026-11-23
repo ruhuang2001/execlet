@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net"
+	"net/http/httputil"
 	"os"
 	"time"
 )
@@ -47,7 +48,14 @@ func relayProxy(app, host net.Conn) {
 		return
 	}
 	done := make(chan struct{})
-	go func() { _, _ = io.Copy(host, app); _ = host.(*net.UnixConn).CloseWrite(); close(done) }()
+	go func() {
+		defer close(done)
+		chunks := httputil.NewChunkedWriter(host)
+		if _, err := io.Copy(chunks, app); err == nil {
+			_ = chunks.Close()
+		}
+		_ = host.(*net.UnixConn).CloseWrite()
+	}()
 	_, _ = io.Copy(app, host)
 	_ = app.Close()
 	<-done

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net/http/httputil"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -124,12 +125,13 @@ func (b *Backend) stopEgress(id string) {
 
 type activeTunnel struct {
 	io.ReadWriteCloser
+	input io.Reader
 	last  atomic.Int64
 	since time.Time
 }
 
 func (t *activeTunnel) Read(p []byte) (int, error) {
-	n, err := t.ReadWriteCloser.Read(p)
+	n, err := t.input.Read(p)
 	if n != 0 {
 		t.last.Store(time.Since(t.since).Nanoseconds())
 	}
@@ -145,7 +147,7 @@ func (t *activeTunnel) Write(p []byte) (int, error) {
 }
 
 func serveEgress(ctx context.Context, stream io.ReadWriteCloser, policy *egress.Policy, image string) {
-	tunnel := &activeTunnel{ReadWriteCloser: stream, since: time.Now()}
+	tunnel := &activeTunnel{ReadWriteCloser: stream, input: httputil.NewChunkedReader(stream), since: time.Now()}
 	session, finish := context.WithCancel(ctx)
 	defer finish()
 	idle := policy.TunnelIdleTimeout()

@@ -250,6 +250,16 @@ print(json.dumps(dict(index=fetch('https://packages.fixture.test/index'),
  other_path=fetch('http://127.0.0.1:8888/elsewhere'), token_present=bool(os.getenv('TEST_TOKEN')))))
 """.replace("cadata=CERT", "cadata=" + repr((work / "ca.pem").read_text()))
             result = execute(probe)
+            result["guest_eof"] = execute("""import json, socket
+with socket.create_connection(('127.0.0.1', 8888), timeout=2) as conn:
+    conn.sendall(b'CONNECT packages.fixture.test:443 HTTP/1.1\\r\\nHost: packages.fixture.test:443\\r\\n\\r\\n')
+    with conn.makefile('rb') as reader:
+        assert reader.readline().startswith(b'HTTP/1.1 200 ')
+        assert reader.readline() == b'\\r\\n'
+        conn.shutdown(socket.SHUT_WR)
+        reply = reader.read()
+        assert not reply or reply.startswith(b'\\x15\\x03'), reply
+print(json.dumps(True))""")
             assert result["index"] == {"path": "/index", "authenticated": False}, result
             assert result["account"] == {"path": "/account", "authenticated": True}, (
                 result

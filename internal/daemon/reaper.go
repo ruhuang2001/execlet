@@ -182,6 +182,13 @@ func (s *Sandboxes) finishRemovalPass() {
 	s.removalPassRunning = false
 }
 
+func (s *Sandboxes) queueStandbyRemoval(containerID string) {
+	s.metrics.cleanupFailed()
+	s.retryMu.Lock()
+	defer s.retryMu.Unlock()
+	s.retryIDs[containerID] = ""
+}
+
 func (s *Sandboxes) removeOrQueue(ctx context.Context, sandboxID, containerID string) error {
 	if err := s.removeBounded(ctx, containerID); err == nil || errors.Is(err, ErrNotFound) {
 		s.confirmRemoval(sandboxID, containerID)
@@ -275,7 +282,7 @@ func (s *Sandboxes) sweepIndividually(ctx context.Context, order []*sandbox) {
 func (s *Sandboxes) Run(ctx context.Context) {
 	if b, ok := s.backend.(*PolicyBackend); ok && len(b.targets) > 0 {
 		done := make(chan struct{})
-		go func() { defer close(done); b.maintainPrewarm(ctx, s.owner, s.scheduleRemoval) }()
+		go func() { defer close(done); b.maintainPrewarm(ctx, s.owner, s.queueStandbyRemoval) }()
 		defer func() { <-done }()
 	}
 	tick := time.NewTicker(s.cleanupInterval)

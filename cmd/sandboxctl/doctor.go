@@ -88,13 +88,25 @@ func (in *invocation) doctorMCP(args []string) int {
 	fs := flag.NewFlagSet("doctor mcp", flag.ContinueOnError)
 	fs.SetOutput(in.stderr)
 	dir := fs.String("workspace", ".", "host workspace directory")
-	image := fs.String("image", "tiny-sandbox-mcp:local", "offline pytest image")
+	profile := fs.String("profile", "pytest", "offline toolchain: pytest or go")
+	image := fs.String("image", "", "offline image (defaults to the profile's example image)")
 	collect := fs.Bool("collect", false, "sync workspace and check pytest collection (executes project code)")
+	deps := fs.Bool("check-deps", false, "sync workspace and resolve Go test dependencies offline")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
 		return 2
+	}
+	if *profile != "go" && *profile != "pytest" || *collect && *profile != "pytest" || *deps && *profile != "go" {
+		_, _ = fmt.Fprintln(in.stderr, "choose --profile pytest [--collect] or --profile go [--check-deps]")
+		return 2
+	}
+	if *image == "" {
+		*image = "tiny-sandbox-mcp:local"
+		if *profile == "go" {
+			*image = "tiny-sandbox-mcp-go:local"
+		}
 	}
 	if fs.NArg() != 0 || *dir == "" || strings.TrimSpace(*image) == "" {
 		fs.Usage()
@@ -124,7 +136,7 @@ func (in *invocation) doctorMCP(args []string) int {
 	if err != nil {
 		return in.fail(fmt.Errorf("daemon: %w", err))
 	}
-	if err := checkPytestImage(client, *image, root, *collect); err != nil {
+	if err := checkMCPImage(client, *image, root, *profile, *collect || *deps); err != nil {
 		if fault, ok := errors.AsType[*sandbox.Error](err); ok && fault.Code == "backend_error" && isLocalDomain(domain) && errors.Is(err, errDoctorSandboxCreate) {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
@@ -147,7 +159,7 @@ func (in *invocation) doctorMCP(args []string) int {
 
 var errDoctorSandboxCreate = errors.New("create offline sandbox")
 
-func checkPytestImage(client *sandbox.Client, image string, workspace *os.Root, collect bool) (result error) {
+func checkMCPImage(client *sandbox.Client, image string, workspace *os.Root, profile string, checkProject bool) (result error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	sb, err := client.CreateSandbox(ctx, sandbox.CreateSandboxRequest{Image: &image, Network: new(sandbox.NetworkNone), TimeoutSeconds: new(120)})
@@ -161,10 +173,20 @@ func checkPytestImage(client *sandbox.Client, image string, workspace *os.Root, 
 			result = errors.Join(result, fmt.Errorf("clean up %s: %w", sb.ID, err))
 		}
 	}()
-	if _, err := client.Exec(ctx, sb.ID, []string{"python3", "-m", "pytest", "--version"}); err != nil {
-		return fmt.Errorf("pytest image probe in %q failed (install Python and pytest in the image): %w", image, err)
+	probe := []string{"python3", "-m", "pytest", "--version"}
+	install := "install Python and pytest"
+	projectCheck := `cd "$1" && exec python3 -B -m pytest --collect-only -q -p no:cacheprovider`
+	checkName, hint := "pytest collection", "check project dependencies and test configuration"
+	if profile == "go" {
+		probe = []string{"go", "version"}
+		install = "install the Go toolchain"
+		projectCheck = `cd "$1" && exec env GOTOOLCHAIN=local GOPROXY=off go list -mod=readonly -deps -test ./... >/dev/null`
+		checkName, hint = "Go dependency check", "check the module root and rebuild the image with dependencies from go.mod and go.sum"
 	}
-	if !collect {
+	if _, err := client.Exec(ctx, sb.ID, probe); err != nil {
+		return fmt.Errorf("%s image probe in %q failed (%s in the image): %w", profile, image, install, err)
+	}
+	if !checkProject {
 		return nil
 	}
 	cache, err := os.MkdirTemp("", "tiny-doctor-mcp-*")
@@ -174,14 +196,14 @@ func checkPytestImage(client *sandbox.Client, image string, workspace *os.Root, 
 	defer func() { _ = os.RemoveAll(cache) }()
 	tools := sandboxTools{client: client, workspace: workspace, cache: cache}
 	if _, err := tools.syncWorkspace(ctx, syncInput{sandboxInput: sandboxInput{SandboxID: sb.ID}}); err != nil {
-		return fmt.Errorf("sync workspace for pytest collection: %w", err)
+		return fmt.Errorf("sync workspace for %s: %w", checkName, err)
 	}
-	ex, err := client.Exec(ctx, sb.ID, []string{"sh", "-c", `cd "$1" && exec python3 -B -m pytest --collect-only -q -p no:cacheprovider`, "pytest-collect", guestWorkspace})
+	ex, err := client.Exec(ctx, sb.ID, []string{"sh", "-c", projectCheck, "doctor", guestWorkspace})
 	if err != nil {
 		if ex == nil {
-			return fmt.Errorf("pytest collection: %w", err)
+			return fmt.Errorf("%s: %w", checkName, err)
 		}
-		return fmt.Errorf("pytest collection failed (check project dependencies and test configuration): %w\n%s", err, strings.TrimSpace(ex.Stdout+"\n"+ex.Stderr))
+		return fmt.Errorf("%s failed (%s): %w\n%s", checkName, hint, err, strings.TrimSpace(ex.Stdout+"\n"+ex.Stderr))
 	}
 	return nil
 }

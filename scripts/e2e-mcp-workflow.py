@@ -120,32 +120,21 @@ def run(args, tmp):
             else:
                 raise RuntimeError("sandboxd did not become ready")
 
-            server = {
-                "command": str(cli),
-                "args": ["mcp", "--workspace", str(work), "--image", image],
-                "env": {"SANDBOX_DOMAIN": domain},
-            }
-            if not go:
-                doctor = [
-                    cli,
-                    "doctor",
-                    "mcp",
-                    "--workspace",
-                    work,
-                    "--image",
-                    image,
-                    "--collect",
-                ]
-                config = json.loads(
-                    command(*doctor, env=env, capture_output=True).stdout
-                )
-                generated = config["mcpServers"]["tiny-sandbox"]
-                assert (
-                    generated["args"] == server["args"]
-                    and generated["env"] == server["env"]
-                )
-                assert pathlib.Path(generated["command"]).samefile(cli)
-                server = generated
+            doctor = [cli, "doctor", "mcp", "--workspace", work, "--image", image]
+            doctor += ["--profile", "go", "--check-deps"] if go else ["--collect"]
+            config = json.loads(command(*doctor, env=env, capture_output=True).stdout)
+            server = config["mcpServers"]["tiny-sandbox"]
+            assert server["args"] == ["mcp", "--workspace", str(work), "--image", image]
+            assert server["env"] == {"SANDBOX_DOMAIN": domain}
+            assert pathlib.Path(server["command"]).samefile(cli)
+            if go:
+                dependency = work / "jsonschema/doctor_dependency_test.go"
+                dependency.write_text('package jsonschema_test\nimport _ "example.invalid/missing"\n')
+                assert_doctor_fails(env, "example.invalid/missing", *doctor)
+                command(*doctor[:-1], env=env, capture_output=True)
+                dependency.unlink()
+            else:
+                assert_doctor_fails(env, "install the Go toolchain", *doctor[:-1], "--profile", "go")
                 assert_doctor_fails(
                     env,
                     "workspace:",

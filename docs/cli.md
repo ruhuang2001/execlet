@@ -120,7 +120,10 @@ Exit 0 only if all applicable checks passed.
 4. `docker`: only for a local domain (loopback or `localhost`); `docker info` reachable.
 5. `sandbox`: create a sandbox, run `echo doctor-ok`, check the output, kill the sandbox.
 
-For the [MCP pytest workflow](../examples/mcp/README.md), use `doctor mcp [--workspace DIR] [--image IMAGE] [--collect]`. Defaults: current directory and `tiny-sandbox-mcp:local`. It opens the workspace, checks daemon health, then creates an offline sandbox with the selected image, runs `python3 -m pytest --version`, and destroys it. `--collect` additionally syncs the workspace and runs pytest collection to catch import and test configuration errors. Collection executes project code; enable it only for a project you trust. Success prints only the client configuration JSON with absolute paths. A failed check exits nonzero with a diagnostic on stderr and no configuration on stdout.
+For the [MCP workflows](../examples/mcp/README.md), `doctor mcp` opens `--workspace DIR` (default `.`), checks daemon health, probes `--image IMAGE` in a temporary offline sandbox and destroys it. By default it does not sync project files. Success prints only the client configuration JSON with absolute paths. A failed check exits nonzero with a diagnostic on stderr and no configuration on stdout.
+
+- `--profile pytest` (default): checks `python3 -m pytest --version` in `tiny-sandbox-mcp:local`. Add `--collect` to sync and collect tests. Collection executes project code; use it only for a project you trust.
+- `--profile go`: checks `go version` in `tiny-sandbox-mcp-go:local`. Add `--check-deps` from a module root to sync and list package and test dependencies for `./...` using the image's local toolchain and module cache. This does not run tests. Rebuild the image after changing `go.mod` or `go.sum`.
 
 ## Directory listing
 

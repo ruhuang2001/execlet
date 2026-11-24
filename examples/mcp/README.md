@@ -40,7 +40,7 @@ test "$(git -C /tmp/jsonschema-go rev-parse HEAD)" = 8c4ab4f02ef64dcea5502e47a61
 docker build -t tiny-sandbox-mcp-go:local -f examples/mcp/go/Dockerfile /tmp/jsonschema-go
 ```
 
-Use the same MCP entry with args `mcp --workspace /tmp/jsonschema-go --image tiny-sandbox-mcp-go:local`; `doctor mcp` is a pytest probe. The build downloads and verifies dependencies from `go.mod` and `go.sum`. The container runs with `GOPROXY=off` and `GOTOOLCHAIN=local`; the source and tests arrive through MCP sync. To try the repair loop, change `do not form a tree` in `jsonschema/resolve.go` to `unexpected schema tree` on the host. Sync and run `go test -p=1 -count=1 -run '^TestSchemaStructure$' ./jsonschema`. Restore the original string, sync again, and rerun in the same sandbox. Only that source file needs to upload. If `go.mod` or `go.sum` changes, rebuild the image and recreate the sandbox before syncing and testing again.
+Run `./sandboxctl doctor mcp --profile go --workspace /tmp/jsonschema-go --check-deps` and give the printed configuration to your MCP client. The build downloads and verifies dependencies from `go.mod` and `go.sum`. The container runs with `GOPROXY=off` and `GOTOOLCHAIN=local`; the source and tests arrive through MCP sync. To try the repair loop, change `do not form a tree` in `jsonschema/resolve.go` to `unexpected schema tree` on the host. Sync and run `go test -p=1 -count=1 -run '^TestSchemaStructure$' ./jsonschema`. Restore the original string, sync again, and rerun in the same sandbox. Only that source file needs to upload. If `go.mod` or `go.sum` changes, rebuild the image and recreate the sandbox before syncing and testing again.
 
 ## How sync works
 

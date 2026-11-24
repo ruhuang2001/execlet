@@ -1,9 +1,9 @@
 # SDK design comparison
 
-What this document is: a comparison of the client surfaces of E2B and Daytona
-against `sandbox-go`, and the decisions that follow from it. The purpose is to
-decide **what to stay compatible with and what to deliberately do differently**,
-not to rank the products.
+This historical comparison records which E2B and Daytona client conventions
+informed `sandbox-go`, not current feature parity or a product ranking. For
+current behavior, see the [Go SDK reference](../sdk.md) and the
+[E2B migration example](../../examples/e2b/README.md).
 
 ## Scope and recorded inspection
 

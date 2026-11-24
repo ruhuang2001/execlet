@@ -1,5 +1,9 @@
 # Comment audit
 
+This is a historical snapshot of the first comment cleanup, not the current
+comment policy. See [Contributing](../../CONTRIBUTING.md#code-comments) for the
+current checks.
+
 Removing prose comments saves **3,180 whole lines**. Another **110 comments** shared lines with code, so removing them saves characters only. These gross savings exclude the text added to the decision records, this audit and the linter.
 
 The audit covers 3,326 physical comment lines in 172 files at the pre-cleanup revision. Counts include comments inside executable examples and embedded scripts. Interpreter, compiler and lint directives retain their behavior. Python docstrings are runtime strings. Repository prose and comment-like text used as fixture data remain outside the counts. [Baseline source tree](https://github.com/ruhuang2001/tiny-sandbox/tree/0622cb2c369abe4374684ada7c67191e87780e87)
@@ -13,7 +17,7 @@ The audit covers 3,326 physical comment lines in 172 files at the pre-cleanup re
 | Directive | 35 | 1 | 36 |
 | **Total** | **3,215** | **111** | **3,326** |
 
-Tautologies duplicated declarations or assertions. Stale comments described behavior the implementation had outgrown. The decision records preserve the reasons for implementation and test choices. [Daemon](adr/0001-daemon.md) · [Backend and CLI](adr/0002-backend-cli.md) · [SDKs](adr/0003-sdks.md) · [Acceptance](adr/0004-acceptance.md)
+Tautologies duplicated declarations or assertions. Stale comments described behavior the implementation had outgrown. The decision records preserve the reasons for implementation and test choices. [Daemon](../adr/0001-daemon.md) · [Backend and CLI](../adr/0002-backend-cli.md) · [SDKs](../adr/0003-sdks.md) · [Acceptance](../adr/0004-acceptance.md)
 
 Four comments described unresolved implementation compromises. Each now has a tracking issue.
 

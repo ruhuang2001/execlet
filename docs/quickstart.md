@@ -12,8 +12,8 @@ published. WSL2 is not a tested or supported environment.
 
 The installer downloads published binaries, while documentation on `main`
 describes current source. Check `./sandboxctl version` and `./sandboxctl help`
-for the installed build; use the matching release-tag documentation. Build
-from source below to try unreleased stdin, file-transfer or concurrency features.
+for the installed build and use the matching release-tag documentation. To try
+unreleased features, [build from source](#build-from-source).
 
 ## 1. Install
 
@@ -130,6 +130,11 @@ case "$DOCKER_HOST" in
   *) echo "A local Docker Unix socket is required; current endpoint: $DOCKER_HOST" >&2 ;;
 esac
 ```
+
+`make build` embeds both Linux guest agents. A direct `go install` of
+`sandboxd` from a clean module download builds the legacy fallback instead.
+Use `make build` or a release that includes the guest agents for guest commands,
+interactive terminals, and filtered networking.
 
 Continue with the commands in quick start step 3 in another terminal. Use the
 repository's `bin` directory instead of the download directory shown there.

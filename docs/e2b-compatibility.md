@@ -1,18 +1,15 @@
-# E2B compatibility subset and acceptance
+# E2B compatibility: v0.0.2 foreground baseline
 
-Status: Python and TypeScript adapters, local image recipe and installed-package
-acceptance implemented in this checkout; publication is a separate step. The subset was decided on
-2026-11-16 against tiny-sandbox source revision
-`840fc84082a80022bfdb0b84b274f26382834d83`. Only E2B is the migration reference.
-The baseline is source-derived; no E2B Cloud account or key is required.
-No live E2B comparison or full E2B compatibility is claimed.
+**Historical baseline.** This document records the v0.0.2 allowlist and its
+19-case acceptance matrix. For current usage, start with the
+[migration example](../examples/e2b/README.md). The current
+[background-command contract](e2b-background-commands.md) supersedes the
+timeout, capability, and handle rules below. CI runs that profile with 40 cases
+per language, not the historical 19-case profile.
 
-This document preserves the **v0.0.2 foreground baseline**, including its
-historical acceptance matrix and limitations. Current source extends it with
-the [background profile](e2b-background-commands.md), whose timeout, capability
-and handle rules supersede the corresponding rows here. Current CI selects
-that profile explicitly (40 cases per language); the old 19-case profile is
-for historical code, not the current adapter.
+The original subset was decided on 2026-11-16 against tiny-sandbox revision
+`840fc84082a80022bfdb0b84b274f26382834d83`. The baseline is source-derived;
+it does not claim full E2B compatibility or verification against E2B Cloud.
 
 ## 1. What compatibility means
 

@@ -380,27 +380,9 @@ policy and deliberate differences from Go.
 
 ## CI/CD
 
-The reusable CI workflow has these jobs:
-
-| Job | Contents |
-|---|---|
-| `lint` | `golangci-lint` at a pinned version, `go vet` |
-| `test` | unit and contract tests under `-race`, coverage artifact |
-| `build` | `go build ./...`, both commands, the example, `goreleaser check`, four snapshot archives and checksum verification |
-| `e2e` | Docker-backed suite with coverage instrumentation; enforces the merged coverage gate; uploads `artifacts/`; asserts no containers remain |
-| `python-sdk` | distribution build and install on Python 3.10 and 3.15, real-Docker fault scenarios, reports and cleanup evidence |
-| `typescript` | strict consumer types, real-Docker fault-injection E2E, browser-safe bundle check, installed npm tarball |
-| `e2b-compatibility` | local image by digest, installed Python/npm adapters, 40 cases per language and reference comparison, deployment/recovery fault suite and independent cleanup; no E2B Cloud |
-
-CI builds GoReleaser snapshots: four platform archives (Linux/macOS on
-amd64/arm64) plus a checksum file. Windows is not supported.
-The Release workflow calls those same jobs against the exact tagged
-commit, then builds and publishes non-snapshot artifacts. It supports tag
-pushes and manual dispatch for existing tags, verifies downloaded draft
-attachments before publication, and refuses to overwrite published releases.
-Versioning follows semantic versioning at the repository level; CLI flags, environment variables, JSON fields, error types, timeout units, and SSE event semantics are all part of the compatibility surface. [versioning.md](versioning.md) holds the details, and [competitors.md](competitors.md)
-records which parts of the E2B and Daytona client surfaces this design keeps
-compatible and which it deliberately changes.
+See [Contributing](../CONTRIBUTING.md#coverage-and-ci) for CI checks and their
+evidence, and [Versioning and release](versioning.md) for compatibility rules
+and the tagged release workflow.
 
 ## Known pitfalls
 
@@ -443,6 +425,6 @@ No tar bytes are extracted on the daemon host.
 ## Further reading
 
 - [HTTP API](api.md), [Go SDK](sdk.md), and [CLI](cli.md): public contracts and usage.
-- [SDK comparison](competitors.md): version-specific interfaces and tradeoffs.
+- [Historical SDK comparison](history/sdk-comparison.md): interfaces and tradeoffs that informed the design.
 - [Future directions](future.md): capabilities outside the current scope.
 - [Contributing](../CONTRIBUTING.md): checks and evidence collection.

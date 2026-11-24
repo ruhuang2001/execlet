@@ -58,7 +58,7 @@ reference does not require an E2B Cloud account or key.
 
 ### Code comments
 
-Run `make comment-lint` to check changes against the merge base with `origin/main`. Use `COMMENT_BASE=<revision>` to select another base. The checker uses Python 3.10+ and installs its parsers into a local virtual environment. The same rule runs in `make lint` and CI. Existing comments can be removed incrementally. New or rewritten prose comments fail the check. Keep design rationale in an ADR and open issues for implementation compromises. The [delete-comment skill](.agents/skills/delete-comment/SKILL.md) describes the audit. The [first audit](docs/comment-audit.md) records original line ranges and dispositions.
+Run `make comment-lint` to check changes against the merge base with `origin/main`. Use `COMMENT_BASE=<revision>` to select another base. The checker uses Python 3.10+ and installs its parsers into a local virtual environment. The same rule runs in `make lint` and CI. Existing comments can be removed incrementally. New or rewritten prose comments fail the check. Keep design rationale in an ADR and open issues for implementation compromises. The [delete-comment skill](.agents/skills/delete-comment/SKILL.md) describes the audit. The [first audit](docs/history/comment-audit.md) records original line ranges and dispositions.
 
 ### Coverage and CI
 

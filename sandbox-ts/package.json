@@ -1,6 +1,6 @@
 {
   "name": "@tiny-sandbox/sdk",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Browser-safe TypeScript SDK for tiny-sandbox",
   "type": "module",
   "engines": { "node": ">=22" },

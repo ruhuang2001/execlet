@@ -21,7 +21,7 @@ npm pack
 From your application directory, run
 
 ~~~sh
-npm install /path/to/tiny-sandbox/sandbox-ts/tiny-sandbox-sdk-0.0.2.tgz
+npm install /path/to/tiny-sandbox/sandbox-ts/tiny-sandbox-sdk-0.0.3.tgz
 ~~~
 
 ~~~ts

@@ -23,11 +23,16 @@ Its [compatibility contract](sdk-typescript.md#compatibility-and-go-parity)
 includes exported types, codes, outcome discriminants, retry defaults and
 iterator cleanup. Wire additions must remain usable by existing consumers.
 
-## Unreleased breaking change
+## Upgrading from v0.0.2 to v0.0.3
 
 `PUT /v1/sandboxes/{sandbox_id}/files` now returns HTTP 200 with a JSON
 `FileEntry`. Earlier releases returned HTTP 204 with an empty body. Update
 callers that check for 204. Go `WriteFileInfo` returns nil metadata for legacy 204 responses, Python returns `None`, and TypeScript returns `undefined`. Go `WriteFile` accepts either successful response. E2B adapters return the destination name and path on legacy daemons and include the observed type when the response supplies metadata.
+
+E2B `commands.run` timeouts now enforce a remote command deadline for both
+foreground and background runs; `commands.connect` timeouts still only limit
+local observation. The corrected adapter requires a server that advertises
+`e2b.background.v1`. See the [command contract](e2b-background-commands.md).
 
 ## Version numbers
 
@@ -41,16 +46,10 @@ prefix is the API namespace, not a claim that the project has reached v1.0.0.
 - **major** may remove or reinterpret public API.
 
 Before `v1.0.0`, breaking changes are allowed but must be called out explicitly in the change description.
-For this initial-development release, `0.0.2` deliberately groups the additive
-SDK, execution, file and E2B-subset work rather than advancing to `0.1.0`. This
-is an explicit exception to the patch-only rule, not a claim that the release
-contains only fixes. OpenAPI and both Python/npm package versions are `0.0.2`;
+Like `0.0.2`, `0.0.3` is an explicit initial-development exception to the
+patch-only rule. It includes new features and the compatibility changes above,
+not just fixes. OpenAPI and the Python and npm packages declare `0.0.3`;
 updating these declarations does not publish a release or a package.
-
-Current source adds background handles and corrects `commands.run` timeouts
-from local waiting to a remote command deadline. This must ship under a new
-version, with the behavior change documented, not replace published 0.0.2.
-Package declarations remain unchanged until that release is selected.
 
 ## What counts as the contract
 
@@ -172,8 +171,8 @@ explicitly and is not inferred from `0.x` numbering. Tags containing the
 Release workflow trigger publication automatically:
 
 ```sh
-git tag -a v0.0.2 -m 'v0.0.2'
-git push origin v0.0.2
+git tag -a v0.0.3 -m 'v0.0.3'
+git push origin v0.0.3
 ```
 
 For an existing tag, including one created before the workflow was added,

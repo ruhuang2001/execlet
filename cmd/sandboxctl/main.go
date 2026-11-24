@@ -28,6 +28,7 @@ usage:
 commands:
   mcp --workspace DIR --image IMAGE      serve sandbox tools over MCP stdio
   doctor                                 check config, connectivity, docker
+  doctor mcp [--workspace DIR] [--image IMAGE]  check offline pytest and print MCP config
   run [flags] -- CMD [ARG...]            run a command in a sandbox
   run [flags] -- code 'PYTHON'           shorthand for python3 -c
   attach SANDBOX EXECUTION               stream an execution from the start

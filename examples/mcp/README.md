@@ -8,22 +8,13 @@ docker build -t tiny-sandbox-mcp:local examples/mcp
 bin/sandboxd
 ```
 
-Add a server in Cursor’s project `.cursor/mcp.json`. Replace both absolute paths with the location of the built binary and the repository whose files you want to test.
+In a second terminal, generate the Cursor configuration for the repository whose files you want to test:
 
-```json
-{
-  "mcpServers": {
-    "tiny-sandbox": {
-      "command": "/absolute/path/to/tiny-sandbox/bin/sandboxctl",
-      "args": [
-        "mcp", "--workspace", "/absolute/path/to/project",
-        "--image", "tiny-sandbox-mcp:local"
-      ],
-      "env": { "SANDBOX_DOMAIN": "http://127.0.0.1:8080" }
-    }
-  }
-}
+```sh
+bin/sandboxctl doctor mcp --workspace /path/to/project
 ```
+
+Copy the JSON into that project's `.cursor/mcp.json` (merge the `tiny-sandbox` entry if the file already exists). The check runs pytest's version command in a temporary offline sandbox. It does not upload the workspace or check your project's dependencies. If the daemon requires authentication, supply `SANDBOX_API_KEY` in the MCP client's environment; the generated configuration never copies that key.
 
 The image runs as UID 1000 and includes Python 3, pytest, Git and CA certificates. Its packages are installed at image build time. The MCP server creates offline sandboxes by default. Repeat `--image` to allow more images. The first is the default. Add `--allow-network filtered` for a daemon configured with filtered egress or `--allow-network bridge` to permit a bridged sandbox.
 

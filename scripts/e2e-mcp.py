@@ -109,6 +109,14 @@ def run(tmp, evidence, record):
         else:
             raise RuntimeError("sandboxd did not start")
 
+        doctor = shell(tmp / "sandboxctl", "doctor", "mcp", "--workspace", work,
+                       env=env, capture_output=True, text=True)
+        config = json.loads(doctor.stdout)["mcpServers"]["tiny-sandbox"]
+        assert pathlib.Path(config["command"]).samefile(tmp / "sandboxctl")
+        assert config["args"] == ["mcp", "--workspace", str(work), "--image", IMAGE]
+        assert config["env"] == {"SANDBOX_DOMAIN": domain}
+        assert not get(domain + "/v1/sandboxes")["sandboxes"]
+
         def connect(workspace=work, extra=(), endpoint=domain, ttl=90):
             proc = subprocess.Popen(
                 [

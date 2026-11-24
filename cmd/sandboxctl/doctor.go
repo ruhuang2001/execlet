@@ -3,11 +3,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json/v2"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -15,6 +18,9 @@ import (
 )
 
 func (in *invocation) doctor(args []string) int {
+	if len(args) > 0 && args[0] == "mcp" {
+		return in.doctorMCP(args[1:])
+	}
 	if len(args) > 0 {
 		_, _ = fmt.Fprintln(in.stderr, "usage: sandboxctl doctor")
 		return 2
@@ -76,6 +82,78 @@ func (in *invocation) doctor(args []string) int {
 	report("sandbox", in.checkSandbox(client), "")
 
 	return checksFailed(in.stdout, in.stderr, failed)
+}
+
+func (in *invocation) doctorMCP(args []string) int {
+	fs := flag.NewFlagSet("doctor mcp", flag.ContinueOnError)
+	fs.SetOutput(in.stderr)
+	dir := fs.String("workspace", ".", "host workspace directory")
+	image := fs.String("image", "tiny-sandbox-mcp:local", "offline pytest image")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
+	}
+	if fs.NArg() != 0 || *dir == "" || strings.TrimSpace(*image) == "" {
+		fs.Usage()
+		return 2
+	}
+	workspace, err := filepath.Abs(*dir)
+	if err != nil {
+		return in.fail(err)
+	}
+	root, err := os.OpenRoot(workspace)
+	if err != nil {
+		return in.fail(fmt.Errorf("workspace: %w", err))
+	}
+	defer func() { _ = root.Close() }()
+	binary, err := os.Executable()
+	if err != nil {
+		return in.fail(err)
+	}
+	client, err := in.client()
+	if err != nil {
+		return in.fail(err)
+	}
+	domain := in.effectiveDomain()
+	healthCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	err = healthProbe(healthCtx, domain)
+	cancel()
+	if err != nil {
+		return in.fail(fmt.Errorf("daemon: %w", err))
+	}
+	if err := checkPytestImage(client, *image); err != nil {
+		return in.fail(err)
+	}
+	config := map[string]any{"mcpServers": map[string]any{"tiny-sandbox": map[string]any{
+		"command": binary, "args": []string{"mcp", "--workspace", workspace, "--image", *image},
+		"env": map[string]string{"SANDBOX_DOMAIN": domain},
+	}}}
+	if err := json.MarshalWrite(in.stdout, config); err != nil {
+		return in.fail(err)
+	}
+	return 0
+}
+
+func checkPytestImage(client *sandbox.Client, image string) (result error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	sb, err := client.CreateSandbox(ctx, sandbox.CreateSandboxRequest{Image: &image, Network: new(sandbox.NetworkNone), TimeoutSeconds: new(120)})
+	if err != nil {
+		return fmt.Errorf("create offline sandbox with image %q (check image availability and daemon policy): %w", image, err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if _, err := client.DestroySandbox(ctx, sb.ID); err != nil {
+			result = errors.Join(result, fmt.Errorf("clean up %s: %w", sb.ID, err))
+		}
+	}()
+	if _, err := client.Exec(ctx, sb.ID, []string{"python3", "-m", "pytest", "--version"}); err != nil {
+		return fmt.Errorf("pytest probe in %q failed (install Python and pytest in the image): %w", image, err)
+	}
+	return nil
 }
 
 func checksFailed(stdout, stderr io.Writer, failed []error) int {

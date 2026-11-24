@@ -120,6 +120,8 @@ Exit 0 only if all applicable checks passed.
 4. `docker`: only for a local domain (loopback or `localhost`); `docker info` reachable.
 5. `sandbox`: create a sandbox, run `echo doctor-ok`, check the output, kill the sandbox.
 
+For the [MCP pytest workflow](../examples/mcp/README.md), use `doctor mcp [--workspace DIR] [--image IMAGE]`. Defaults: current directory and `tiny-sandbox-mcp:local`. It opens the workspace, checks daemon health, then creates an offline sandbox with the selected image, runs `python3 -m pytest --version`, and destroys it. Success prints only the client configuration JSON with absolute paths. A failed check exits nonzero with a diagnostic on stderr and no configuration on stdout.
+
 ## Directory listing
 
 `sandboxctl files list SANDBOX /work [--limit 100] [--cursor TOKEN]` prints one

@@ -33,19 +33,20 @@ type workspaceDelta struct {
 	dirs                   map[string]bool
 	uploaded, skipped      int
 	total                  int64
+	archiveUS              int64
 }
 
 func (s *sandboxTools) manifestPath(id string) string { return filepath.Join(s.cache, id+".json") }
 
 func (s *sandboxTools) loadManifest(id string) (map[string]string, error) {
-	state := map[string]string{}
 	data, err := os.ReadFile(s.manifestPath(id))
 	if errors.Is(err, fs.ErrNotExist) {
-		return state, nil
+		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	state := map[string]string{}
 	if err := json.Unmarshal(data, &state); err != nil {
 		return nil, err
 	}
@@ -361,6 +362,7 @@ func (d *workspaceDelta) finishBatch() error {
 }
 
 func (s *sandboxTools) syncWorkspace(ctx context.Context, in syncInput) (toolOutput, error) {
+	started := time.Now()
 	previous := map[string]string{}
 	if !in.Reset {
 		var err error
@@ -374,7 +376,9 @@ func (s *sandboxTools) syncWorkspace(ctx context.Context, in syncInput) (toolOut
 		return toolOutput{}, err
 	}
 	defer func() { _ = os.RemoveAll(spool) }()
+	scanStarted := time.Now()
 	d, err := s.scan(ctx, previous, in.Reset, spool)
+	scanUS := time.Since(scanStarted).Microseconds()
 	if err != nil {
 		return toolOutput{}, err
 	}
@@ -385,8 +389,14 @@ func (s *sandboxTools) syncWorkspace(ctx context.Context, in syncInput) (toolOut
 		}
 	}
 	slices.Sort(removed)
+	if !in.Reset && previous != nil && d.uploaded == 0 && len(removed) == 0 {
+		return syncResult(d, 0, scanUS, 0, time.Since(started).Microseconds()), nil
+	}
 	if !in.Reset && (d.uploaded != 0 || len(removed) != 0) {
 		pending := maps.Clone(previous)
+		if pending == nil {
+			pending = make(map[string]string, len(d.hashes))
+		}
 		for name, hash := range d.hashes {
 			if hash != previous[name] {
 				pending[name] = ""
@@ -399,15 +409,13 @@ func (s *sandboxTools) syncWorkspace(ctx context.Context, in syncInput) (toolOut
 			return toolOutput{}, err
 		}
 	}
+	applyStarted := time.Now()
 	root := guestWorkspace
 	if in.Reset {
 		root = guestWorkspace + ".next"
 		if err := s.guestExec(ctx, in.SandboxID, []string{"rm", "-rf", "--", root}); err != nil {
 			return toolOutput{}, err
 		}
-	}
-	if err := s.guestExec(ctx, in.SandboxID, syncCommand("mkdir", root)); err != nil {
-		return toolOutput{}, err
 	}
 	if err := s.applyWorkspaceDelta(ctx, in.SandboxID, root, d, removed); err != nil {
 		return toolOutput{}, err
@@ -434,8 +442,13 @@ func (s *sandboxTools) syncWorkspace(ctx context.Context, in syncInput) (toolOut
 	if err := s.saveManifest(in.SandboxID, d.hashes); err != nil {
 		return toolOutput{}, err
 	}
-	value := map[string]any{"uploaded": d.uploaded, "deleted": len(removed), "skipped": d.skipped, "total_bytes": d.total}
-	return toolOutput{fmt.Sprintf("Uploaded %d files (%d bytes), deleted %d, skipped %d.", d.uploaded, d.total, len(removed), d.skipped), value}, nil
+	return syncResult(d, len(removed), scanUS, time.Since(applyStarted).Microseconds(), time.Since(started).Microseconds()), nil
+}
+
+func syncResult(d *workspaceDelta, removed int, scanUS, applyUS, totalUS int64) toolOutput {
+	value := map[string]any{"uploaded": d.uploaded, "deleted": removed, "skipped": d.skipped, "total_bytes": d.total,
+		"timing_us": map[string]int64{"scan": scanUS, "apply": applyUS, "archive_upload": d.archiveUS, "total": totalUS}}
+	return toolOutput{fmt.Sprintf("Uploaded %d files (%d bytes), deleted %d, skipped %d.", d.uploaded, d.total, removed, d.skipped), value}
 }
 
 func (s *sandboxTools) guestExec(ctx context.Context, id string, command []string) error {
@@ -522,7 +535,7 @@ func (s *sandboxTools) applyWorkspaceDelta(ctx context.Context, id, root string,
 	if err := s.syncDirectories(ctx, id, root, "prune", dirs); err != nil {
 		return err
 	}
-	if err := s.syncDirectories(ctx, id, root, "mkdir", slices.Sorted(maps.Keys(d.dirs))); err != nil {
+	if err := s.syncDirectories(ctx, id, root, "mkdir", append([]string{"."}, slices.Sorted(maps.Keys(d.dirs))...)); err != nil {
 		return err
 	}
 	for _, name := range d.batches {
@@ -530,9 +543,11 @@ func (s *sandboxTools) applyWorkspaceDelta(ctx context.Context, id, root string,
 		if err != nil {
 			return err
 		}
+		started := time.Now()
 		if err := s.client.WriteArchive(ctx, id, root, data); err != nil {
 			return err
 		}
+		d.archiveUS += time.Since(started).Microseconds()
 	}
 	return nil
 }

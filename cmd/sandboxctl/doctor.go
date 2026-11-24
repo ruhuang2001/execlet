@@ -89,6 +89,7 @@ func (in *invocation) doctorMCP(args []string) int {
 	fs.SetOutput(in.stderr)
 	dir := fs.String("workspace", ".", "host workspace directory")
 	image := fs.String("image", "tiny-sandbox-mcp:local", "offline pytest image")
+	collect := fs.Bool("collect", false, "sync workspace and check pytest collection (executes project code)")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -123,7 +124,15 @@ func (in *invocation) doctorMCP(args []string) int {
 	if err != nil {
 		return in.fail(fmt.Errorf("daemon: %w", err))
 	}
-	if err := checkPytestImage(client, *image); err != nil {
+	if err := checkPytestImage(client, *image, root, *collect); err != nil {
+		if fault, ok := errors.AsType[*sandbox.Error](err); ok && fault.Code == "backend_error" && isLocalDomain(domain) && errors.Is(err, errDoctorSandboxCreate) {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			out, inspectErr := exec.CommandContext(ctx, "docker", "image", "inspect", "--", *image).CombinedOutput()
+			if inspectErr != nil && strings.Contains(string(out), "No such image:") {
+				return in.fail(fmt.Errorf("image %q is missing from the local Docker context (build or pull it for the daemon's Docker engine): %w", *image, err))
+			}
+		}
 		return in.fail(err)
 	}
 	config := map[string]any{"mcpServers": map[string]any{"tiny-sandbox": map[string]any{
@@ -136,12 +145,14 @@ func (in *invocation) doctorMCP(args []string) int {
 	return 0
 }
 
-func checkPytestImage(client *sandbox.Client, image string) (result error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+var errDoctorSandboxCreate = errors.New("create offline sandbox")
+
+func checkPytestImage(client *sandbox.Client, image string, workspace *os.Root, collect bool) (result error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	sb, err := client.CreateSandbox(ctx, sandbox.CreateSandboxRequest{Image: &image, Network: new(sandbox.NetworkNone), TimeoutSeconds: new(120)})
 	if err != nil {
-		return fmt.Errorf("create offline sandbox with image %q (check image availability and daemon policy): %w", image, err)
+		return fmt.Errorf("%w with image %q (check image availability and daemon policy): %w", errDoctorSandboxCreate, image, err)
 	}
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -151,7 +162,26 @@ func checkPytestImage(client *sandbox.Client, image string) (result error) {
 		}
 	}()
 	if _, err := client.Exec(ctx, sb.ID, []string{"python3", "-m", "pytest", "--version"}); err != nil {
-		return fmt.Errorf("pytest probe in %q failed (install Python and pytest in the image): %w", image, err)
+		return fmt.Errorf("pytest image probe in %q failed (install Python and pytest in the image): %w", image, err)
+	}
+	if !collect {
+		return nil
+	}
+	cache, err := os.MkdirTemp("", "tiny-doctor-mcp-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(cache) }()
+	tools := sandboxTools{client: client, workspace: workspace, cache: cache}
+	if _, err := tools.syncWorkspace(ctx, syncInput{sandboxInput: sandboxInput{SandboxID: sb.ID}}); err != nil {
+		return fmt.Errorf("sync workspace for pytest collection: %w", err)
+	}
+	ex, err := client.Exec(ctx, sb.ID, []string{"sh", "-c", `cd "$1" && exec python3 -B -m pytest --collect-only -q -p no:cacheprovider`, "pytest-collect", guestWorkspace})
+	if err != nil {
+		if ex == nil {
+			return fmt.Errorf("pytest collection: %w", err)
+		}
+		return fmt.Errorf("pytest collection failed (check project dependencies and test configuration): %w\n%s", err, strings.TrimSpace(ex.Stdout+"\n"+ex.Stderr))
 	}
 	return nil
 }

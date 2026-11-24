@@ -373,7 +373,13 @@ jobs:
           assert {line.split()[1] for line in checksums} == expected, checksums
           PY
           (cd dist && sha256sum -c --quiet checksums.txt)
+      - name: exercise offline MCP repair from the release archive
+        run: |
+          go build -o "$RUNNER_TEMP/mcp-client" ./cmd/sandboxctl/testdata/mcp-client
+          python3 scripts/e2e-mcp-workflow.py dist/*_linux_amd64.tar.gz "$RUNNER_TEMP/mcp-client" --runs 1 --out dist/mcp-python.json
+          python3 scripts/e2e-mcp-workflow.py dist/*_linux_amd64.tar.gz "$RUNNER_TEMP/mcp-client" --go --runs 1 --out dist/mcp-go.json
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: release-snapshot
           path: dist/

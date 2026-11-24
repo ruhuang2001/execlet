@@ -30,6 +30,12 @@ archives:
     formats: [tar.gz]
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - LICENSE
+      - README.md
+      - examples/mcp/Dockerfile
+      - examples/mcp/README.md
+      - examples/mcp/demo/*
 
 checksum:
   name_template: checksums.txt

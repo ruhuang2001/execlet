@@ -55,6 +55,12 @@ python-e2e:
 clean:
 	rm -rf $(BIN)
 
+docs-openapi:
+	$(PYTHON) scripts/sync-docs-openapi.py
+
+docs-check:
+	$(PYTHON) scripts/sync-docs-openapi.py --check
+
 typescript:
 	cd sandbox-ts && npm ci && npm run build && npm run check
 

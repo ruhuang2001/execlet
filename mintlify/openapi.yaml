@@ -1,0 +1,1471 @@
+openapi: 3.1.0
+info:
+  title: tiny-sandbox
+  version: 0.0.3
+  summary: Code-execution sandbox for AI agents
+  description: |
+    Normative HTTP contract for the execlet reference server.
+    This page is generated from the specification the server validates its router against.
+    Every handled response includes X-Request-ID. A single incoming value with
+    1-128 ASCII letters, digits, dots, underscores, or hyphens is preserved;
+    otherwise the server generates a UUID. Access logs use route templates and
+    never record query values, request bodies, or authorization headers.
+servers:
+  - url: http://localhost:8080
+    description: Default base URL; override with SANDBOX_DOMAIN.
+security:
+  - bearerAuth: []
+tags:
+  - name: health
+  - name: sandboxes
+  - name: executions
+  - name: files
+paths:
+  /v1/sandboxes/{sandbox_id}/terminals:
+    parameters:
+      - $ref: '#/components/parameters/SandboxID'
+    post:
+      operationId: createTerminal
+      requestBody:
+        content:
+          application/json:
+            schema: {type: object, properties: {rows: {type: integer, minimum: 1, maximum: 65535}, cols: {type: integer, minimum: 1, maximum: 65535}, cwd: {type: string}, command: {type: array, items: {type: string}}}}
+      responses:
+        '201':
+          description: Created shell backed by a persistent PTY
+          content:
+            application/json:
+              schema: {type: object, required: [terminal_id], properties: {terminal_id: {type: string}}}
+  /v1/sandboxes/{sandbox_id}/terminals/{terminal_id}/input:
+    parameters:
+      - $ref: '#/components/parameters/SandboxID'
+      - {in: path, name: terminal_id, required: true, schema: {type: string}}
+    post:
+      operationId: inputTerminal
+      requestBody:
+        content:
+          application/octet-stream:
+            schema: {type: string, format: binary, maxLength: 32768}
+      responses:
+        '204':
+          description: Input accepted
+  /v1/sandboxes/{sandbox_id}/terminals/{terminal_id}/resize:
+    parameters:
+      - $ref: '#/components/parameters/SandboxID'
+      - {in: path, name: terminal_id, required: true, schema: {type: string}}
+    post:
+      operationId: resizeTerminal
+      requestBody:
+        content:
+          application/json:
+            schema: {type: object, required: [rows, cols], properties: {rows: {type: integer, minimum: 1, maximum: 65535}, cols: {type: integer, minimum: 1, maximum: 65535}}}
+      responses:
+        '204':
+          description: Window resized
+  /v1/sandboxes/{sandbox_id}/terminals/{terminal_id}/events:
+    parameters:
+      - $ref: '#/components/parameters/SandboxID'
+      - {in: path, name: terminal_id, required: true, schema: {type: string}}
+      - {in: header, name: Last-Event-ID, schema: {type: integer, minimum: 0}}
+    get:
+      operationId: streamTerminal
+      responses:
+        '200':
+          description: Base64-encoded bytes with a byte offset as the event ID
+          content:
+            text/event-stream:
+              schema: {type: string}
+  /v1/sandboxes/{sandbox_id}/terminals/{terminal_id}:
+    parameters:
+      - $ref: '#/components/parameters/SandboxID'
+      - {in: path, name: terminal_id, required: true, schema: {type: string}}
+    delete:
+      operationId: closeTerminal
+      responses:
+        '204':
+          description: Session closed
+  /metrics:
+    get:
+      operationId: getMetrics
+      summary: Authenticated bounded operational metrics
+      responses:
+        '200':
+          description: Prometheus text format; process-local counters and histograms.
+          content:
+            text/plain:
+              schema: {type: string}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /v1/capabilities:
+    get:
+      operationId: getCapabilities
+      summary: Query supported capabilities before using additive fields
+      description: File metadata uses files.stat.v1, interactive terminals use terminals.v1 and record purge uses sandbox.purge.v1.
+      responses:
+        '200':
+          description: Authenticated server capabilities; absence is not support.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [capabilities]
+                properties:
+                  capabilities:
+                    type: array
+                    items: {type: string}
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /v1/sandboxes/{sandbox_id}/commands/{pid}:
+    parameters:
+      - $ref: '#/components/parameters/SandboxID'
+      - in: path
+        name: pid
+        required: true
+        schema: {type: integer, minimum: 1}
+    get:
+      tags: [executions]
+      operationId: attachCommand
+      summary: Resolve newest retained managed command with atomic event watermark
+      responses:
+        '200':
+          description: No start, resume or TTL renewal.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [execution, last_event_id]
+                properties:
+                  execution: {$ref: '#/components/schemas/Execution'}
+                  last_event_id: {type: integer, minimum: 0}
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/sandboxes/{sandbox_id}/executions/{execution_id}/kill:
+    parameters:
+      - $ref: '#/components/parameters/SandboxID'
+      - $ref: '#/components/parameters/ExecutionID'
+    post:
+      tags: [executions]
+      operationId: killExecution
+      summary: Immediately kill one immutable managed execution with confirmation
+      responses:
+        '200':
+          description: Confirmed terminal execution; signaled false if already completed.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [execution, signaled]
+                properties:
+                  execution: {$ref: '#/components/schemas/Execution'}
+                  signaled: {type: boolean}
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '502':
+          $ref: '#/components/responses/BackendError'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /healthz:
+    get:
+      tags: [health]
+      operationId: getHealth
+      summary: Liveness probe and build version
+      description: >-
+        Reports whether the server is up and which version it runs. This
+        liveness endpoint never requires authentication.
+      security: []
+      responses:
+        '200':
+          description: The server is up.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+  /readyz:
+    get:
+      tags: [health]
+      operationId: getReadiness
+      summary: Docker runtime readiness
+      description: >-
+        Public probe of Docker's unversioned /_ping, bounded to two seconds.
+        Requires HTTP 200 and body OK; no runtime details are exposed on failure.
+        With durable state enabled, journal failure also makes the service unready.
+      security: []
+      responses:
+        '200':
+          description: Docker is ready.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Readiness'
+        '503':
+          description: Docker is unavailable or the durable journal has failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Readiness'
+  /v1/sandboxes:
+    post:
+      tags: [sandboxes]
+      operationId: createSandbox
+      summary: Create a sandbox
+      description: >-
+        Treated as a creation request for a sandbox. Creation is synchronous:
+        the response is sent once the container is running, so pending is only
+        observable by concurrent readers. Not idempotent; clients must not
+        retry it automatically. All request fields are optional and unknown
+        fields are ignored.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSandboxRequest'
+      responses:
+        '201':
+          description: The sandbox is running.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Sandbox'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '502':
+          $ref: '#/components/responses/BackendError'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+    get:
+      tags: [sandboxes]
+      operationId: listSandboxes
+      summary: List sandboxes
+      description: >-
+        Newest first. Killed sandboxes are included while retained; durable
+        mode preserves retained records across restart.
+      responses:
+        '200':
+          description: Every sandbox the server knows about.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SandboxList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/sandboxes/{sandbox_id}:
+    parameters:
+      - $ref: '#/components/parameters/SandboxID'
+    get:
+      tags: [sandboxes]
+      operationId: getSandbox
+      summary: Get one sandbox
+      description: Read requests never change state.
+      responses:
+        '200':
+          description: The sandbox.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Sandbox'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+    delete:
+      tags: [sandboxes]
+      operationId: deleteSandbox
+      summary: Kill a sandbox
+      description: >-
+        Marks the sandbox killed, records canceled intent for active executions,
+        and requests container removal. Unconfirmed runtime removal returns 502
+        backend_error while scheduling background retries; repeated deletes keep
+        reporting 502 until removal is confirmed, then return 200 with the stored
+        killed record. With purge=true, wait for execution settlement and
+        discard the record and its retained executions after confirmed removal.
+      parameters:
+        - in: query
+          name: purge
+          schema: {type: boolean, default: false}
+          description: Requires sandbox.purge.v1. Later lookups return 404.
+      responses:
+        '200':
+          description: The sandbox, in state killed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Sandbox'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '502':
+          $ref: '#/components/responses/BackendError'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+    patch:
+      tags: [sandboxes]
+      operationId: updateSandbox
+      summary: Change a live sandbox's lifetime
+      description: >-
+        The only mutable property is the lifetime deadline, because image,
+        memory, CPU, pids and network describe the container itself.
+        timeout_seconds and extend_seconds are mutually exclusive and exactly
+        one is required. timeout_seconds replaces the deadline with now plus the
+        value, so it may shorten or lengthen; 0 removes the deadline.
+        extend_seconds keeps the later of the current deadline and now plus the
+        value, so it can only extend, and 0 is a no-op rather than an unbounded
+        lifetime. A pending or killed sandbox returns 409; a paused one is
+        updated in place. The response is the updated sandbox.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSandboxRequest'
+      responses:
+        '200':
+          description: The updated sandbox.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Sandbox'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/sandboxes/{sandbox_id}/pause:
+    parameters:
+      - $ref: '#/components/parameters/SandboxID'
+    post:
+      tags: [sandboxes]
+      operationId: pauseSandbox
+      summary: Pause a sandbox
+      description: >-
+        Freezes every process in the sandbox, including a running execution.
+        Idempotent: pausing a paused sandbox returns it unchanged. Not allowed
+        while pending or killed.
+      responses:
+        '200':
+          description: The sandbox, in state paused.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Sandbox'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '502':
+          $ref: '#/components/responses/BackendError'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/sandboxes/{sandbox_id}/resume:
+    parameters:
+      - $ref: '#/components/parameters/SandboxID'
+    post:
+      tags: [sandboxes]
+      operationId: resumeSandbox
+      summary: Resume a sandbox
+      description: >-
+        Idempotent: resuming a running sandbox returns it unchanged. Not
+        allowed while pending or killed.
+      responses:
+        '200':
+          description: The sandbox, in state running.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Sandbox'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '502':
+          $ref: '#/components/responses/BackendError'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/sandboxes/{sandbox_id}/executions:
+    parameters:
+      - $ref: '#/components/parameters/SandboxID'
+    post:
+      tags: [executions]
+      operationId: startExecution
+      summary: Start an execution
+      description: >-
+        Runs argv without a shell. The configured execution slot limit defaults
+        to one and accepts up to eight; a start at capacity returns 409 busy.
+        Above one slot, unexplained exit 137 is unknown because container-wide
+        OOM counters cannot attribute one process. Starting in a paused
+        sandbox resumes it first. Reusing an idempotency key with the same
+        command returns the retained execution instead of starting it again;
+        the same command without a retained key starts a new execution.
+        Reusing a key with a different command, cwd, env, or stdin returns 409
+        idempotency_conflict.
+        A lost Docker start acknowledgment without a process observer returns
+        502 and retains an unknown execution with null exit code and truncated
+        output. The sandbox is retired and removal requested; further starts,
+        including keyed replays, return 409 invalid_state. Cleanup failures
+        remain visible and retryable. The five-second runtime start handshake
+        budget does not limit a successfully attached output stream.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecuteRequest'
+      responses:
+        '201':
+          description: A new execution, in state running.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Execution'
+        '200':
+          description: The existing execution for a reused idempotency key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Execution'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '502':
+          $ref: '#/components/responses/BackendError'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+    get:
+      tags: [executions]
+      operationId: listExecutions
+      summary: List executions
+      description: Newest first, without stdout and stderr.
+      responses:
+        '200':
+          description: Every execution of the sandbox.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/sandboxes/{sandbox_id}/executions/{execution_id}:
+    parameters:
+      - $ref: '#/components/parameters/SandboxID'
+      - $ref: '#/components/parameters/ExecutionID'
+    get:
+      tags: [executions]
+      operationId: getExecution
+      summary: Get one execution
+      description: Includes the retained stdout and stderr.
+      responses:
+        '200':
+          description: The execution.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Execution'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/sandboxes/{sandbox_id}/executions/{execution_id}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/SandboxID'
+      - $ref: '#/components/parameters/ExecutionID'
+    post:
+      tags: [executions]
+      operationId: cancelExecution
+      summary: Cancel an execution
+      description: >-
+        Records canceled intent and signals the process group with SIGTERM.
+        Waits up to 2 seconds before SIGKILL, then up to 8 more seconds before
+        best-effort container removal. Backend calls add time and request
+        cancellation can shorten these waits. Removal marks the sandbox killed
+        with kill_reason requested. After removal, waits up to 2 more seconds
+        and returns the latest snapshot, which may remain nonterminal.
+        Canceling an already completed execution returns it unchanged.
+      responses:
+        '200':
+          description: The latest execution snapshot; inspect state to confirm completion.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Execution'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '502':
+          $ref: '#/components/responses/BackendError'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/sandboxes/{sandbox_id}/executions/{execution_id}/events:
+    parameters:
+      - $ref: '#/components/parameters/SandboxID'
+      - $ref: '#/components/parameters/ExecutionID'
+      - $ref: '#/components/parameters/LastEventID'
+    get:
+      tags: [executions]
+      operationId: streamExecutionEvents
+      summary: Stream execution events
+      description: >-
+        Server-sent events. Event IDs are decimal integers starting at 1 and
+        increasing by 1 per event within an execution. Types are stdout and
+        stderr carrying data of at most 32 KiB per chunk, truncated carrying
+        limit_bytes and sent at most once, and complete carrying the full
+        Execution and always sent last. Output is text: chunks are cut on UTF-8
+        boundaries so a valid multi-byte character is never split across two
+        events, and bytes that are not valid UTF-8 are replaced with U+FFFD in
+        each stream independently. Last-Event-ID replays only events with a
+        greater ID, then continues live; a non-integer value or one beyond the
+        newest event is 400 invalid_request. The server sends a ping comment
+        every 15 seconds while open and closes the stream after complete.
+        Closing a stream never affects the execution, and an open stream counts
+        as activity for the idle timeout. Each sandbox permits 32 concurrent
+        streams; further attempts return 429 until a stream closes.
+        Execution history is bounded to 200
+        records, protecting all active executions and the most recently completed
+        one. Eligible records and their idempotency keys can be removed by history
+        or aggregate-output pruning; no fixed replay window is guaranteed.
+      responses:
+        '200':
+          description: An event stream.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              example: |
+                id: 1
+                event: stdout
+                data: {"data":"hello\n"}
+
+                id: 2
+                event: complete
+                data: {"id":"exe_456","state":"completed","exit_code":0,"termination_reason":"exited"}
+
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/sandboxes/{sandbox_id}/files:
+    parameters:
+      - $ref: '#/components/parameters/SandboxID'
+      - $ref: '#/components/parameters/FilePath'
+    get:
+      tags: [files]
+      operationId: readFile
+      summary: Read a file
+      description: >-
+        Returns the raw bytes of a regular file. The sandbox resumes first if
+        paused. Paths must be absolute UTF-8 without NUL or parent traversal;
+        directories and nonregular entries return 400 invalid_request. Files
+        larger than 10 MiB return 413 payload_too_large.
+      responses:
+        '200':
+          description: The file contents.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '502':
+          $ref: '#/components/responses/BackendError'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+    put:
+      tags: [files]
+      operationId: writeFile
+      summary: Write a file
+      description: >-
+        Writes raw bytes, creating parent directories and replacing an existing
+        file. The sandbox resumes first if it is paused. Idempotent.
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: Metadata for the destination observed after the write.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileEntry'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+        '502':
+          $ref: '#/components/responses/BackendError'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/sandboxes/{sandbox_id}/files/stat:
+    parameters:
+      - $ref: '#/components/parameters/SandboxID'
+      - $ref: '#/components/parameters/FilePath'
+    get:
+      tags: [files]
+      operationId: statFile
+      summary: Read file metadata without following the final symlink
+      responses:
+        '200':
+          description: File metadata.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileEntry'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '502':
+          $ref: '#/components/responses/BackendError'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+
+  /v1/sandboxes/{sandbox_id}/files/list:
+    parameters:
+      - $ref: '#/components/parameters/SandboxID'
+      - $ref: '#/components/parameters/FilePath'
+    get:
+      tags: [files]
+      operationId: listFiles
+      summary: List immediate directory children in bytewise name order
+      description: >-
+        Resumes paused sandboxes. No snapshot consistency across pages. Paths
+        must be UTF-8, absolute, at most 4096 bytes, without NUL or parent traversal.
+        Standard images inspect at most 10000 immediate children and 64 MiB of
+        framed metadata per page within 30 seconds without reading nested subtrees;
+        if the image user cannot list the directory or the image lacks compatible
+        stat/readlink tools, a 64 MiB / 10000-entry archive scan is used. Child
+        symlinks are not followed. Unknown or repeated query parameters,
+        malformed or path-mismatched cursors return 400. Runtime deadlines
+        return 502.
+      parameters:
+        - in: query
+          name: limit
+          schema: {type: integer, minimum: 1, maximum: 1000, default: 100}
+        - in: query
+          name: cursor
+          schema: {type: string, maxLength: 12000}
+          description: Opaque next_cursor from the preceding page for this path.
+      responses:
+        '200':
+          description: One directory page; next_cursor is omitted on the last page.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [entries]
+                properties:
+                  next_cursor: {type: string}
+                  entries:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/FileEntry'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '502':
+          $ref: '#/components/responses/BackendError'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+
+  /v1/sandboxes/{sandbox_id}/files/archive:
+    parameters:
+      - $ref: '#/components/parameters/SandboxID'
+      - $ref: '#/components/parameters/FilePath'
+    get:
+      tags: [files]
+      operationId: readArchive
+      summary: Download a validated tar archive rooted at the selected name
+      description: >-
+        Buffers and validates at most 32 MiB encoded, 16 MiB regular payload,
+        and 4096 entries. Preserves regular bytes, directories, safe internal
+        relative symlinks without parent traversal components (even normalized-safe
+        parent traversal is rejected) and earlier-member hardlinks. Root entry is the
+        selected basename. Unsupported selected content intentionally returns 400,
+        including a symlink selected without its target member. Size/count
+        limits return 413; a name longer than 4096 bytes is invalid_request.
+        Aggregate member/link path text is limited to 1 MiB. Paths follow
+        directory-listing validation; only path is accepted as a query parameter.
+        Paused sandboxes resume first; runtime operations have a 30-second deadline.
+      responses:
+        '200':
+          description: Validated uncompressed tar bytes.
+          content:
+            application/x-tar:
+              schema: {type: string, format: binary}
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '502':
+          $ref: '#/components/responses/BackendError'
+    put:
+      tags: [files]
+      operationId: writeArchive
+      summary: Extract a fully validated tar beneath an existing directory
+      description: >-
+        Validates all entries before any mutation. Rejects absolute/traversal
+        names or targets, devices, FIFO, sparse, unsupported metadata, duplicate
+        names, nondirectory ancestors, and existing symlink destinations. Limits:
+        32 MiB encoded, 16 MiB regular bytes, 4096 members, 4096-byte names, 1 MiB aggregate member/link path text.
+        Extraction is not atomic against runtime failure or concurrent writes.
+        Upload is not automatically retried by SDKs. No host extraction occurs.
+        Paths follow directory-listing validation; only path is accepted as a
+        query parameter. Paused sandboxes resume after validation; runtime
+        operations have a 30-second deadline. Missing destinations are 404 and
+        nondirectories are 400. Quiesce destination writers before upload.
+        Symlinks must target an archive regular-file or directory member without
+        parent traversal; hardlinks target an earlier regular member. Owners
+        and special mode bits are not imported.
+      requestBody:
+        required: true
+        content:
+          application/x-tar:
+            schema: {type: string, format: binary}
+          application/octet-stream:
+            schema: {type: string, format: binary}
+      responses:
+        '204':
+          description: Archive extracted.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '502':
+          $ref: '#/components/responses/BackendError'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: >-
+        Required on every /v1 request when the server runs with
+        SANDBOX_API_KEY set. The key is compared in constant time. /healthz and /readyz
+        never requires it.
+  parameters:
+    SandboxID:
+      name: sandbox_id
+      in: path
+      required: true
+      description: Opaque sandbox identifier. Clients must not parse it.
+      schema:
+        type: string
+    ExecutionID:
+      name: execution_id
+      in: path
+      required: true
+      description: Opaque execution identifier. Clients must not parse it.
+      schema:
+        type: string
+    FilePath:
+      name: path
+      in: query
+      required: true
+      description: Absolute path inside the sandbox.
+      schema:
+        type: string
+    LastEventID:
+      name: Last-Event-ID
+      in: header
+      required: false
+      description: >-
+        Replays only events whose ID is greater than this value, then continues
+        live. A non-integer value is 400 invalid_request.
+      schema:
+        type: string
+  responses:
+    BadRequest:
+      description: >-
+        400 invalid_request: malformed JSON, an invalid value, or an invalid
+        Last-Event-ID.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: invalid_request
+            message: command must not be empty
+    Unauthorized:
+      description: '401 unauthorized: the API key is missing or wrong.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: unauthorized
+            message: missing or invalid API key
+    NotFound:
+      description: '404 not_found: the sandbox, execution, or file does not exist.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: not_found
+            message: sandbox sbx_123 does not exist
+    Conflict:
+      description: >-
+        409, one of invalid_state (the operation is not allowed in the
+        sandbox's current state), busy (the sandbox's execution slots are full), or idempotency_conflict (the key was reused with a
+        different command, cwd, env, or stdin).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            invalid_state:
+              value:
+                code: invalid_state
+                message: sandbox sbx_123 is killed
+            busy:
+              value:
+                code: busy
+                message: sandbox sbx_123 has reached its execution limit
+            idempotency_conflict:
+              value:
+                code: idempotency_conflict
+                message: idempotency key was used for a different command, cwd, environment, or stdin
+    PayloadTooLarge:
+      description: >-
+        413 payload_too_large: the JSON request body exceeds 1 MiB (8 MiB for execution starts), decoded stdin exceeds 1 MiB, or a file
+        upload exceeds 10 MiB, a directory archive scan exceeds 64 MiB / 10000 headers,
+        or tar transfer exceeds 32 MiB encoded / 16 MiB payload / 4096 members.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            code: payload_too_large
+            message: request body exceeds 1048576 bytes
+    RateLimited:
+      description: >-
+        429 rate_limited: all sandbox admission slots are reserved, including
+        containers awaiting cleanup, a deployment resource budget is exhausted,
+        or a sandbox has reached its open event-stream
+        limit. Retry when capacity becomes available.
+      headers:
+        Retry-After:
+          description: Seconds to wait before retrying.
+          schema:
+            type: integer
+            minimum: 0
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Internal:
+      description: '500 internal: an unexpected server error. Retryable.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    BackendError:
+      description: '502 backend_error: the container runtime failed. Retryable.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unavailable:
+      description: >-
+        503 unavailable: the server is shutting down or not ready. Retryable.
+      headers:
+        Retry-After:
+          description: Seconds to wait before retrying.
+          schema:
+            type: integer
+            minimum: 0
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    Readiness:
+      type: object
+      required: [status, version, docker]
+      properties:
+        status:
+          type: string
+          enum: [ok, unavailable]
+        version:
+          type: string
+        docker:
+          type: string
+          enum: [ok, unreachable]
+    Health:
+      type: object
+      required: [status, version]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        version:
+          type: string
+          description: The build version.
+    CreateSandboxRequest:
+      type: object
+      description: >-
+        Every field is optional. Unknown fields are ignored so a newer client
+        can talk to an older server.
+      properties:
+        runtime: {type: string, enum: [runc, runsc], description: Administrator-allowed Docker runtime.}
+        image:
+          type: string
+          default: alpine:3.20
+          description: Docker image reference or template:<name> registered in deployment policy.
+        memory_mb:
+          type: integer
+          minimum: 16
+          default: 512
+        max_concurrent_executions:
+          type: integer
+          minimum: 1
+          maximum: 8
+          default: 1
+          description: Immutable execution slot limit. Above one, unexplained exit 137 is unknown because container OOM counters cannot identify one process.
+        pids_limit:
+          type: integer
+          minimum: 64
+          default: 1024
+          description: >-
+            Bounds tasks, not processes; threads count. Stops a fork bomb at
+            the container boundary instead of at the host's PID table.
+        nano_cpus:
+          type: integer
+          minimum: 0
+          default: 0
+          description: >-
+            CPU limit in units of 1e-9 CPUs; 1000000000 is one CPU. 0 means no
+            limit without deployment policy. Policy mode rejects explicit zero
+            and defaults to the smaller of one CPU and its total CPU budget.
+        network:
+          type: string
+          enum: [bridge, none, filtered]
+          default: bridge
+          description: >-
+            bridge gives the sandbox outbound network access; none removes
+            external networking. Host networking is not offered. Policy mode
+            restricts allowed modes and defaults to its first permitted mode.
+        timeout_seconds:
+          type: integer
+          minimum: 0
+          default: 300
+          description: Lifetime timeout; 0 disables it.
+        timeout_action:
+          type: string
+          enum: [kill, pause]
+          default: kill
+        idle_timeout_seconds:
+          type: integer
+          minimum: 0
+          default: 0
+          description: Idle timeout; 0 disables it.
+        idle_timeout_action:
+          type: string
+          enum: [kill, pause]
+          default: kill
+        env:
+          type: object
+          additionalProperties: {type: string}
+          description: >-
+            The sandbox's own environment. Every execution sees it and it
+            survives a client reconnecting; a per-execution env entry overrides
+            it for that execution only. Names and values follow the execution
+            env limits. Values are never echoed in a response or written to a
+            log.
+    UpdateSandboxRequest:
+      type: object
+      description: >-
+        Exactly one of the two fields is required and they are mutually
+        exclusive. Lifetime is the only mutable property.
+      properties:
+        timeout_seconds:
+          type: integer
+          minimum: 0
+          description: >-
+            Replaces the deadline with now plus this value, so it may shorten or
+            lengthen. 0 removes the deadline.
+        extend_seconds:
+          type: integer
+          minimum: 0
+          description: >-
+            Keeps the later of the current deadline and now plus this value, so
+            it can only extend. 0 is a no-op, never an unbounded lifetime.
+    Sandbox:
+      type: object
+      required:
+        - agent_mode
+        - protected
+        - id
+        - state
+        - image
+        - memory_mb
+        - max_concurrent_executions
+        - pids_limit
+        - nano_cpus
+        - network
+        - timeout_seconds
+        - timeout_action
+        - idle_timeout_seconds
+        - idle_timeout_action
+        - created_at
+        - expires_at
+        - kill_reason
+      properties:
+        runtime: {type: string, enum: [runc, runsc], description: Administrator-allowed Docker runtime.}
+        agent_mode: {type: string, enum: [guest, legacy, unavailable]}
+        protected: {type: boolean, description: Non-root workload isolated from the guest supervisor.}
+        id:
+          type: string
+          description: Opaque identifier. Clients must not parse it.
+        state:
+          type: string
+          enum: [pending, running, paused, killed]
+        image:
+          type: string
+        memory_mb:
+          type: integer
+          minimum: 16
+        max_concurrent_executions:
+          type: integer
+          minimum: 1
+          maximum: 8
+          default: 1
+          description: Immutable execution slot limit. Above one, unexplained exit 137 is unknown because container OOM counters cannot identify one process.
+        pids_limit:
+          type: integer
+          minimum: 64
+        nano_cpus:
+          type: integer
+          minimum: 0
+        network:
+          type: string
+          enum: [bridge, none, filtered]
+        timeout_seconds:
+          type: integer
+          minimum: 0
+        timeout_action:
+          type: string
+          enum: [kill, pause]
+        idle_timeout_seconds:
+          type: integer
+          minimum: 0
+        idle_timeout_action:
+          type: string
+          enum: [kill, pause]
+        created_at:
+          type: string
+          format: date-time
+          description: RFC 3339 in UTC.
+        expires_at:
+          type: [string, 'null']
+          format: date-time
+          description: >-
+            The current lifetime deadline. Null when the lifetime timeout is
+            disabled, pending, killed, or paused with timeout_action pause.
+        kill_reason:
+          type: [string, 'null']
+          enum: [requested, timeout, idle_timeout, evicted, null]
+          description: Set when the sandbox is killed.
+    SandboxList:
+      type: object
+      required: [sandboxes]
+      properties:
+        sandboxes:
+          type: array
+          items:
+            $ref: '#/components/schemas/Sandbox'
+    ExecuteRequest:
+      type: object
+      required: [command]
+      properties:
+        output_tail:
+          type: boolean
+          default: false
+          description: Retain newest output events within the existing limits. Requires execution.output-tail.v1 and participates in idempotency.
+        timeout_ms:
+          type: integer
+          minimum: 0
+          maximum: 9223372036854
+          description: >-
+            Managed execution deadline, requiring e2b.background.v1 capability
+            and a guest agent or Linux Python 3 for the legacy supervisor. Mutually exclusive with
+            timeout_seconds and nonempty stdin. Zero disables the deadline.
+            Unlike timeout_seconds, this is part of the idempotency identity
+            and expiry uses immediate group kill. Check capabilities first.
+        command:
+          type: array
+          minItems: 1
+          items:
+            type: string
+          description: >-
+            argv, executed without a shell. Total UTF-8 bytes plus one byte
+            per argument must not exceed 1048576; larger commands return 413
+            payload_too_large so echoed commands fit complete-event limits.
+        idempotency_key:
+          type: string
+          maxLength: 128
+          description: >-
+            Optional. Scoped to the sandbox. Reusing a key with the same
+            command, cwd, env, and stdin returns the existing execution; reusing it
+            with any of these different is 409 idempotency_conflict.
+            Changing timeout_seconds on a replay does not change the existing
+            execution's deadline.
+        timeout_seconds:
+          type: integer
+          minimum: 0
+          description: >-
+            Optional. Bounds this execution, in seconds. Omitted or 0 means the
+            execution has no deadline of its own. The sandbox lifetime deadline
+            still applies. An execution deadline ends the command with
+            termination_reason timeout and normally leaves the sandbox running;
+            failure to confirm process termination can require container removal.
+            A sandbox lifetime deadline with timeout_action kill removes the
+            sandbox; timeout_action pause pauses it instead.
+        env:
+          type: object
+          maxProperties: 64
+          x-max-key-bytes: 64
+          x-max-total-bytes: 32768
+          additionalProperties:
+            type: string
+            x-max-bytes: 8192
+          description: >-
+            Optional. Environment variables for this execution only. A name
+            here overrides a variable of the same name that the container
+            already has, and every other container variable stays visible.
+            Environment fields are never echoed; commands may print them.
+            Execution records retain only the entry count
+            and a process-keyed HMAC-SHA256 fingerprint, not raw env.
+            Omitted or empty leaves the container's environment unchanged.
+            At most 64 entries, 64 bytes per name, 8192 bytes per value, and
+            32768 bytes in total, counting each name, one equals-sign byte, and
+            its value; exceeding a bound is an invalid_request.
+            A name must be non-empty and must not contain "=", a NUL byte, or a
+            newline. A value must not contain a NUL byte.
+        cwd:
+          type: string
+          x-max-bytes: 4096
+          description: >-
+            Optional. Absolute directory the command runs in, at most 4096
+            bytes. Omitted or empty uses the image's working directory. A
+            missing or non-directory path does not fail the start: the
+            execution completes with exit code 126 and
+            "sandbox: cwd is not a usable directory: <path>" on stderr, so a
+            bad path is distinguishable from a missing command (127). A
+            relative path is an invalid_request.
+        stdin:
+          type: string
+          x-max-bytes: 1048576
+          description: >-
+            One-shot UTF-8 text followed by EOF. Omitted or empty means EOF.
+            The decoded input is at most 1 MiB; larger input is 413
+            payload_too_large. Input is not interactive and is never echoed
+            in execution responses. Only an input fingerprint is retained
+            for idempotency comparison. A command may itself print its input.
+            JSON bodies are separately bounded at 8 MiB for escaped text.
+            Non-empty input requires writable /tmp and /bin/mkdir, /bin/rm,
+            /bin/rmdir in the image; missing staging tools return backend_error.
+    ExecutionSummary:
+      type: object
+      required:
+        - id
+        - sandbox_id
+        - command
+        - state
+        - exit_code
+        - termination_reason
+        - output_truncated
+        - started_at
+        - finished_at
+      properties:
+        pid:
+          type: integer
+          minimum: 1
+          description: Guest PID for managed executions; absent otherwise. Never a durable identity.
+        id:
+          type: string
+          description: Opaque identifier. Clients must not parse it.
+        sandbox_id:
+          type: string
+        command:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        cwd:
+          type: [string, 'null']
+          description: >-
+            The working directory this execution was started with, echoed for
+            diagnostics. Null when the request set none. The environment is
+            never echoed, because it may carry credentials.
+        state:
+          type: string
+          enum: [running, completed]
+        exit_code:
+          type: [integer, 'null']
+          description: >-
+            Null while running, or when the runtime could not report one.
+        termination_reason:
+          type: [string, 'null']
+          enum: [canceled, timeout, oom, evicted, exited, unknown, null]
+          description: >-
+            Null while running. The classifier uses the first recorded intent
+            (canceled or timeout), then OOM evidence, container liveness, and exit
+            status. The eviction sweep can also finalize an execution directly
+            as evicted, preserving a previously recorded intent. Above one configured
+            execution slot, OOM counters are not attributed to an execution and
+            an otherwise unexplained exit 137 is unknown. Exit code 137 alone
+            never implies oom. Interrupted work in durable recovery becomes
+            unknown with a null exit code, never re-executed. The same applies
+            to unconfirmed runtime startup without a process observer; sibling
+            work lost to its conservative cleanup is evicted unless an earlier
+            cancellation or timeout intent already won.
+        output_truncated:
+          type: boolean
+          description: >-
+            True when output exceeded the retention limit of 1 MiB or 4096
+            events, or output was lost during durable restart recovery or
+            unconfirmed runtime startup.
+        started_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: [string, 'null']
+          format: date-time
+    Execution:
+      allOf:
+        - $ref: '#/components/schemas/ExecutionSummary'
+        - type: object
+          required: [stdout, stderr]
+          description: >-
+            Retained output. It is exactly the data delivered in events, so a
+            replay from ID 0 reproduces stdout and stderr.
+          properties:
+            stdout_offset:
+              type: integer
+              format: int64
+              minimum: 0
+              description: Absolute byte position of the beginning of retained stdout. Defaults to zero.
+            stderr_offset:
+              type: integer
+              format: int64
+              minimum: 0
+              description: Absolute byte position of the beginning of retained stderr. Defaults to zero.
+            stdout:
+              type: string
+            stderr:
+              type: string
+    ExecutionList:
+      type: object
+      required: [executions]
+      properties:
+        executions:
+          type: array
+          description: Newest first, without stdout and stderr.
+          items:
+            $ref: '#/components/schemas/ExecutionSummary'
+    FileEntry:
+      type: object
+      required: [name, size, mode, mtime, is_dir, type, uid, gid]
+      properties:
+        name: {type: string}
+        size: {type: integer, format: int64, description: Regular-file bytes or symlink target-path bytes; zero for directories}
+        mode: {type: integer, description: POSIX permission bits}
+        mtime: {type: string, format: date-time}
+        is_dir: {type: boolean}
+        type:
+          type: string
+          enum: [file, dir, symlink, other]
+          description: >-
+            What the directory entry is. A symlink is reported as a symlink,
+            never as the file it points at. `other` covers device nodes,
+            sockets and FIFOs.
+        uid: {type: integer, description: Numeric owner from the archive}
+        gid: {type: integer, description: Numeric group from the archive}
+        owner:
+          type: string
+          description: >-
+            Owner name resolved inside the container. Omitted when the guest's
+            account database has no such id; uid is still authoritative.
+        group:
+          type: string
+          description: Group name resolved inside the container; omitted like owner.
+        symlink_target:
+          type: string
+          description: Present only for a symlink with a UTF-8 target.
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum:
+            - invalid_request
+            - unauthorized
+            - not_found
+            - invalid_state
+            - busy
+            - idempotency_conflict
+            - payload_too_large
+            - rate_limited
+            - internal
+            - backend_error
+            - unavailable
+        message:
+          type: string

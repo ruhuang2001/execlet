@@ -1,0 +1,85 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "execlet",
+  "description": "Execution primitives for AI agents: run untrusted code in Docker, with resumable output, typed failures, and cancellable commands.",
+  "colors": {
+    "primary": "#0D9373",
+    "light": "#E8F5F1",
+    "dark": "#0B1F1A"
+  },
+  "logo": {
+    "light": "/logo/light.svg",
+    "dark": "/logo/dark.svg"
+  },
+  "favicon": "/logo/favicon.svg",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Guide",
+        "groups": [
+          {
+            "group": "Get started",
+            "icon": "rocket",
+            "pages": ["index", "quickstart", "installation"]
+          },
+          {
+            "group": "Concepts",
+            "icon": "book-open",
+            "pages": ["concepts/lifecycle", "concepts/execution", "concepts/errors"]
+          },
+          {
+            "group": "SDKs",
+            "icon": "code",
+            "pages": ["sdk/go", "sdk/python", "sdk/typescript"]
+          },
+          {
+            "group": "Guides",
+            "icon": "compass",
+            "pages": ["guides/agent-tool", "guides/e2b-migration", "guides/mcp"]
+          },
+          {
+            "group": "Reference",
+            "icon": "terminal",
+            "pages": ["cli"]
+          }
+        ]
+      },
+      {
+        "tab": "API reference",
+        "openapi": "openapi.yaml",
+        "groups": ["health", "sandboxes", "executions", "files"]
+      },
+      {
+        "tab": "Operations",
+        "groups": [
+          {
+            "group": "Running execlet",
+            "icon": "server",
+            "pages": [
+              "operations/self-hosting",
+              "operations/policy",
+              "operations/templates",
+              "operations/recovery",
+              "operations/metrics",
+              "operations/isolation"
+            ]
+          },
+          {
+            "group": "Project",
+            "icon": "folder-tree",
+            "pages": ["changelog"]
+          }
+        ]
+      }
+    ]
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/ruhuang2001/tiny-sandbox"
+    }
+  },
+  "contextual": {
+    "options": ["copy", "view", "chatgpt", "claude", "perplexity", "mcp", "download-spec"]
+  }
+}

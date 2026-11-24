@@ -1,7 +1,7 @@
 # Deployment policy, recovery and metrics
 
-These features describe the current source, not the published v0.0.2 binaries.
-They do not turn Docker into a hardened multi-tenant isolation boundary.
+This guide describes the current source. For released binaries, use the guide at the matching tag.
+These controls do not turn Docker into a hardened multi-tenant isolation boundary.
 Use a dedicated runtime host, protect its Docker socket, and keep the listener
 private or behind an authenticated TLS endpoint. An API key authorizes the
 whole daemon, not one tenant.

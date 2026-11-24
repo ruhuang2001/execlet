@@ -27,7 +27,7 @@ This project answers those questions with working code and tests rather than pro
 
 ## Non-goals
 
-Templates, memory snapshots, volumes, secrets, multi-tenancy, billing, browser automation, additional SDK languages, live-process recovery, distributed control state, and hardened isolation (microVMs, gVisor). See [future.md](future.md).
+Process checkpoints, persistent volumes, secret injection, multi-tenancy, billing, browser automation, additional SDK languages, live-process recovery, distributed control state, and a hardened isolation guarantee are outside the current scope. [Filesystem templates and prewarming](operations.md#named-images-and-filesystem-templates) are supported; templates do not preserve process memory. See [future directions](future.md).
 
 ## Architecture
 
@@ -354,35 +354,10 @@ handling, policy adoption, trust and storage limits.
 
 ## Verification
 
-The existing Go suite has three layers, each answering a different question.
-The Python SDK covers the same semantics through installed-package E2E against
-real Docker, including an HTTP fault proxy for retry, replay and cancellation
-failures; see its [failure model](../sandbox-python/e2e/FAILURES.md).
-
-| Layer | Where | Question |
-|---|---|---|
-| Unit | `internal/daemon` with the in-memory backend; `dockerapi` parsers; SDK SSE decoding | Is the semantics right: transition table, classification precedence, reconnect de-duplication, backoff bounds |
-| Contract | `httptest` with injected faults (reset connections, 429, 5xx, half-written bodies) and a fake Docker daemon on a unix socket | Is the behaviour right when transport breaks: retry boundaries, unconfirmed cancel, truncated stream |
-| End-to-end | `scripts/e2e.sh` against real Docker | Is it right in reality: pause retains memory, OOM is distinguished from `kill -9`, cancellation kills the process tree, a clean stop sweeps its containers, and a `kill -9` leaves an orphan the next start reclaims |
-
-Rules:
-
-- The existing suite includes unit, contract, and end-to-end checks. Prefer real-Docker end-to-end scenarios for new behavior changes, with repeatable evidence. See [Contributing](../CONTRIBUTING.md).
-- Coverage is measured twice: `go test -covermode=atomic -coverpkg=./...` for the unit and contract layers, and binaries built with `-cover -covermode=atomic -coverpkg=./...` during the end-to-end run. CI merges both covdata directories and gates on the merged number (70%).
-- The end-to-end suite writes evidence under `artifacts/<stage>/`: the commands run, raw SSE transcripts, cgroup counters, JSON responses, server logs, and the final container list. These artifacts are generated locally or uploaded by CI; they are not committed.
-- `api/openapi.yaml` and the router must not drift: a test parses the spec's path set and compares it both ways with the routes the server registers.
-- Anything not actually run is labelled `not run` in the documentation. Local `act` runs are not reported as remote CI.
-
-Python has one Error exception, keyword-only request dataclasses, explicit
-cancellation tokens, and terminal-state confirmation during automatic cleanup.
-See the normative [Python SDK contract](sdk-python.md) for its compatibility
-policy and deliberate differences from Go.
-
-## CI/CD
-
-See [Contributing](../CONTRIBUTING.md#coverage-and-ci) for CI checks and their
-evidence, and [Versioning and release](versioning.md) for compatibility rules
-and the tagged release workflow.
+Unit tests check the state machine; contract tests check route/schema parity
+and failures at transport boundaries; Docker acceptance checks runtime behavior
+such as pause, process cleanup and OOM attribution. See [Contributing](../CONTRIBUTING.md#checks)
+for test entry points and [versioning](versioning.md) for the release workflow.
 
 ## Known pitfalls
 
@@ -425,6 +400,5 @@ No tar bytes are extracted on the daemon host.
 ## Further reading
 
 - [HTTP API](api.md), [Go SDK](sdk.md), and [CLI](cli.md): public contracts and usage.
-- [Historical SDK comparison](history/sdk-comparison.md): interfaces and tradeoffs that informed the design.
 - [Future directions](future.md): capabilities outside the current scope.
-- [Contributing](../CONTRIBUTING.md): checks and evidence collection.
+- [Contributing](../CONTRIBUTING.md) and [failure models](testing/README.md): checks and the failures each suite exposes.

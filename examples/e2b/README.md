@@ -4,9 +4,14 @@ This checkout provides a synchronous Python facade and a TypeScript facade over
 tiny-sandbox. No E2B Cloud account, key or runtime package is required. This is
 application-source compatibility for part of E2B's basic Sandbox API, not an
 E2B HTTP endpoint or a replacement package named `e2b`. See the
-[v0.0.2 baseline](../../docs/e2b-compatibility.md) for the original lifecycle and
-file subset, and the [current command contract](../../docs/e2b-background-commands.md)
-for deadlines, capabilities, and background handles.
+[command contract](../../docs/e2b-background-commands.md) for deadlines,
+capabilities, and background handles.
+
+The basic subset supports `Sandbox.create` with the local `base` image and
+create-time environment, `Sandbox.connect` to running sandboxes, lifetime
+updates, and confirmed removal. File methods cover single-file read and write
+(text or bytes), and one-level directory listing. Relative paths resolve from
+the image user's home, not the client's current directory.
 
 ## Prepare the server, image and packages
 

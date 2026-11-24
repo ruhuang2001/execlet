@@ -23,8 +23,9 @@ Download and install the latest release:
 curl -fsSL https://raw.githubusercontent.com/ruhuang2001/tiny-sandbox/main/scripts/install.sh | sh
 ```
 
-The installer selects your platform and puts both binaries in
-`$HOME/tiny-sandbox-quickstart`. No sudo is needed.
+The installer selects your platform and puts only `sandboxd` and `sandboxctl` in
+`$HOME/tiny-sandbox-quickstart`. No sudo is needed. It does not install examples.
+To try the offline pytest demo, follow the [MCP guide](../examples/mcp/README.md#try-the-packaged-pytest-demo).
 
 ## 2. Start the server (terminal A)
 

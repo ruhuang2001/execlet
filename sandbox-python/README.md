@@ -161,9 +161,9 @@ Only `stdin=False` and `retain_output=True` are accepted. Kill uses the
 configured connection request budget (default 30 seconds); run/connect use
 their remaining observation budget. Native graceful cancel is unchanged.
 
-See the [migration example](../examples/e2b/README.md) and
-[supported subset](../docs/e2b-compatibility.md) for lifecycle/files and image
-requirements. The unit suite uses public APIs and loopback HTTP faults:
+See the [migration guide](../examples/e2b/README.md) for supported lifecycle and
+file operations and the compatibility image. The unit suite uses public APIs
+and loopback HTTP faults:
 
 ```sh
 PYTHONPATH=sandbox-python/src python3.15 -B -m unittest discover -s sandbox-python/tests -v

@@ -1,14 +1,12 @@
-# E2B background commands: next-profile contract
+# E2B background command contract
 
-The next compatibility profile lets an application start a command, leave the
+The background compatibility profile lets an application start a command, leave the
 client process, reconnect by sandbox ID and PID, and wait or kill without
 starting the work again.
 
-**Status: implemented in the current source; not part of published v0.0.2.**
-Decided 2026-11-18 against tiny-sandbox
-`28912c69c245df6903536f7b9fac165340f64f56` (v0.0.2). This does not rewrite
-that release. Its 19-case baseline is preserved for historical verification;
-current CI uses the 40-case `--profile background` contract in both languages.
+**First released in v0.0.3.** For the basic lifecycle and file subset, start with
+the [migration guide](../examples/e2b/README.md). The [v0.0.2 foreground baseline](history/e2b-foreground-baseline.md)
+is historical; current CI uses the 40-case `--profile background` contract in both languages.
 The [failure model and cases](testing/e2b-background-failures.md) are the
 implementation gate. No E2B Cloud account, key, or cloud run is required.
 

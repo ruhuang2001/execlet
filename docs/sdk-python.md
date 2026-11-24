@@ -191,7 +191,7 @@ accept `cancel_remote=False`. An interrupted in-flight wait raises `wait_timeout
 with the start key or execution identity, without remote cancellation. Pass it
 to both calls when composing a start and stream. Pre-canceled starts still send
 nothing. The default remains `True`; `exec`/`exec_stream` keep remote cancellation.
-The optional [E2B facade](e2b-compatibility.md), imported as `tiny_sandbox.e2b`,
+The optional [E2B facade](../examples/e2b/README.md), imported as `tiny_sandbox.e2b`,
 uses this wait-only path, Bash command strings and compatible error families.
 It does not change the native argv API or require an E2B dependency.
 
@@ -386,7 +386,7 @@ PYTHON=python3 SDK_INSTALLED=1 bash scripts/e2e-python.sh artifacts/python-e2e
 The suite retains a JSON report, HTTP proxy trace, daemon logs, source identity,
 and cleanup results under `artifacts/python-e2e`. Without `SDK_INSTALLED=1`,
 the launcher creates a virtual environment and installs a wheel itself. See the
-pre-implementation [failure model](../sandbox-python/e2e/FAILURES.md). CI runs
+[failure models](testing/README.md). CI runs
 the installed package against real Docker on Python 3.10 and 3.15 and uploads
 evidence even on failure. The wheel and source distribution are verification
 artifacts, not publication to a package index.

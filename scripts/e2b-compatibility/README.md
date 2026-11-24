@@ -1,6 +1,10 @@
 # E2B compatibility acceptance
 
-This runs the acceptance cases in [the plan](../../docs/e2b-compatibility.md).
+This runs the acceptance cases defined in the [foreground baseline](../../docs/history/e2b-foreground-baseline.md)
+and the [background-command profile](../../docs/testing/e2b-background-failures.md).
+The harness must report a missing adapter, key, image or Docker as `not_run`,
+fail a narrowed selection or any failed cleanup, and remove only sandboxes with
+its own owner label.
 The production adapters are `tiny_sandbox.e2b` and `@tiny-sandbox/sdk/e2b` in
 the SDK packages. A passing run is evidence for the cases it covers and nothing
 wider; a missing module still reports `not_run`, never a pass.

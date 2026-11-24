@@ -133,9 +133,8 @@ await connected.kill();
   `requestTimeoutMs` (default 30 seconds). Per-command request timeouts, signals,
   interactive stdin, PTYs and process listing are not supported.
 
-See the [background contract](../docs/e2b-background-commands.md),
-[migration example](../examples/e2b/README.md) and
-[supported subset](../docs/e2b-compatibility.md). The native package root
+See the [background contract](../docs/e2b-background-commands.md) and
+[migration guide](../examples/e2b/README.md). The native package root
 retains its browser support and default remote-cancel behavior.
 
 ### Additive native methods

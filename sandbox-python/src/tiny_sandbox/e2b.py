@@ -1,6 +1,6 @@
 """Source-compatible E2B 2.64.0 subset over sandboxd, without E2B dependencies.
 
-See docs/e2b-compatibility.md for the allowlist and image prerequisites.
+See examples/e2b/README.md for the supported subset and image prerequisites.
 Native Client cancellation still cancels remote work; local observation failure
 in this facade does not. Command deadlines are enforced remotely.
 No cloud credentials, endpoints or template IDs are used.

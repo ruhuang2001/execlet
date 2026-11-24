@@ -1,9 +1,10 @@
-# E2B compatibility: v0.0.2 foreground baseline
+# E2B foreground baseline (v0.0.2)
 
 **Historical baseline.** This document records the v0.0.2 allowlist and its
-19-case acceptance matrix. For current usage, start with the
-[migration example](../examples/e2b/README.md). The current
-[background-command contract](e2b-background-commands.md) supersedes the
+19-case acceptance matrix. The current 40-case profile still reuses the A01–A16
+and W01–W03 definitions below. For current usage, start with the
+[migration example](../../examples/e2b/README.md). The current
+[background-command contract](../e2b-background-commands.md) supersedes the
 timeout, capability, and handle rules below. CI runs that profile with 40 cases
 per language, not the historical 19-case profile.
 
@@ -23,7 +24,7 @@ remain unchanged. This is not E2B HTTP/envd protocol compatibility: the original
 E2B SDK cannot simply point at sandboxd. Do not replace or impersonate the `e2b`
 package. The entry points are `tiny_sandbox.e2b` and
 `@tiny-sandbox/sdk/e2b`, included in the existing SDK distributions without
-an E2B runtime dependency. See the [migration example](../examples/e2b/README.md).
+an E2B runtime dependency. See the [migration example](../../examples/e2b/README.md).
 
 Keep native Go/Python/TypeScript APIs and argv execution unchanged. The optional
 compatibility surface uses the same execution, retention and cleanup machinery.
@@ -120,7 +121,7 @@ ordinary callback failures without retrying the command or killing the process.
 the implemented v0.0.2 adapter, not proven E2B run-timeout parity. The inspected
 upstream runtime also enforces the timeout passed to command Start as a remote
 process deadline. A connection timeout on an existing command is different.
-The [next background-command profile](e2b-background-commands.md#1-reference-and-a-correction-to-the-previous-profile)
+The [next background-command profile](../e2b-background-commands.md#1-reference-and-a-correction-to-the-previous-profile)
 pins that runtime source and specifies the correction plus replacement
 acceptance. A05/W03 and A14's continuation checks below remain evidence of
 local v0.0.2 behavior only until migrated; passing them does not settle the
@@ -160,7 +161,7 @@ A create without an idempotency key is not automatically replayed after an
 ambiguous response. Execution starts retain native keyed recovery. Keeping a
 stream alive or reconnecting it does not renew sandbox lifetime. In-memory
 server restart still loses state. Current source adds separate
-[conservative recovery](operations.md), not E2B persistence or VM isolation.
+[conservative recovery](../operations.md), not E2B persistence or VM isolation.
 
 ## 5. Explicitly deferred
 
@@ -170,8 +171,8 @@ pause/resume/snapshots, port URLs, network policies, volumes, secrets, template
 builds, custom cloud template IDs, user switching, custom shell, bulk/streaming
 file transfers, metadata filters, or create idempotency in the first release.
 
-Background handles now have an implemented [next-profile contract](e2b-background-commands.md)
-and [runnable acceptance profile](testing/e2b-background-failures.md). They are
+Background handles now have an implemented [next-profile contract](../e2b-background-commands.md)
+and [runnable acceptance profile](../testing/e2b-background-failures.md). They are
 still absent from v0.0.2; current source implements them without rewriting that
 release's allowlist. The historical baseline gate is unchanged.
 
@@ -273,7 +274,7 @@ only ID, state, local template name and end time; it does not renew lifetime or
 promise E2B's complete SandboxInfo schema. Pass connection configuration when
 not using environment defaults.
 
-The [image recipe](../examples/e2b/Dockerfile) pins its Debian base, installs
+The [image recipe](../../examples/e2b/Dockerfile) pins its Debian base, installs
 Bash/Python/coreutils and runs as UID 1000 `user`. Its apt repositories are not
 snapshot-pinned: rebuilding can change package versions and the final digest.
 Build once, select the resulting immutable image ID and record guest versions
@@ -283,7 +284,7 @@ with acceptance. No image or SDK is published by the test scripts.
 consumer, verifies E2B is absent at runtime, checks the installed TypeScript
 declarations, and runs A01–A16/W01–W03 plus compare. Import paths are the real
 package entry points, without probe overrides. See the
-[acceptance instructions](../scripts/e2b-compatibility/README.md).
+[acceptance instructions](../../scripts/e2b-compatibility/README.md).
 
 ### Historical foreground evidence boundaries (2026-11-18)
 

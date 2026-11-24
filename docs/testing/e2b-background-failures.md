@@ -2,7 +2,7 @@
 
 The gate must prove that a command outlives its client but not its remote
 deadline, can be reattached without re-execution, and cannot kill a different
-process after PID reuse. See the [next-profile contract](../e2b-background-commands.md).
+process after PID reuse. See the [background command contract](../e2b-background-commands.md).
 
 **Status: runnable against current installed adapters; intentionally red against v0.0.2.**
 Use `installed.sh ... --profile background`; see the

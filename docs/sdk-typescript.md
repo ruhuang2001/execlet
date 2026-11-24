@@ -95,7 +95,7 @@ Execution stdout/stderr are optional because lists omit them. All request and
 response interfaces, Event, ExecutionOutcome, SandboxError and executionOutcome
 are exported from the package root. Internal deep imports are not supported.
 The explicit `@tiny-sandbox/sdk/e2b` subpath provides the optional
-[E2B application-source subset](e2b-compatibility.md) for Node, without an E2B
+[E2B application-source subset](../examples/e2b/README.md) for Node, without an E2B
 runtime dependency. It does not change native argv or browser behavior.
 
 `CreateSandboxRequest` accepts optional `image`, `memory_mb`,
@@ -318,8 +318,8 @@ a canceled terminal snapshot retaining every delivered byte. Additional abort
 scenarios cover ambiguous starts and nonterminal cancel responses.
 
 The runner records requests, IDs, event content/hashes, results, build/daemon
-logs and scoped container cleanup. The [failure matrix](../sandbox-ts/e2e/FAILURE-MATRIX.md)
-precedes implementation. Faults wrap real server responses; there is no fake-only
+logs and scoped container cleanup. See the [failure models](testing/README.md).
+Faults wrap real server responses; there is no fake-only
 unit suite. Package validation installs the tarball, compiles a strict consumer
 and exercises a browser bundle without Node globals against the real daemon.
 

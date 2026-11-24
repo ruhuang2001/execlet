@@ -30,9 +30,9 @@ Expected stdout: `1024`. The first run may need to pull a container image.
 Stop the daemon with Ctrl+C when done. See the [full quick start](docs/quickstart.md)
 for Docker socket troubleshooting, streaming output, and a timeout example.
 
-**Release or source?** The installer downloads a [published release](https://github.com/ruhuang2001/tiny-sandbox/releases/latest).
-Use the docs at its tag for the released contract. The links below describe
-the current checkout. To try unreleased features, [build from source](docs/quickstart.md#build-from-source).
+The installer installs only `sandboxd` and `sandboxctl` from the [latest release](https://github.com/ruhuang2001/tiny-sandbox/releases/latest).
+For the offline pytest demo, [unpack an archive that includes it or build from source](examples/mcp/README.md#try-the-packaged-pytest-demo).
+Use the docs at the release tag for the released contract; the links below describe the current checkout.
 
 ## What you can do
 

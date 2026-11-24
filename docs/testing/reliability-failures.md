@@ -1,7 +1,7 @@
 # Execution reliability failures
 
-These regressions cover the four failures reproduced on source `1774cf4`.
-They do not change the historical v0.0.2 contract or claim stronger isolation.
+These regressions cover the execution failures listed below. They do not claim
+stronger isolation. See the [failure model index](README.md) for other suites.
 
 ## Container name conflicts
 

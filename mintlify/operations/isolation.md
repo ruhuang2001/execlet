@@ -62,8 +62,10 @@ What is verified rather than assumed:
 - **Filesystem transfer uses a guest helper** for live operations, because runsc's private overlay and `/tmp` can diverge from Docker's archive view of the container.
 - **The backend selects the transfer path at creation**, including when Docker chooses its default runtime, and again during journal recovery.
 
+That suite exercises admission and limits under both runtimes:
+
 ```sh
-make runtime-e2e    # real runc and runsc admission, limits and policy
+make runtime-e2e
 ```
 
 ## Where the guarantee stops

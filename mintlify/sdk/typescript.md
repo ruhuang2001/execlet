@@ -38,7 +38,6 @@ discriminated union:
 ```ts
 const sandbox = await client.createSandbox({ timeout_seconds: 300 });
 
-// execStream starts, streams, and resolves an ExecutionOutcome.
 const outcome = await client.execStream(
   sandbox.id,
   ["sh", "-c", "echo hi; exit 3"],
@@ -49,7 +48,7 @@ const outcome = await client.execStream(
 
 switch (outcome.reason) {
   case "exited":
-    // outcome.execution.exit_code === 0 is the only success
+    if (outcome.execution.exit_code !== 0) console.log("failed");
     break;
   case "timeout":
   case "oom":
@@ -57,10 +56,14 @@ switch (outcome.reason) {
   case "canceled":
     break;
   case "unknown":
-    // outcome carries the original termination_reason
+    console.log("unexplained", outcome.execution.termination_reason);
     break;
 }
 ```
+
+`execStream` starts, streams, and resolves an outcome. The `unknown` variant
+carries the original `termination_reason` so it can be logged rather than guessed
+at.
 
 Only `exited` with exit code zero is command success. `unknown` is a failure
 variant, never a success. An exhaustive switch is the point: adding a variant

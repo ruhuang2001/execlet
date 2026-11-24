@@ -116,18 +116,12 @@ daemon's environment and never enters the sandbox.
 
 ## Editing a policy
 
-```sh
-# write to a temp file in the same directory, then rename
-python3 - <<'PY'
-import json, os, tempfile
-...
-PY
-```
+Write the new document to a temporary file in the **same directory**, then rename
+it over the original, so a reader never sees a half-written policy.
 
 `templates` are re-read on each admission, so template additions and deletions
 take effect **while the daemon runs**. Budgets and runtime settings require a
-restart. Use an atomic rename either way, so a reader never sees a half-written
-file.
+restart.
 
 ## Verifying a policy
 

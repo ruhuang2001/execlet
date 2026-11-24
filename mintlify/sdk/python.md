@@ -96,10 +96,12 @@ from execlet import Error
 try:
     client.exec_stream(sandbox_id, ["false"])
 except Error as error:
-    print(error.code)            # stable; branch on this
+    print(error.code)
     if error.execution is not None:
         print(error.execution.termination_reason)
 ```
+
+`error.code` is the stable field to branch on; the message text is not.
 
 Completed commands do not raise, even with a nonzero exit code. Only transport,
 protocol, and API failures raise `Error`.

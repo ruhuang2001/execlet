@@ -46,12 +46,15 @@ policy decisions, and a model that can widen its own sandbox is not a sandbox.
 
 ## A complete adapter, in outline
 
+The image, the deadline, and `NetworkNone` are the adapter's decisions. The
+model supplies code and nothing else.
+
 ```go
 func (t *Tool) Run(ctx context.Context, code string) (Result, error) {
     sb, err := t.client.CreateSandbox(ctx, sandbox.CreateSandboxRequest{
         Image:          "python:3.12-alpine",
         TimeoutSeconds: ptr(30),
-        Network:        ptr(sandbox.NetworkNone), // the model does not choose this
+        Network:        ptr(sandbox.NetworkNone),
     })
     if err != nil {
         return Result{}, err
@@ -91,11 +94,14 @@ func (t *Tool) Run(ctx context.Context, code string) (Result, error) {
         IsError: final.TerminationReason != sandbox.ReasonExited || final.ExitCode != 0,
         Stdout:  truncate(stdout.String(), maxToolOutput),
         Stderr:  truncate(stderr.String(), maxToolOutput),
-        Reason:  final.TerminationReason, // typed, not inferred from 137
+        Reason:  final.TerminationReason,
         ExitCode: final.ExitCode,
     }, nil
 }
 ```
+
+The returned `Reason` is the server's typed classification. It is what lets the
+model act on a failure instead of guessing from exit code 137.
 
 ## Why the reason field is the whole point
 

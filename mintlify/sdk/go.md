@@ -70,14 +70,18 @@ A returned `*Execution` is a snapshot with `State`, `ExitCode`,
 ```go
 var apiErr *sandbox.Error
 if errors.As(err, &apiErr) {
-    if apiErr.Code == sandbox.CodeBusy {
-        // 409 busy: slots are full. Retry after a pause.
-    }
-    if apiErr.Retryable() {
-        // 429, 500, 502, 503, or a transport failure before a full response.
+    switch {
+    case apiErr.Code == sandbox.CodeBusy:
+        log.Print("slots are full; wait for one to free")
+    case apiErr.Retryable():
+        log.Print("transient; the client may retry")
     }
 }
 ```
+
+`CodeBusy` means wait for a slot to free rather than retrying immediately.
+`Retryable()` covers `429`, `500`, `502`, `503`, and a transport failure that
+happened before a complete response.
 
 Sentinel values match with `errors.Is`, so branch on codes rather than strings.
 

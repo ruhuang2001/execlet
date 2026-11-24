@@ -38,11 +38,13 @@ Send the last ID you saw as `Last-Event-ID`. The server replays only events with
 a greater ID, then continues live. No gaps, no duplicates.
 
 ```sh
-# first connection
 curl -N -H 'Authorization: Bearer ...' \
   "$SANDBOX_DOMAIN/v1/sandboxes/$SB/executions/$EXE/events"
+```
 
-# after a drop, resume from event 42
+After a drop, resume from event 42 by sending that ID:
+
+```sh
 curl -N -H 'Authorization: Bearer ...' \
   -H 'Last-Event-ID: 42' \
   "$SANDBOX_DOMAIN/v1/sandboxes/$SB/executions/$EXE/events"

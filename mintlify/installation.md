@@ -42,11 +42,13 @@ go test -race ./...
 golangci-lint run ./...
 ```
 
-Then, against a real Docker daemon:
+Then, against a real Docker daemon. `feature-e2e` covers MCP, guest transport,
+terminals, egress, templates, and prewarm; `runtime-e2e` covers admission and
+limits under real runc and runsc:
 
 ```sh
-make feature-e2e      # MCP, guest transport, terminals, egress, templates, prewarm
-make runtime-e2e      # real runc and runsc admission and limits
+make feature-e2e
+make runtime-e2e
 make python-e2e
 make typescript-e2e
 ```
@@ -71,14 +73,21 @@ export SANDBOX_DOMAIN=http://127.0.0.1:8080
 
 ## Use a checkout from another project
 
+Go:
+
 ```sh
-# Go
 go get github.com/ruhuang2001/tiny-sandbox/sandbox-go@<commit>
+```
 
-# Python
+Python:
+
+```sh
 python3 -m pip install ./sandbox-python
+```
 
-# TypeScript
+TypeScript:
+
+```sh
 cd sandbox-ts && npm ci && npm pack
 npm install /path/to/execlet-sdk-<version>.tgz
 ```

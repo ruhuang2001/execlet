@@ -71,9 +71,10 @@ which turns a Docker problem into a container-churn problem.
 
 ## Upgrading
 
+Stop the daemon, keep the state directory intact, and check that the new binary
+can read it before serving traffic:
+
 ```sh
-# stop the daemon, keep the state directory intact
-# verify the new binary reads it
 execletd -version
 execletd -state-dir /var/lib/execlet -owner prod-host-1
 ```

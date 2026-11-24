@@ -74,6 +74,7 @@ feature-e2e: build typescript
 	$(PYTHON) scripts/e2e-guest.py --samples 2 --out $(ARTIFACTS)/guest
 	$(PYTHON) scripts/e2e-guest-faults.py --out $(ARTIFACTS)/guest-faults
 	$(PYTHON) scripts/e2e-guest-boundaries.py --out $(ARTIFACTS)/guest-boundaries
+	$(PYTHON) scripts/guest-transport-probe.py --out $(ARTIFACTS)/guest-transport
 	$(PYTHON) scripts/e2e-terminal.py --out $(ARTIFACTS)/terminal
 	$(PYTHON) scripts/e2e-terminal-sdks.py --out $(ARTIFACTS)/terminal-sdks
 	$(PYTHON) scripts/e2e-guest-idle.py --server bin/sandboxd --out $(ARTIFACTS)/guest-idle/acceptance.json

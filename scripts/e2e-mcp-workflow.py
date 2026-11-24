@@ -4,10 +4,13 @@ import json
 import os
 import pathlib
 import platform
+import select
 import shutil
+import signal
 import socket
 import statistics
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.request
@@ -15,6 +18,9 @@ import uuid
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 REVISION = "8c4ab4f02ef64dcea5502e47a6113e8292944087"
+HANDSHAKE_TIMEOUT = 15
+CALL_TIMEOUT = 90
+CLEANUP_TIMEOUT = 10
 
 
 def command(*args, **kwargs):
@@ -62,6 +68,7 @@ def run(args, tmp):
         test = [
             "go",
             "test",
+            "-p=1",
             "-count=1",
             "-run",
             "^TestSchemaStructure$",
@@ -113,7 +120,11 @@ def run(args, tmp):
             else:
                 raise RuntimeError("sandboxd did not become ready")
 
-            argv = ["mcp", "--workspace", str(work), "--image", image]
+            server = {
+                "command": str(cli),
+                "args": ["mcp", "--workspace", str(work), "--image", image],
+                "env": {"SANDBOX_DOMAIN": domain},
+            }
             if not go:
                 doctor = [
                     cli,
@@ -128,11 +139,13 @@ def run(args, tmp):
                 config = json.loads(
                     command(*doctor, env=env, capture_output=True).stdout
                 )
-                server = config["mcpServers"]["tiny-sandbox"]
-                assert server["args"] == argv and server["env"] == {
-                    "SANDBOX_DOMAIN": domain
-                }
-                assert pathlib.Path(server["command"]).samefile(cli)
+                generated = config["mcpServers"]["tiny-sandbox"]
+                assert (
+                    generated["args"] == server["args"]
+                    and generated["env"] == server["env"]
+                )
+                assert pathlib.Path(generated["command"]).samefile(cli)
+                server = generated
                 assert_doctor_fails(
                     env,
                     "workspace:",
@@ -167,7 +180,7 @@ def run(args, tmp):
                 source.write_text(broken)
                 runs.append(
                     workflow(
-                        args, cli, argv, env, owner, source, fixed, test, failure_text
+                        args, server, env, owner, source, fixed, test, failure_text
                     )
                 )
             with urllib.request.urlopen(
@@ -183,8 +196,41 @@ def run(args, tmp):
                 capture_output=True,
             ).stdout.strip()
         finally:
+            failing = sys.exc_info()[0] is not None
             daemon.terminate()
-            daemon.wait(timeout=30)
+            try:
+                daemon.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                daemon.kill()
+                daemon.wait(timeout=CLEANUP_TIMEOUT)
+                if not failing:
+                    raise
+                print("sandboxd did not stop within 30 seconds", file=sys.stderr)
+            finally:
+                if failing:
+                    try:
+                        remaining = subprocess.check_output(
+                            [
+                                "docker",
+                                "ps",
+                                "-aq",
+                                "--filter",
+                                f"label=tiny-sandbox.owner={owner}",
+                            ],
+                            timeout=CLEANUP_TIMEOUT,
+                            text=True,
+                        ).split()
+                        if remaining:
+                            subprocess.run(
+                                ["docker", "rm", "-f", *remaining],
+                                check=True,
+                                timeout=CLEANUP_TIMEOUT,
+                            )
+                    except (OSError, subprocess.SubprocessError) as err:
+                        print(
+                            f"cleanup for Docker owner {owner} failed: {err}",
+                            file=sys.stderr,
+                        )
     return {
         "workload": REVISION if go else "packaged pytest demo",
         "network": "none",
@@ -211,25 +257,47 @@ def assert_doctor_fails(env, diagnostic, *argv):
     ), result
 
 
-def workflow(args, cli, argv, env, owner, source, fixed, test, failure_text):
+def read_response(pipe, operation, timeout):
+    deadline = time.monotonic() + timeout
+    data = bytearray()
+    while not data.endswith(b"\n"):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not select.select([pipe], [], [], remaining)[0]:
+            raise TimeoutError(
+                f"MCP {operation}: no complete response within {timeout}s"
+            )
+        chunk = os.read(pipe.fileno(), 65536)
+        if not chunk:
+            raise EOFError(
+                f"MCP {operation}: client closed stdout before a complete response"
+            )
+        data.extend(chunk)
+    return json.loads(data)
+
+
+def workflow(args, server, env, owner, source, fixed, test, failure_text):
     with subprocess.Popen(
-        [args.client, cli, *argv],
-        env=env,
-        text=True,
+        [args.client, server["command"], *server["args"]],
+        env={**env, **server["env"]},
+        start_new_session=True,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
     ) as proc:
         try:
             assert any(
                 tool["name"] == "sync_workspace"
-                for tool in json.loads(proc.stdout.readline())["tools"]
+                for tool in read_response(proc.stdout, "handshake", HANDSHAKE_TIMEOUT)[
+                    "tools"
+                ]
             )
 
-            def call(name, **kwargs):
+            def call(name, timeout=CALL_TIMEOUT, **kwargs):
                 started = time.perf_counter()
-                proc.stdin.write(json.dumps({"name": name, "arguments": kwargs}) + "\n")
+                proc.stdin.write(
+                    (json.dumps({"name": name, "arguments": kwargs}) + "\n").encode()
+                )
                 proc.stdin.flush()
-                result = json.loads(proc.stdout.readline())
+                result = read_response(proc.stdout, name, timeout)
                 elapsed = (time.perf_counter() - started) * 1000
                 assert not result.get("isError"), result
                 return result["structuredContent"], elapsed
@@ -291,10 +359,24 @@ def workflow(args, cli, argv, env, owner, source, fixed, test, failure_text):
                     changed=changed,
                 )
             finally:
-                call("destroy_sandbox", sandbox_id=sid)
+                if sys.exc_info()[0] is None:
+                    call("destroy_sandbox", timeout=CLEANUP_TIMEOUT, sandbox_id=sid)
         finally:
+            failing = sys.exc_info()[0] is not None
             proc.stdin.close()
-            assert proc.wait(timeout=10) == 0
+            if not failing:
+                try:
+                    assert proc.wait(timeout=CLEANUP_TIMEOUT) == 0
+                except subprocess.TimeoutExpired:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                    proc.wait(timeout=CLEANUP_TIMEOUT)
+                    raise
+            else:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                proc.wait(timeout=CLEANUP_TIMEOUT)
 
 
 if __name__ == "__main__":

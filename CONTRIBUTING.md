@@ -14,10 +14,11 @@ for Docker socket selection and running the service.
 
 ## Checks
 
-Run commands from the repository root. Use fresh artifact directories. New
-behavior should have real Docker/HTTP E2E evidence; write the failure model
-before implementation when testing an isolated system. Do not add unit tests
-after writing implementation code. Existing checks remain gates:
+Run commands from the repository root. Use fresh artifact directories. Before
+implementing a behavior, name the wrong implementation it must reject and pick
+the cheapest layer that can observe it: a Go test for state machines and wire
+contracts, real Docker for runtime semantics. Add the failure to the suite's
+row in the [failure models](docs/testing/README.md). Existing checks remain gates:
 
 ~~~sh
 make race
@@ -56,9 +57,23 @@ The E2B subset has its own [setup and acceptance requirements](scripts/e2b-compa
 including a compatible image digest, Python 3.11+ and Node 22.19+. Its source-derived
 reference does not require an E2B Cloud account or key.
 
+### MCP acceptance and measurements
+
+- **Protocol and workspace regression:** `make build`, then `python3 scripts/e2e-mcp.py`. This checks stdio tools, sync/recovery and cleanup with the official MCP client.
+- **Release archives and latency:** Set `ARCHIVE` to the full package for your OS and architecture. These checks exercise the binaries in the archive, not those in `bin/`.
+
+  ```sh
+  go build -o bin/mcp-client ./cmd/sandboxctl/testdata/mcp-client
+  python3 scripts/e2e-mcp-workflow.py "$ARCHIVE" bin/mcp-client --out artifacts/mcp-python.json
+  python3 scripts/e2e-mcp-workflow.py "$ARCHIVE" bin/mcp-client --go --out artifacts/mcp-go.json
+  ```
+
+  Each run creates a fresh sandbox and measures initial, unchanged and single-file syncs. `timing_us` separates host selection/hash/staging (`scan`), guest updates and manifest commit (`apply`), archive HTTP writes within `apply` (`archive_upload`), and time inside the sync handler (`total`). Image build time is excluded. The first Go run starts with an empty build cache. CI runs one sample per workload and does not gate on latency.
+- **Real Agent (optional):** With an active local Amp login, run `make build`, `docker build -t tiny-sandbox-mcp:local examples/mcp`, and `python3 scripts/e2e-amp.py --out artifacts/amp`. This uses a private Amp run and records the repair conversation, network mode and cleanup evidence.
+
 ### Code comments
 
-Run `make comment-lint` to check changes against the merge base with `origin/main`. Use `COMMENT_BASE=<revision>` to select another base. The checker uses Python 3.10+ and installs its parsers into a local virtual environment. The same rule runs in `make lint` and CI. Existing comments can be removed incrementally. New or rewritten prose comments fail the check. Keep design rationale in an ADR and open issues for implementation compromises. The [delete-comment skill](.agents/skills/delete-comment/SKILL.md) describes the audit. The [first audit](docs/history/comment-audit.md) records original line ranges and dispositions.
+Run `make comment-lint` to check changes against the merge base with `origin/main`. Use `COMMENT_BASE=<revision>` to select another base. The checker uses Python 3.10+ and installs its parsers into a local virtual environment. The same rule runs in `make lint` and CI. Existing comments can be removed incrementally. New or rewritten prose comments fail the check. Keep design rationale in an ADR and open issues for implementation compromises. The [delete-comment skill](.agents/skills/delete-comment/SKILL.md) describes the audit.
 
 ### Coverage and CI
 
@@ -81,18 +96,15 @@ acceptance adds the policy/recovery paths through an instrumented daemon. Set
 percentage shown by `go tool cover -func`. Do not compare those metrics as if
 they were interchangeable.
 
-The `coverage` job consumes profiles from `test`, `e2e` and the operations suite in `e2b-compatibility`. These three jobs run independently.
+The `coverage` job merges profiles from `test`, `e2e`, the operations suite in
+`e2b-compatibility`, `feature-e2e` and `runtime-e2e`. The
+[CI workflow](.github/workflows/ci.yml) defines the complete job matrix.
+The build job checks release snapshots, including offline MCP acceptance.
+[Versioning](docs/versioning.md) covers tagged releases.
 
-The [CI workflow](.github/workflows/ci.yml) defines `lint`, `test`, `build`,
-`e2e`, `files-e2e`, `stdin-e2e`, `typescript`, `coverage`, `e2b-compatibility`, and the two-version `python-sdk`
-matrix. It builds release snapshots, enforces coverage, uploads E2E evidence,
-and checks container cleanup. [Versioning](docs/versioning.md) covers releases.
-
-Optional backend checks require real Docker:
-
-~~~sh
-go test -tags docker ./internal/dockerbackend/ -run TestReal
-~~~
+`scripts/e2e.sh` also runs the real Docker backend tests
+(`go test -tags docker ./internal/dockerbackend -run '^TestReal'`).
+`TestRealNonRootPrivateStdin` additionally needs `SANDBOX_E2B_IMAGE`.
 
 ## Contracts and review
 

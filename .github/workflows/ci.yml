@@ -323,6 +323,7 @@ jobs:
 
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -374,6 +375,7 @@ jobs:
           PY
           (cd dist && sha256sum -c --quiet checksums.txt)
       - name: exercise offline MCP repair from the release archive
+        if: inputs.ref == '' || hashFiles('scripts/e2e-mcp-workflow.py') != ''
         run: |
           go build -o "$RUNNER_TEMP/mcp-client" ./cmd/sandboxctl/testdata/mcp-client
           python3 scripts/e2e-mcp-workflow.py dist/*_linux_amd64.tar.gz "$RUNNER_TEMP/mcp-client" --runs 1 --out dist/mcp-python.json

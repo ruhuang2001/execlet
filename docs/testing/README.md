@@ -22,5 +22,55 @@ Each suite below states which wrong implementation it must catch. Assertions liv
 | E2B compatibility harness | A missing adapter or narrowed selection reported as passed, cleanup outside its owner label, provider differences hidden by normalization | `scripts/e2b-compatibility/installed.sh` ([instructions](../../scripts/e2b-compatibility/README.md)) |
 | [E2B background commands](e2b-background-failures.md) | Work that dies with its client, a reconnect that changes the deadline, a stale handle that signals a reused PID | `installed.sh … --profile background` |
 | MCP workspace | Sync that misses deletions or type changes, recovery that adopts another workspace's sandbox, unchanged syncs that still touch the guest | `scripts/e2e-mcp.py`, `scripts/e2e-mcp-workflow.py` ([MCP checks](../../CONTRIBUTING.md#mcp-acceptance-and-measurements)) |
+| Release archive | An archive that needs a source checkout to start, prints something other than what its documentation promises, exits 0 where it promises failure, ships an extra file, or pairs binaries whose versions disagree | `make release-preflight` |
+| Installed repair loop | A failing test that already passes, a repair applied only inside the sandbox, a sync that re-uploads unchanged files, a session that leaves a container | `make pilot` |
+| Capacity and recovery | A command that stops when its client disconnects, a crash that reports a real exit code instead of unknown, a sandbox adopted with work in flight, a soak that leaves cleanup pending | `make soak` |
 
 A suite that cannot reach its prerequisite (Docker, an image, a pinned reference) reports `not run`, not success. Fault proxies wrap real server or Docker responses; there is no fake-only acceptance path.
+
+## Check a release candidate
+
+From the checkout matching the candidate, run `make release-preflight` with a
+GoReleaser `dist/` (or set `DIST` to another snapshot directory). This checks
+the SHA-256 manifest, member list and binary architecture of all four archives.
+Only the native pair is executed: from a directory containing just the two
+binaries, the check runs the `execletctl run` examples from the packaged README
+and the matching quickstart, including the documented `doctor` and timeout.
+`ARCHIVE=/path/to/native.tar.gz` limits the check to that archive; it still
+requires an adjacent `checksums.txt`. A matching checksum is an integrity check,
+not a signature. The installer and its release selection are tested separately
+with `python3 scripts/test-install.py -v`.
+
+CI reuses the same snapshot's binaries, pytest fixture and the image ID built
+by the offline MCP check for the pilot and [soak](../operations.md#single-host-soak).
+For local source builds run `make build mcp-image` first. To use unpacked
+binaries instead, set `CLI`, `SERVER` and `MCP_EXAMPLES`, then run
+`make mcp-image pilot soak`. With the snapshot and image available, run the
+failure controls with `python3 -B scripts/test-host-acceptance.py -v`.
+
+The three JSON reports default to `artifacts/` (`ARTIFACTS` overrides it).
+After parsing the arguments and checking the output location, each run replaces
+its report with `passed: false`. The report changes to `passed: true` only after
+the run and cleanup both succeed. Always check the command's exit status: a
+usage error can occur before a report is written.
+
+## Try a team's failing test
+
+`make pilot` measures the packaged pytest fixture, not adoption by a team. Use
+a Git checkout with a reproducible failure and a local image that already has
+the project's dependencies. For a checkout containing the example defect:
+
+```sh
+python3 scripts/pilot.py --workspace /path/to/team-checkout --image team-tests:local \
+  --test 'python3 -B -m pytest -q -p no:cacheprovider' --expect-failure 'assert 21 == 14' \
+  --fix-file calculator.py --fix-before 'value * 3' --fix-after 'value * 2' \
+  --runs 3 --out artifacts/team-pilot.json
+```
+
+The pilot copies Git-selected regular files, including uncommitted edits, to a
+private directory. It does not copy Git history, ignored untracked files,
+symlinks, `.env`, `.venv` or `node_modules`. Keep the report outside the input
+checkout. The replacement must match exactly once. Each run requires a normal
+nonzero exit with the expected diagnostic before the repair, a zero exit after
+it, exactly one uploaded file for the repair, then no changes on resync. The
+report records time to the first failing result and to the verified fix.

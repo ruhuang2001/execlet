@@ -3,6 +3,7 @@ package dockerbackend
 import (
 	"archive/tar"
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -52,11 +53,13 @@ type fakeDaemon struct {
 }
 
 type fakeContainer struct {
-	id     string
-	spec   dockerapi.ContainerConfig
-	state  string
-	labels map[string]string
-	files  map[string][]byte
+	id                 string
+	spec               dockerapi.ContainerConfig
+	state              string
+	labels             map[string]string
+	files              map[string][]byte
+	oomKilled          bool
+	inspectUnavailable bool
 }
 
 type fakeExec struct {
@@ -203,7 +206,11 @@ func (f *fakeDaemon) containerOp(w http.ResponseWriter, r *http.Request, tail st
 	id = c.id
 	switch {
 	case action == "json" && r.Method == http.MethodGet:
-		value := dockerapi.ContainerInspect{ID: id, Name: "/" + lookup, HostConfig: dockerapi.HostConfig{Runtime: "runc"}, State: dockerapi.ContainerState{Status: c.state, Running: c.state == "running", Paused: c.state == "paused"}}
+		if c.inspectUnavailable {
+			writeError(w, 503, "inspect unavailable")
+			return
+		}
+		value := dockerapi.ContainerInspect{ID: id, Name: "/" + lookup, HostConfig: dockerapi.HostConfig{Runtime: cmp.Or(c.spec.HostConfig.Runtime, "runc")}, State: dockerapi.ContainerState{Status: c.state, Running: c.state == "running", Paused: c.state == "paused", OOMKilled: c.oomKilled}}
 		value.Config.Labels = c.labels
 		writeJSON(w, http.StatusOK, value)
 	case action == "start" && r.Method == http.MethodPost:

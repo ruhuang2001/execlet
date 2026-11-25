@@ -68,7 +68,7 @@ A single lazy worker rotates outstanding entries FIFO with bounded calls, rate, 
 
 ## OOM evidence
 
-Sample the exact container's cumulative oom_kill counter. On Linux with a local socket, two fixed cgroup v2 layouts are eligible, both keyed by the full lowercase container ID. Each sample rereads the counter. No parent counter, sibling, prefix or guest-controlled path can attribute a kill to this sandbox. This fast path also works while pause prevents an in-container exec. Otherwise the backend probes memory.events on v2 or memory.oom_control on v1 in the guest. Exact key matching separates oom_kill from oom and oom_group_kill. If the exec probe fails, Docker's OOMKilled flag supplies fallback evidence for an init process killed by the kernel.
+Sample the exact container's cumulative `oom_kill` counter. On the Linux Docker host, use the inspected init PID's cgroup v2 scope only if its name matches the full container ID. Outside runsc, also try the two conventional layouts keyed by that full ID. Each sample rereads the counter; no parent or sibling counter qualifies. Host counters remain readable during pause. Without a host counter, runc can read `memory.events` (v2) or `memory.oom_control` (v1) inside the container, including when inspect fails but the guest session identifies runc. Do not use a virtualized runsc guest counter. Docker's `OOMKilled` flag is a last resort: a latched flag cannot count another kill.
 
 Exit 137 alone is ambiguous. A real-Docker OOM check allocates anonymous memory above the container's limit because page cache could be reclaimed without a kill. External loss of the container without recorded intent or counter movement is eviction. With concurrent executions an ambiguous kill can yield an unknown outcome.
 

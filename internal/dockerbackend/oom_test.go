@@ -9,6 +9,42 @@ import (
 	"github.com/ruhuang2001/execlet/internal/dockerapi"
 )
 
+func TestOOMCounterFallback(t *testing.T) {
+	for _, tc := range []struct {
+		name, runtime                          string
+		flag, inspectUnavailable, cacheRuntime bool
+		counter                                string
+		want                                   int64
+		wantErr                                bool
+	}{
+		{name: "runc counter after earlier kill", runtime: "runc", flag: true, counter: "oom_kill 2\n", want: 2},
+		{name: "runc counter before first kill", runtime: "runc", flag: true, counter: "oom_kill 0\n"},
+		{name: "runc flag without counter", runtime: "runc", flag: true, want: 1},
+		{name: "known runc without inspect", runtime: "runc", inspectUnavailable: true, cacheRuntime: true, counter: "oom_kill 2\n", want: 2},
+		{name: "unknown runtime without inspect", inspectUnavailable: true, counter: "oom_kill 2\n", wantErr: true},
+		{name: "runsc without host counter", runtime: "runsc", counter: "oom_kill 2\n", wantErr: true},
+		{name: "known runsc without inspect", runtime: "runsc", inspectUnavailable: true, cacheRuntime: true, counter: "oom_kill 2\n", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeDaemon(t)
+			b := f.backend(t)
+			id := strings.Repeat("ab", 32)
+			f.containers[id] = &fakeContainer{id: id, state: "running", oomKilled: tc.flag, inspectUnavailable: tc.inspectUnavailable,
+				spec: dockerapi.ContainerConfig{HostConfig: dockerapi.HostConfig{Runtime: tc.runtime}}}
+			if tc.cacheRuntime {
+				if err := b.RestoreGuest(t.Context(), id, false, tc.runtime, nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+			f.setProgram(func(string, []string) (string, string, int) { return tc.counter, "", 0 })
+			got, err := b.OOMKillCount(t.Context(), id)
+			if got != tc.want || (err != nil) != tc.wantErr {
+				t.Fatalf("OOMKillCount = %d, %v; want %d, error=%t", got, err, tc.want, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestOOMHelperCalls(t *testing.T) {
 	f := newFakeDaemon(t)
 	b := f.backend(t)

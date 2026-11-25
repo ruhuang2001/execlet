@@ -11,7 +11,6 @@ import subprocess
 import sys
 import time
 import uuid
-import zlib
 from contextlib import closing
 from http.client import HTTPConnection, HTTPException
 from pathlib import Path
@@ -21,7 +20,6 @@ ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE = ROOT / "examples/playwright"
 FIXTURE = "/tmp/execlet-playwright.html"
 SCREENSHOT = "/tmp/execlet-playwright.png"
-VIEWPORT = (800, 480)
 
 
 def require(condition, message):
@@ -36,28 +34,12 @@ def output(cmd, timeout=30):
 
 
 def validate_png(data):
-    require(len(data) >= 1024 and data.startswith(b"\x89PNG\r\n\x1a\n"), "missing or tiny PNG")
-    require(data[8:16] == b"\x00\x00\x00\rIHDR", "missing PNG IHDR")
-    width, height = struct.unpack_from(">II", data, 16)
-    require((width, height) == VIEWPORT, f"unexpected screenshot viewport: {width}x{height}")
-
-    offset, has_pixels = 8, False
-    while offset + 12 <= len(data):
-        size, kind = struct.unpack_from(">I4s", data, offset)
-        end = offset + 8 + size
-        require(end + 4 <= len(data), f"truncated PNG chunk {kind!r}")
-        crc = struct.unpack_from(">I", data, end)[0]
-        require(zlib.crc32(data[offset + 4 : end]) == crc, f"bad PNG CRC in {kind!r}")
-        offset = end + 4
-        if kind == b"IDAT" and size:
-            has_pixels = True
-        if kind == b"IEND":
-            require(size == 0 and offset == len(data) and has_pixels, "invalid PNG end or no pixels")
-            return width, height
-    raise RuntimeError("missing PNG IEND")
+    check = subprocess.run(["go", "run", "./scripts/browser-e2e"], cwd=ROOT, input=data, capture_output=True, timeout=90)
+    require(check.returncode == 0, "invalid fixture screenshot: " + check.stderr.decode(errors="replace").strip())
+    return struct.unpack_from(">II", data, 16)
 
 
-def run(args, owner, out):
+def docker_endpoint():
     context = os.getenv("DOCKER_CONTEXT")
     endpoint = None if context else os.getenv("DOCKER_HOST")
     if not endpoint:
@@ -66,7 +48,10 @@ def run(args, owner, out):
             *([context] if context else []),
         ])
     require(endpoint.startswith("unix://"), f"a Docker Unix socket is required, got {endpoint!r}")
-    docker = ["docker", "--host", endpoint]
+    return endpoint
+
+
+def run(args, owner, out):
     temp_image = None if args.image else f"execlet-playwright:{owner}"
     image_ref = args.image or temp_image
     owner_filter = ["--filter", f"label=execlet.owner={owner}"]
@@ -97,6 +82,8 @@ def run(args, owner, out):
     build_attempted = False
     cleanup_errors = []
     try:
+        endpoint = docker_endpoint()
+        docker = ["docker", "--host", endpoint]
         for binary in (args.server, args.cli):
             require(binary.is_file() and os.access(binary, os.X_OK), f"missing executable {binary}; run make build first")
         report["execletd"] = output([args.server, "-version"])
@@ -186,12 +173,17 @@ def run(args, owner, out):
         (out / "screenshot.png").write_bytes(png)
         report["screenshot"] = dict(width=width, height=height, bytes=len(png), sha256=digest)
         completed = True
+    except Exception as exc:
+        report["error"] = str(exc)
+        raise
     finally:
         if sandbox_path:
             try:
                 deleted = json.loads(request("DELETE", sandbox_path)[0])
                 require(deleted["state"] == "killed", f"sandbox cleanup returned {deleted['state']!r}")
-            except (OSError, HTTPException, RuntimeError, ValueError, KeyError) as exc:
+                remaining = report["containers_after_delete"] = output([*docker, "ps", "-aq", *owner_filter]).splitlines()
+                require(not remaining, f"owned containers remain after DELETE: {remaining}")
+            except (OSError, HTTPException, RuntimeError, ValueError, KeyError, subprocess.TimeoutExpired) as exc:
                 cleanup_errors.append(f"DELETE sandbox: {exc}")
         if server:
             try:

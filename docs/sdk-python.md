@@ -68,14 +68,20 @@ cancellation. Authentication uses the HTTP contract's Bearer token.
 ## Requests and responses
 
 Requests are typed dataclasses. `CreateSandboxRequest` accepts `image`,
-`memory_mb`, `max_concurrent_executions`, `pids_limit`, `nano_cpus`, `network`, `timeout_seconds`,
-`timeout_action`, `idle_timeout_seconds`, `idle_timeout_action`, and `env`.
+`memory_mb`, `max_concurrent_executions`, `pids_limit`, `nano_cpus`, `network`,
+`runtime`, `timeout_seconds`, `timeout_action`, `idle_timeout_seconds`,
+`idle_timeout_action`, `env`, and `mounts`.
 An optional value of `None` is omitted from JSON. Explicit zero is sent to the
 server, preserving the difference between omission and disabling a timeout.
 The [HTTP resource and request tables](api.md#resources) define units, defaults,
 and accepted values; the client does not invent different defaults.
 Create-time `env` belongs to the sandbox; execution `env` overrides it for one
 invocation. Neither is echoed in resource metadata.
+
+Pass a list of `VolumeMount` objects in `mounts`, using the ID returned by
+`client.create_volume(CreateVolumeRequest(size_bytes=...))`. The client also
+provides `list_volumes`, `get_volume`, and `delete_volume`. See
+[persistent volumes](operations.md#persistent-volumes) for setup and lifecycle.
 
 `UpdateSandboxRequest(timeout_seconds=..., extend_seconds=...)` sets exactly
 one lifetime operation: replace the deadline or extend without shortening it.

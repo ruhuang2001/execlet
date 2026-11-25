@@ -240,11 +240,14 @@ class Suite:
             assert self.file(reused, "same") == a_data
             self.request("DELETE", reused, 200)
 
+        final_allocated = int(shell("du", "-B1", image).split()[0])
+        assert final_allocated >= SIZE, (allocated, final_allocated, SIZE)
         self.request("DELETE", va, 204)
         assert not image.parent.exists() and not shell("losetup", "-j", image), loop
         self.request("GET", va, 404, code="not_found")
         assert self.request("GET", "/v1/volumes", 200) == {"volumes": []}
-        check["disk_reclaimed"] = {"allocated_bytes_before_delete": allocated, "directory_exists_after": image.parent.exists(),
+        check["disk_reclaimed"] = {"allocated_bytes_at_create": allocated, "allocated_bytes_before_delete": final_allocated,
+                                   "directory_exists_after": image.parent.exists(),
                                    "loop_before": loop.split(":", 1)[0], "loop_attached_after": False}
         replacement = self.new_volume()
         self.request("DELETE", "/v1/volumes/" + replacement["id"], 204)

@@ -77,7 +77,7 @@ func (d *linuxVolumeDisk) create(v Volume) error {
 		return err
 	}
 	if err = f.Truncate(v.SizeBytes); err == nil {
-		err = volumeCommand(d.mkfs, "-q", "-F", "-m", "0", "-E", "nodiscard", d.image(v.ID))
+		err = volumeCommand(d.mkfs, "-q", "-F", "-m", "0", "-E", "nodiscard,lazy_itable_init=0,lazy_journal_init=0", d.image(v.ID))
 	}
 	if err == nil {
 		err = unix.Fallocate(int(f.Fd()), 0, 0, v.SizeBytes)

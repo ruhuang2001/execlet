@@ -150,7 +150,7 @@ make **one attempt**: extraction is not safely repeatable.
 
 When the daemon has [persistent volumes](/operations/volumes) enabled,
 `CreateVolume`, `GetVolume`, `ListVolumes`, and `DeleteVolume` manage them.
-Attach a volume by setting `Mounts` on the create request:
+This example uses a disposable volume and an image allowed by your policy:
 
 ```go
 vol, err := client.CreateVolume(ctx, sandbox.CreateVolumeRequest{SizeBytes: 16 << 20})
@@ -158,10 +158,21 @@ if err != nil {
     return err
 }
 sb, err := client.CreateSandbox(ctx, sandbox.CreateSandboxRequest{
-    Image:  "alpine:3.20",
-    Mounts: []sandbox.VolumeMount{{VolumeID: vol.ID, Path: "/mnt/work"}},
+    Image:   new("alpine:3.20"),
+    Network: new(sandbox.NetworkNone),
+    Mounts:  []sandbox.VolumeMount{{VolumeID: vol.ID, Path: "/mnt/work"}},
 })
+if err != nil {
+    return err
+}
+if _, err := client.KillSandbox(ctx, sb.ID); err != nil {
+    return err
+}
+return client.DeleteVolume(ctx, vol.ID)
 ```
+
+Killing the sandbox releases the attachment, not the data. Omit the final
+delete and keep `vol.ID` to attach the volume to another sandbox.
 
 The SDK requires the `volumes.v1` capability before any volume operation or a
 create with mounts. It rejects a size that is not a whole MiB between 16 MiB

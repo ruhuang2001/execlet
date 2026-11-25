@@ -75,34 +75,6 @@ a `CancellationToken` for a local deadline or explicit caller cancellation.
 `pids_limit`, `nano_cpus`, `network`, `runtime`, `timeout_seconds`, `timeout_action`,
 `idle_timeout_seconds`, `idle_timeout_action`, `env`, and `mounts`.
 
-To attach an existing [persistent volume](/operations/volumes), import
-`VolumeMount` from `execlet` and pass
-`mounts=[VolumeMount(volume_id=volume.id, path="/mnt/work")]`. Removing the
-sandbox releases the attachment but does not delete the volume.
-
-Create the volume first with `create_volume`. The client also provides
-`list_volumes`, `get_volume`, and `delete_volume`:
-
-```python
-from execlet import Client, CreateSandboxRequest, CreateVolumeRequest, VolumeMount
-
-with Client() as client:
-    volume = client.create_volume(CreateVolumeRequest(size_bytes=16 * 1024 * 1024))
-    request = CreateSandboxRequest(
-        image="alpine:3.20",
-        network="none",
-        mounts=[VolumeMount(volume_id=volume.id, path="/mnt/work")],
-    )
-    with client.sandbox(request) as sandbox:
-        ...
-```
-
-Each volume method checks the `volumes.v1` capability first. `create_volume`
-is attempted once. `get_volume` and `list_volumes` only return ready volumes.
-`delete_volume` retries only an explicit HTTP 503. If its response is lost, it
-raises `transport` without replaying. Repeat the delete to reconcile: `204`
-confirms cleanup and `404` means the ID is absent.
-
 `None` omits a field. Explicit zero is sent, which is how you distinguish "use
 the server default" from "disable this timeout". The client never invents a
 default the server does not have.
@@ -117,6 +89,36 @@ default the server does not have.
 </Columns>
 
 Neither is echoed back in resource metadata.
+
+## Volumes
+
+When [persistent volumes](/operations/volumes) are enabled, pass `VolumeMount`
+in `mounts` to attach a volume. This example uses a disposable volume and an
+image allowed by your policy:
+
+```python
+from execlet import Client, CreateSandboxRequest, CreateVolumeRequest, VolumeMount
+
+with Client() as client:
+    volume = client.create_volume(CreateVolumeRequest(size_bytes=16 * 1024 * 1024))
+    request = CreateSandboxRequest(
+        image="alpine:3.20",
+        network="none",
+        mounts=[VolumeMount(volume_id=volume.id, path="/mnt/work")],
+    )
+    with client.sandbox(request) as sandbox:
+        print(sandbox.id)
+    client.delete_volume(volume.id)
+```
+
+Exiting `client.sandbox` removes the sandbox, not the volume. Omit the final
+delete and keep `volume.id` to reuse the data.
+
+Each volume method checks the `volumes.v1` capability first. `create_volume`
+is attempted once. `get_volume` and `list_volumes` only return ready volumes.
+`delete_volume` retries only an explicit HTTP 503. If its response is lost, it
+raises `Error` with code `transport` without replaying. Repeat the delete to
+reconcile: `204` confirms cleanup and `404` means the ID is absent.
 
 ## Changing a lifetime
 

@@ -13,9 +13,9 @@ Run the daemon with the privileges to allocate and mount loop-backed ext4
 filesystems, a local rootful Docker socket in the same mount namespace,
 loop devices visible in both `/dev` and `/sys/dev/block`, `mount`,
 `mkfs.ext4`, and the embedded guest agent (`-guest-agent auto`).
-Set `-state-dir` to a private directory on local storage and set a stable,
-unique `-owner`. `execletd` exits at startup when the policy sets
-`max_volumes` without `-state-dir`. Do not enable this on a macOS Docker client, a remote Docker
+Set `-state-dir` to a private directory on local storage and use a stable,
+unique `-owner`. With volumes enabled, `execletd` refuses to start without
+`-state-dir`. Do not enable volumes on a macOS Docker client, a remote Docker
 socket, or a rootless engine.
 
 Add both fields to a valid [admission policy](/operations/policy):

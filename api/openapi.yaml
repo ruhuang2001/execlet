@@ -1,10 +1,10 @@
 openapi: 3.1.0
 info:
-  title: tiny-sandbox
-  version: 0.0.3
+  title: execlet
+  version: 0.1.0
   summary: Code-execution sandbox for AI agents
   description: |
-    Normative HTTP contract for the tiny-sandbox reference server.
+    Normative HTTP contract for the execlet reference server.
     docs/api.md is the prose source of this contract; when the two disagree,
     fix one of them in the same change.
     Every handled response includes X-Request-ID. A single incoming value with

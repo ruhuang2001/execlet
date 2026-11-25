@@ -7,7 +7,7 @@ import (
 	"errors"
 	"io"
 
-	sandbox "github.com/ruhuang2001/tiny-sandbox/sandbox-go"
+	sandbox "github.com/ruhuang2001/execlet/sandbox-go"
 )
 
 func verifyMemoryMutations(ctx context.Context, c *sandbox.Client) {

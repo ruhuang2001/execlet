@@ -16,9 +16,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ruhuang2001/tiny-sandbox/internal/daemon"
-	"github.com/ruhuang2001/tiny-sandbox/internal/dockerapi"
-	"github.com/ruhuang2001/tiny-sandbox/internal/guestprotocol"
+	"github.com/ruhuang2001/execlet/internal/daemon"
+	"github.com/ruhuang2001/execlet/internal/dockerapi"
+	"github.com/ruhuang2001/execlet/internal/guestprotocol"
 )
 
 //go:embed guestbin
@@ -64,7 +64,7 @@ func guestArchive(arch string) ([]byte, error) {
 	}
 	var buf bytes.Buffer
 	w := tar.NewWriter(&buf)
-	for _, h := range []*tar.Header{{Name: ".tiny-sandbox/", Mode: 0755, Typeflag: tar.TypeDir}, {Name: ".tiny-sandbox/guest", Mode: 0755, Typeflag: tar.TypeReg, Size: int64(len(binary))}} {
+	for _, h := range []*tar.Header{{Name: ".execlet/", Mode: 0755, Typeflag: tar.TypeDir}, {Name: ".execlet/guest", Mode: 0755, Typeflag: tar.TypeReg, Size: int64(len(binary))}} {
 		if err := w.WriteHeader(h); err != nil {
 			return nil, err
 		}

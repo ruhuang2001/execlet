@@ -1,4 +1,4 @@
-module github.com/ruhuang2001/tiny-sandbox
+module github.com/ruhuang2001/execlet
 
 go 1.27
 

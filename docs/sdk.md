@@ -13,13 +13,15 @@ the Go interfaces or outcome/error behavior documented here.
 
 ## Installation
 
+The historical release tags use the old Go module path. Until a release under
+the new path, use a matching checkout. From your application's Go module:
+
 ```sh
-go get github.com/ruhuang2001/tiny-sandbox/sandbox-go@latest
+go mod edit -replace github.com/ruhuang2001/execlet=/path/to/execlet
+go get github.com/ruhuang2001/execlet/sandbox-go
 ```
 
-`@latest` selects a published module version. For unreleased server features,
-use the matching commit instead of `latest`. This guide describes the current
-checkout; see [versioning](versioning.md) for compatibility.
+Use the SDK and server from compatible revisions; see [versioning](versioning.md).
 
 ## Configuration
 

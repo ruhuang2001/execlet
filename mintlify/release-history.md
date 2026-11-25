@@ -1,32 +1,38 @@
 ---
-title: "Changelog"
-description: "Release history, starting from the execlet rename."
+title: "Release history"
+description: "The Execlet rename and earlier releases under the tiny-sandbox name."
 ---
 
 ## Unreleased
 
 ### Renamed from tiny-sandbox
 
-The project is now **execlet**. The rename happened before the SDKs were
-published to any registry, so no published package name is being abandoned.
+The project is now **Execlet**. The renamed SDKs are not available from a
+registry. Build and install from the [same checkout](/installation#use-the-sdks-from-a-checkout)
+as the daemon.
 
 | Before | After |
 | --- | --- |
 | `sandboxd` | `execletd` |
 | `sandboxctl` | `execletctl` |
 | `github.com/ruhuang2001/tiny-sandbox/sandbox-go` | `github.com/ruhuang2001/execlet/sandbox-go` |
-| PyPI `tiny-sandbox` | `execlet` |
-| npm `@tiny-sandbox/sdk` | `@execlet/sdk` |
+| Python distribution `tiny-sandbox`, import `tiny_sandbox` | distribution and import `execlet` |
+| npm package `@tiny-sandbox/sdk` | `@execlet/sdk` |
 
-<Warning>
-The module path change is a **breaking** change for any Go code that imported
-the old path. The old releases keep working; the old module path does not
-continue.
-</Warning>
+The Go import path change is breaking. Keep existing builds pinned to their
+original revisions until you update the imports.
+
+Before changing daemons, [drain the old deployment](/operations/self-hosting#upgrading):
+even a stopped container with the old owner label blocks startup. Update
+[Prometheus rules](/operations/metrics) from `tiny_sandbox_*` to `execlet_*` and
+finish [MCP sessions](/guides/mcp#how-sync-actually-behaves) with the old CLI;
+neither metric names nor MCP ownership receipts have compatibility aliases.
 
 ## History
 
-Earlier releases are preserved under the `tiny-sandbox` name:
+Earlier tags are preserved. **v0.0.3 is a historical release**: its archives
+contain `sandboxd` and `sandboxctl`; they do not provide the renamed binaries
+in the [quickstart](/quickstart).
 
 | Version | Date | Notes |
 | --- | --- | --- |
@@ -70,11 +76,12 @@ Wider than the Go API:
 - Timeout units and their meaning
 - SSE event types, ID semantics, and `Last-Event-ID` behavior
 
-Additive changes are preferred: the server ignores unknown request fields, so a
-newer client can talk to an older server, but the client must not assume the
-field took effect. Removing a field, changing a unit, or reinterpreting a value
-is a major change.
+The server ignores unknown request fields. Before using a feature added after
+your daemon's build, check `/v1/capabilities` rather than assuming a successful
+request applied the new field. Use matching daemon, CLI, and SDK revisions for
+these examples. Removing a field, changing a unit, or reinterpreting a value
+is a breaking change.
 
 Clients must tolerate added response fields and preserve unknown string values.
-The Python SDK keeps extras in `extra`; unknown termination reasons surface as
-errors rather than being quietly mapped to a known one.
+The Python SDK keeps extras in `extra`; its execution helpers raise an error
+with the original reason when the reason is unknown.

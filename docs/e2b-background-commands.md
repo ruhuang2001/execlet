@@ -44,7 +44,7 @@ does not itself cancel a command. Its original remote deadline still applies.
 
 ## 2. Supported public surface
 
-Keep the existing `tiny_sandbox.e2b` and `@tiny-sandbox/sdk/e2b` entry points.
+Keep the existing `execlet.e2b` and `@execlet/sdk/e2b` entry points.
 The server continues to use execution resources; no independent job scheduler
 or second execution store is introduced. The native SDKs keep their current
 argv, cancellation and timeout defaults.
@@ -96,7 +96,7 @@ chosen workflow; listing env-bearing process metadata is separate work.
   Docker exec ID, host PID, hash, or client-local counter. Validate with a
   command that records its own PID before continuing.
 - Keep `(sandbox_id, execution_id)` as the canonical identity. Expose
-  `execution_id` / `executionId` as a documented tiny-sandbox extension for
+  `execution_id` / `executionId` as a documented execlet extension for
   diagnostics and native recovery; it is not an E2B field.
 - The server owns the bounded mapping from `(sandbox ID, guest PID)` to an
   execution. A fresh Python or Node process must resolve it without a local
@@ -178,7 +178,7 @@ remains readable after disconnect.
 - An **automatic transport reconnect within that same handle** resumes from
   its last delivered event ID. Do not replay delivered callbacks or skip
   unconsumed events. A fresh handle has a new boundary, not a persisted cursor.
-  Automatic retained replay is a tiny-sandbox reliability extension.
+  Automatic retained replay is a execlet reliability extension.
 - The attach boundary is the resolve response actually accepted by the client.
   If that response is lost before identity is known, another resolve may
   establish a later boundary; output before it is not promised. Once identity

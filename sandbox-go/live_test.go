@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	sandbox "github.com/ruhuang2001/tiny-sandbox/sandbox-go"
+	sandbox "github.com/ruhuang2001/execlet/sandbox-go"
 )
 
 func liveClient(t *testing.T) *sandbox.Client {
@@ -26,7 +26,7 @@ func liveClient(t *testing.T) *sandbox.Client {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if _, err := c.ListSandboxes(ctx); err != nil {
-		t.Skipf("sandboxd not reachable at %s: %v", domain, err)
+		t.Skipf("execletd not reachable at %s: %v", domain, err)
 	}
 	return c
 }

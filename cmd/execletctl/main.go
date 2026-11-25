@@ -15,15 +15,15 @@ import (
 	"syscall"
 	"time"
 
-	sandbox "github.com/ruhuang2001/tiny-sandbox/sandbox-go"
+	sandbox "github.com/ruhuang2001/execlet/sandbox-go"
 )
 
 var version = "dev"
 
-const usage = `sandboxctl — developer CLI for tiny-sandbox
+const usage = `execletctl — developer CLI for execlet
 
 usage:
-  sandboxctl <command> [flags]
+  execletctl <command> [flags]
 
 commands:
   mcp --workspace DIR --image IMAGE      serve sandbox tools over MCP stdio
@@ -124,7 +124,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "pause", "resume", "kill":
 		return in.lifecycle(command, rest)
 	default:
-		_, _ = fmt.Fprintf(stderr, "sandboxctl: unknown command %q\n\n%s", command, usage)
+		_, _ = fmt.Fprintf(stderr, "execletctl: unknown command %q\n\n%s", command, usage)
 		return 2
 	}
 }
@@ -136,7 +136,7 @@ type globals struct {
 }
 
 func (g *globals) parse(args []string, _, stderr io.Writer) (int, bool) {
-	fs := flag.NewFlagSet("sandboxctl", flag.ContinueOnError)
+	fs := flag.NewFlagSet("execletctl", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.StringVar(&g.domain, "domain", "", "server base URL (default $SANDBOX_DOMAIN)")
 	fs.StringVar(&g.apiKey, "api-key", "", "API key (default $SANDBOX_API_KEY)")
@@ -167,7 +167,7 @@ func contextWithSignals() (context.Context, context.CancelFunc) {
 }
 
 func (in *invocation) fail(err error) int {
-	_, _ = fmt.Fprintf(in.stderr, "sandboxctl: %s\n", messageOf(err))
+	_, _ = fmt.Fprintf(in.stderr, "execletctl: %s\n", messageOf(err))
 	if hint := hintFor(err); hint != "" {
 		_, _ = fmt.Fprintf(in.stderr, "hint: %s\n", hint)
 	}
@@ -207,7 +207,7 @@ func hintFor(err error) string {
 	case errors.Is(err, sandbox.ErrTimeout):
 		return "increase --timeout or --exec-timeout"
 	case errors.Is(err, sandbox.ErrEvicted):
-		return "the container was stopped outside sandboxd"
+		return "the container was stopped outside execletd"
 	case errors.Is(err, sandbox.ErrBusy):
 		return "wait for the running execution or cancel it"
 	case errors.Is(err, sandbox.ErrUnauthorized):
@@ -215,7 +215,7 @@ func hintFor(err error) string {
 	case errors.Is(err, sandbox.ErrNotFound):
 		return "check the sandbox and execution IDs"
 	case isConnectionRefused(err):
-		return "start sandboxd or set SANDBOX_DOMAIN"
+		return "start execletd or set SANDBOX_DOMAIN"
 	}
 	return ""
 }

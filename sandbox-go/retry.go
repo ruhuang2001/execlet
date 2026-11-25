@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"time"
 
-	json "github.com/ruhuang2001/tiny-sandbox/internal/wirejson"
+	json "github.com/ruhuang2001/execlet/internal/wirejson"
 )
 
 const (

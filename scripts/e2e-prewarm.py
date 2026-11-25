@@ -38,7 +38,7 @@ def until(check, seconds=20):
 
 def run(args, tmp, report):
     subprocess.run(
-        ["go", "build", "-o", tmp / "sandboxd", "./cmd/sandboxd"], cwd=ROOT, check=True
+        ["go", "build", "-o", tmp / "execletd", "./cmd/execletd"], cwd=ROOT, check=True
     )
     owner = "prewarm-e2e-" + uuid.uuid4().hex
     with socket.socket() as sock:
@@ -89,7 +89,7 @@ def run(args, tmp, report):
 
     def owned():
         return docker(
-            "ps", "-qa", "--no-trunc", "--filter", "label=tiny-sandbox.owner=" + owner
+            "ps", "-qa", "--no-trunc", "--filter", "label=execlet.owner=" + owner
         ).splitlines()
 
     def ready():
@@ -98,9 +98,9 @@ def run(args, tmp, report):
             "ps",
             "--no-trunc",
             "--filter",
-            "label=tiny-sandbox.owner=" + owner,
+            "label=execlet.owner=" + owner,
             "--format",
-            '{{.ID}} {{.Label "tiny-sandbox.id"}}',
+            '{{.ID}} {{.Label "execlet.id"}}',
         )
         return [
             row.split()[0]
@@ -110,7 +110,7 @@ def run(args, tmp, report):
 
     def ready_count():
         for line in http("/metrics").splitlines():
-            if line.startswith("tiny_sandbox_prewarm_ready "):
+            if line.startswith("execlet_prewarm_ready "):
                 return int(line.split()[1])
         raise ValueError("missing prewarm metric")
 
@@ -163,7 +163,7 @@ def run(args, tmp, report):
             log = stack.enter_context((args.out / "daemon.log").open("a"))
             proc = subprocess.Popen(
                 [
-                    tmp / "sandboxd",
+                    tmp / "execletd",
                     "-addr",
                     addr,
                     "-owner",
@@ -187,7 +187,7 @@ def run(args, tmp, report):
 
             def started():
                 if proc.poll() is not None:
-                    raise RuntimeError("sandboxd exited; see daemon.log")
+                    raise RuntimeError("execletd exited; see daemon.log")
                 try:
                     return http("/readyz")
                 except OSError:
@@ -222,13 +222,13 @@ def run(args, tmp, report):
                 sid = create(image)
                 command(sid)
                 ms.append((time.perf_counter_ns() - start_ns) / 1e6)
-                cid = docker("inspect", "-f", "{{.Id}}", "tiny-sandbox-" + sid)
+                cid = docker("inspect", "-f", "{{.Id}}", "execlet-" + sid)
                 assert not before or cid in before, (cid, before)
                 assert (
                     docker(
                         "inspect",
                         "-f",
-                        '{{index .Config.Labels "tiny-sandbox.id"}}',
+                        '{{index .Config.Labels "execlet.id"}}',
                         cid,
                     )
                     == sid
@@ -246,7 +246,7 @@ def run(args, tmp, report):
         ready_before = pool()
         live = create("template:bench", memory_mb=80)
         assert (
-            docker("inspect", "-f", "{{.Id}}", "tiny-sandbox-" + live)
+            docker("inspect", "-f", "{{.Id}}", "execlet-" + live)
             not in ready_before
         )
         try:
@@ -267,7 +267,7 @@ def run(args, tmp, report):
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as workers:
             pair = list(workers.map(create, ["template:bench"] * 2))
         claimed = [
-            docker("inspect", "-f", "{{.Id}}", "tiny-sandbox-" + sid) for sid in pair
+            docker("inspect", "-f", "{{.Id}}", "execlet-" + sid) for sid in pair
         ]
         assert (
             len(set(claimed)) == 2 and len(set(rebuilt).intersection(claimed)) == 1
@@ -299,7 +299,7 @@ def run(args, tmp, report):
         switched = until(replacement)
         sid = create("template:bench")
         assert (
-            docker("inspect", "--format", "{{.Id}}", "tiny-sandbox-" + sid) == switched
+            docker("inspect", "--format", "{{.Id}}", "execlet-" + sid) == switched
         )
         command(sid)
         kill(sid)

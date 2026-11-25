@@ -8,24 +8,24 @@ Web Crypto. Declarations support TypeScript 5.9+ with DOM types.
 
 ## Install from this repository
 
-Build a local package from the repository,
-then install its actual local path in your application:
+This checkout builds the unreleased `@execlet/sdk` version `0.1.0`. Build and
+install the local tarball without relying on registry availability:
 
 ~~~sh
 cd sandbox-ts
 npm ci
-npm run check
 npm pack
+npm run check
 ~~~
 
 From your application directory, run
 
 ~~~sh
-npm install /path/to/tiny-sandbox/sandbox-ts/tiny-sandbox-sdk-0.0.3.tgz
+npm install /path/to/execlet/sandbox-ts/execlet-sdk-0.1.0.tgz
 ~~~
 
 ~~~ts
-import { Client, SandboxError } from '@tiny-sandbox/sdk';
+import { Client, SandboxError } from '@execlet/sdk';
 
 const client = new Client({ domain: 'http://localhost:8080' });
 const sandbox = await client.createSandbox({ timeout_seconds: 300 });
@@ -94,7 +94,7 @@ EventHandler returns void or Promise<void>; callbacks are awaited in order.
 Execution stdout/stderr are optional because lists omit them. All request and
 response interfaces, Event, ExecutionOutcome, SandboxError and executionOutcome
 are exported from the package root. Internal deep imports are not supported.
-The explicit `@tiny-sandbox/sdk/e2b` subpath provides the optional
+The explicit `@execlet/sdk/e2b` subpath provides the optional
 [E2B application-source subset](../examples/e2b/README.md) for Node, without an E2B
 runtime dependency. It does not change native argv or browser behavior.
 
@@ -279,7 +279,7 @@ reasons map to the explicit `unknown` outcome so switches remain exhaustive.
 
 Native `resolveCommand` returns the execution and atomic event watermark;
 `killExecution` sends one immediate managed kill without retrying uncertain
-acknowledgements. `@tiny-sandbox/sdk/e2b` exports `CommandHandle` for background
+acknowledgements. `@execlet/sdk/e2b` exports `CommandHandle` for background
 run/connect/wait/disconnect/kill; see the [package examples](../sandbox-ts/README.md)
 and [contract](e2b-background-commands.md). Native graceful cancellation and
 seconds-based deadlines are unchanged.
@@ -297,7 +297,7 @@ as evidence that unsupported controls were enforced.
 | Abort/context cleanup | Both use fresh five-second recovery; TypeScript also requires a terminal snapshot |
 | Stream consumption | Go callback; TypeScript async iterator plus async callback overload |
 
-Browser-safe packaging does not enable cross-origin access on sandboxd. Serve
+Browser-safe packaging does not enable cross-origin access on execletd. Serve
 through the same origin or use a trusted CORS/preflight proxy allowing
 Authorization, Content-Type, Last-Event-ID and the used methods. Expose
 Retry-After for browser retries. Never ship privileged bearer keys to untrusted

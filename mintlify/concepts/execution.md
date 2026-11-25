@@ -1,19 +1,19 @@
 ---
 title: "Execution and streaming"
-description: "Executions are resources. Output reconnects without loss or duplication."
+description: "Start a command, resume its retained output, and confirm how it ended."
 ---
 
-Running a command is not a request that returns text. It is a resource that
-produces an event stream, and the two have different lifetimes.
+Start a command once, then use its execution ID to follow its output, inspect
+its result, or cancel it. The command and its event stream have separate lifetimes.
 
 ```text
 POST .../executions        ──► execution id
 GET  .../executions/{id}/events   ──► SSE stream, reconnectable
 ```
 
-Closing the stream never affects the execution. Your process can die, your
-network can flap, and the command keeps running until it finishes or something
-cancels it.
+Closing the HTTP stream does not cancel the command. It can keep running until
+it exits, a deadline applies, or it is explicitly stopped. An SDK may send a
+separate cancel request when you cancel its observation context or signal.
 
 ## The event stream
 
@@ -24,7 +24,7 @@ per event. Four types:
 | --- | --- | --- |
 | `stdout` | `{"data": "..."}` | at most 32 KiB per chunk |
 | `stderr` | `{"data": "..."}` | same limit, independent stream |
-| `truncated` | `{"limit_bytes": N}` | sent at most once, when retention evicts output |
+| `truncated` | `{"limit_bytes": N}` | the server discarded some output |
 | `complete` | the full execution object | always last, and closes the stream |
 
 Output is **text**. Chunks are cut on UTF-8 boundaries so a multi-byte character
@@ -34,26 +34,25 @@ do not run `cat` and parse stdout. Use the file API, which is byte-exact.
 
 ## Reconnecting
 
-Send the last ID you saw as `Last-Event-ID`. The server replays only events with
-a greater ID, then continues live. No gaps, no duplicates.
+Send the last ID you processed as `Last-Event-ID`. The server returns retained
+events with greater IDs, then continues live. If the output was truncated,
+some events may already be gone.
+
+Set `SB` and `EXE` to the IDs printed by `execletctl run` without `--rm`.
+Leave `LAST_EVENT_ID` unset to start from the beginning, or set it to the
+last processed ID when reconnecting:
 
 ```sh
-curl -N -H 'Authorization: Bearer ...' \
-  "$SANDBOX_DOMAIN/v1/sandboxes/$SB/executions/$EXE/events"
-```
-
-After a drop, resume from event 42 by sending that ID:
-
-```sh
-curl -N -H 'Authorization: Bearer ...' \
-  -H 'Last-Event-ID: 42' \
-  "$SANDBOX_DOMAIN/v1/sandboxes/$SB/executions/$EXE/events"
+curl --no-buffer --fail-with-body -H 'Accept: text/event-stream' \
+  -H "Authorization: Bearer ${SANDBOX_API_KEY:-}" \
+  -H "Last-Event-ID: ${LAST_EVENT_ID:-0}" \
+  "${SANDBOX_DOMAIN:-http://127.0.0.1:8080}/v1/sandboxes/$SB/executions/$EXE/events"
 ```
 
 <Warning>
-A non-integer `Last-Event-ID`, or one beyond the newest event, is
-`400 invalid_request` rather than a silent restart from zero. That is
-deliberate: silently replaying everything would look like duplicated output.
+A negative, non-integer, or too-new `Last-Event-ID` returns
+`400 invalid_request`. If a restart discarded the live output, a nonzero
+cursor returns `409 invalid_state`; read the execution snapshot instead.
 </Warning>
 
 The server sends a `ping` comment every 15 seconds so proxies do not reap an
@@ -62,39 +61,38 @@ until one closes.
 
 ## Retention limits
 
-Output is not infinite, and the limit is stated rather than discovered:
+Each execution retains up to **1 MiB** of stdout and stderr combined and
+**4,096 output events**. By default it keeps the beginning and stops storing
+new output at the limit. Set `output_tail: true` on start to keep recent
+output instead; older events can disappear even while a stream is open.
 
 - Each sandbox keeps at most **200** execution records, always protecting
-  active executions and the most recently completed one. After that, the record
-  is `404 not_found`.
+  active executions and the most recently completed one. An evicted record
+  returns `404 not_found`.
 - Eligible records and their idempotency keys can be pruned by history or
   aggregate-output limits. **No fixed replay window is guaranteed.**
 - When tail retention drops earlier bytes, `stdout_offset` and `stderr_offset`
   give the absolute byte index of the first retained byte, and
   `output_truncated` is true.
 
-If your agent needs the full transcript of a long build, capture it as you
-stream. The record is a convenience, not a durable log.
+Check `output_truncated` before treating a transcript as complete. If your
+command must preserve a full transcript or binary artifact, write it to files
+and retrieve them before deleting the sandbox.
 
 ## Cancelling
 
-Cancellation is verified, not requested and forgotten. The server records the
-intent, sends SIGTERM to the process group, waits up to 2 seconds, sends
-SIGKILL, waits up to 8 more seconds, and only then asks Docker to remove the
-container. The execution's reason becomes `canceled`.
+Native `POST .../executions/{id}/cancel` records a cancellation intent and
+signals the process group with SIGTERM. If it does not observe completion
+within two seconds, it tries SIGKILL. After up to eight more seconds it
+attempts to remove the container. That fallback can stop other commands and
+discard the writable layer; it can also be needed if the in-guest signal
+helper cannot start. Signaling a group does not cover processes that left it.
 
-Two properties worth knowing:
-
-- **The whole process group, not just the leader.** A grandchild that outlives
-  its parent is still killed.
-- **Waiting is not optional.** A caller that disconnects its own cancel request
-  does not shorten the escalation; the server finishes it so a client timeout
-  cannot turn a slow signal into container removal.
-
-One honest degradation: when the process tree has filled the sandbox's pid
-limit, the in-container helper that signals the group cannot get a task slot.
-Escalation then runs to container removal, which destroys the sandbox along
-with the execution.
+Check the returned state and `termination_reason`. A cancel request can race
+with completion or return before a terminal result is confirmed. If SDK
+cancellation reports `cancel_unconfirmed`, inspect the execution by ID before
+starting replacement work. Disconnecting a cancel request itself does not
+shorten the server's escalation once it is underway.
 
 ## Concurrency
 
@@ -105,15 +103,15 @@ directory. Raise it when you know the workloads are independent.
 
 ## Idempotent starts
 
-Starting an execution accepts an `idempotency_key`: at most 128 characters,
+Starting an execution accepts an `idempotency_key`: at most 128 bytes,
 **scoped to one sandbox**. A retry with the same key returns the original
 execution instead of starting a second one — the only way a retry can be safe
 for a command with side effects.
 
-The key is part of a fingerprint. Reusing it with a different `command`, `cwd`,
-`env`, or `stdin` is `409 idempotency_conflict` rather than a silent replay of
-something else. `timeout_ms` and the output retention mode also participate,
-so changing either changes the identity.
+Retry the same request with the same key. Reusing a retained key with a
+different `command`, `cwd`, `env`, `stdin`, `timeout_ms`, or `output_tail`
+returns `409 idempotency_conflict` rather than running different work. A valid
+change to `timeout_seconds` on a replay does not change the original deadline.
 
 <Note>
 A key is remembered only while its execution record is retained. When history

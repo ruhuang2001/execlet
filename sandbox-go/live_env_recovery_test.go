@@ -12,7 +12,7 @@ import (
 	"sync"
 	"testing"
 
-	sandbox "github.com/ruhuang2001/tiny-sandbox/sandbox-go"
+	sandbox "github.com/ruhuang2001/execlet/sandbox-go"
 )
 
 type acceptedStartFault struct {

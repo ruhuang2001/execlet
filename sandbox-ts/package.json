@@ -1,7 +1,7 @@
 {
-  "name": "@tiny-sandbox/sdk",
-  "version": "0.0.3",
-  "description": "Browser-safe TypeScript SDK for tiny-sandbox",
+  "name": "@execlet/sdk",
+  "version": "0.1.0",
+  "description": "Browser-safe TypeScript SDK for execlet",
   "type": "module",
   "engines": { "node": ">=22" },
   "files": ["dist", "README.md", "LICENSE"],
@@ -19,5 +19,5 @@
   },
   "devDependencies": { "typescript": "5.9.3", "esbuild": "0.25.12" },
   "license": "MIT",
-  "repository": { "type": "git", "url": "git+https://github.com/ruhuang2001/tiny-sandbox.git", "directory": "sandbox-ts" }
+  "repository": { "type": "git", "url": "git+https://github.com/ruhuang2001/execlet.git", "directory": "sandbox-ts" }
 }

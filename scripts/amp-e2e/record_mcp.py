@@ -1,4 +1,4 @@
-"""Pass Amp's stdio to sandboxctl and retain only completed MCP tool results."""
+"""Pass Amp's stdio to execletctl and retain only completed MCP tool results."""
 
 import hashlib
 import json
@@ -53,7 +53,7 @@ def main():
                 if row["error"]:
                     row["detail"] = result.get("content")
                 if row["tool"] == "create_sandbox" and not row["error"]:
-                    cid = "tiny-sandbox-" + row["value"]["sandbox_id"]
+                    cid = "execlet-" + row["value"]["sandbox_id"]
                     row["docker_network_mode"] = subprocess.check_output(
                         [
                             "docker",

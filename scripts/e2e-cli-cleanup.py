@@ -73,7 +73,7 @@ def main(binary, domain, out):
             state = direct(sid, "GET")["state"]
             expected_exit = (1 if uncertain else 130) if interrupted else command_exit
             warning = [line for line in stderr.splitlines() if "cleanup unconfirmed" in line]
-            expected_warning = f"sandboxctl: cleanup unconfirmed for {sid}:"
+            expected_warning = f"execletctl: cleanup unconfirmed for {sid}:"
             valid_warning = len(warning) == 1 and warning[0].startswith(expected_warning) if cleanup else not warning
             primary = ("could not be canceled" if uncertain else "execution canceled") if interrupted else f"exit {command_exit}"
             passed = (f"sandbox: {sid} (created;" in stderr and process.returncode == expected_exit

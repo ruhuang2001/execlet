@@ -12,7 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/ruhuang2001/tiny-sandbox/internal/guestprotocol"
+	"github.com/ruhuang2001/execlet/internal/guestprotocol"
 )
 
 type accounts struct{ users, groups map[int]string }

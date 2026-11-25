@@ -1,4 +1,4 @@
-"""tiny-sandbox: synchronous typed client with explicit execution semantics."""
+"""execlet: synchronous typed client with explicit execution semantics."""
 
 from ._cancel import CancellationToken
 from ._client import Client

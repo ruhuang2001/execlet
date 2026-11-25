@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	sandbox "github.com/ruhuang2001/tiny-sandbox/sandbox-go"
+	sandbox "github.com/ruhuang2001/execlet/sandbox-go"
 )
 
 func TestLiveStdin(t *testing.T) {
@@ -20,7 +20,7 @@ func TestLiveStdin(t *testing.T) {
 		t.Helper()
 		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 		defer cancel()
-		check, err := c.Exec(ctx, sb.ID, []string{"sh", "-c", "test ! -e /tmp/input-injected && find /tmp -name 'tiny-sandbox-stdin.*' -print"})
+		check, err := c.Exec(ctx, sb.ID, []string{"sh", "-c", "test ! -e /tmp/input-injected && find /tmp -name 'execlet-stdin.*' -print"})
 		if err != nil || check.Stdout != "" {
 			t.Fatalf("%s left staged input or failed cleanup check", label)
 		}

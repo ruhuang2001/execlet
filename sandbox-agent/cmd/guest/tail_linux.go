@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"sync"
 
-	"github.com/ruhuang2001/tiny-sandbox/internal/guestprotocol"
+	"github.com/ruhuang2001/execlet/internal/guestprotocol"
 )
 
 const tailPageBytes = 64 << 10

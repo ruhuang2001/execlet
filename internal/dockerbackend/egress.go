@@ -10,9 +10,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/ruhuang2001/tiny-sandbox/internal/daemon"
-	"github.com/ruhuang2001/tiny-sandbox/internal/dockerapi"
-	"github.com/ruhuang2001/tiny-sandbox/internal/egress"
+	"github.com/ruhuang2001/execlet/internal/daemon"
+	"github.com/ruhuang2001/execlet/internal/dockerapi"
+	"github.com/ruhuang2001/execlet/internal/egress"
 )
 
 type egressState struct {
@@ -85,7 +85,7 @@ func (b *Backend) acceptEgress(ctx context.Context, id, image string, policy *eg
 		case <-ctx.Done():
 			return
 		}
-		stream, err := b.api.ExecAttach(ctx, id, dockerapi.ExecConfig{User: "0", Cmd: []string{"/.tiny-sandbox/guest", "proxy-accept"}}, false)
+		stream, err := b.api.ExecAttach(ctx, id, dockerapi.ExecConfig{User: "0", Cmd: []string{"/.execlet/guest", "proxy-accept"}}, false)
 		if err == nil {
 			stop := context.AfterFunc(ctx, func() { _ = stream.Close() })
 			var ready [1]byte

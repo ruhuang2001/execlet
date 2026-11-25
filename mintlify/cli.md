@@ -3,11 +3,11 @@ title: "CLI reference"
 description: "execletctl: a thin, scriptable layer over the SDK with stable status lines and exit codes."
 ---
 
-`execletctl` is a thin layer over the [Go SDK](/sdk/go). It does not talk HTTP
-directly, with one exception: `doctor`'s health probe, because it has to work
-when the SDK does not.
+Use `execletctl` to run commands, inspect results, and manage sandboxes from
+the shell. The commands below use `execletctl` on your `PATH`; from the
+[built checkout](/quickstart#build-the-binaries), use `./bin/execletctl` instead.
 
-```sh
+```text
 execletctl [--domain URL] [--api-key KEY] <command> [args]
 ```
 
@@ -32,7 +32,7 @@ program's output and nothing else.
 | `run [flags] -- CMD [ARG...]` | Create or reuse a sandbox, run, stream, print the final status |
 | `run [flags] -- code 'PYTHON'` | Shorthand for `python3 -c 'PYTHON'`; new sandboxes use `python:3.12-alpine` unless `--image` is given |
 | `shell SANDBOX [TERMINAL]` | Open a PTY, or reconnect by its printed ID. Ctrl-] detaches; shell exit closes the terminal |
-| `attach SANDBOX EXECUTION` | Stream an existing execution from the beginning; Ctrl+C cancels it |
+| `attach SANDBOX EXECUTION` | Replay retained events and follow output; Ctrl+C requests remote cancellation |
 | `logs SANDBOX EXECUTION` | Print retained output and current status without streaming |
 | `inspect SANDBOX` | Print the sandbox |
 | `list` | One line per sandbox: `ID STATE IMAGE CREATED` |
@@ -50,15 +50,15 @@ program's output and nothing else.
 | `--sandbox ID` | Reuse instead of create. Errors when combined with creation flags |
 | `--image` | Image for a newly created sandbox |
 | `--memory MB`, `--pids-limit N`, `--nano-cpus N` | Resource limits; `--pids-limit` ≥ 64 |
-| `--network bridge\|filtered\|none` | Default `bridge` |
-| `--timeout S`, `--timeout-action kill\|pause` | Sandbox lifetime |
-| `--idle-timeout S`, `--idle-action kill\|pause` | Idle deadline |
+| `--network MODE` | `bridge`, `filtered`, or `none`. Defaults to `bridge` without a policy, otherwise the first allowed mode |
+| `--timeout S`, `--timeout-action ACTION` | Sandbox lifetime; action is `kill` or `pause` |
+| `--idle-timeout S`, `--idle-action ACTION` | Idle deadline; action is `kill` or `pause` |
 | `--exec-timeout S` | Deadline for **this command** only; valid with `--sandbox` |
 | `--env NAME=VALUE` | Repeatable; applies to the execution, not the sandbox |
 | `--cwd DIR` | Absolute path; applies to the execution |
-| `--stdin-file FILE` | One-shot stdin |
+| `--stdin-file FILE` | One-shot UTF-8 input up to 1 MiB; use `-` to read from stdin |
 | `--max-concurrent-executions N` | 1–8, creation only, default 1 |
-| `--rm` | Request cleanup of a sandbox this invocation created |
+| `--rm` | Request cleanup of a sandbox this invocation created. An unconfirmed removal is reported on stderr and does not change the command's exit status |
 
 <Note>
 `--env` and `--cwd` apply to the **execution**, so they compose with
@@ -93,7 +93,7 @@ snapshot instead.
 | Command exited 1–125 | that code |
 | Cancellation (`ErrCanceled`) | 130 |
 | Usage or flag parse error | 2 |
-| Everything else: API errors, OOM, timeout, eviction, exit ≥ 126 | 1 |
+| Other failures: API errors, OOM, timeout, eviction, unconfirmed cancellation, exit ≥ 126 | 1 |
 
 126 and 127 are not passed through. In shell convention they mean "not
 executable" and "command not found", which describe the sandbox environment
@@ -110,26 +110,22 @@ passed.
 2. `health` — `GET /healthz` within 3 seconds.
 3. `auth` — probes a fixed sandbox ID; `404` means authorized, `401` means the key is wrong.
 4. `docker` — only for a loopback domain; runs `docker info`.
-5. `sandbox` — creates a sandbox, runs `echo doctor-ok`, checks the output, kills it.
+5. `sandbox` — creates a sandbox with the daemon's defaults, runs `echo doctor-ok`, checks the output, and requests cleanup.
 
-Check 5 is the one that matters. The others prove the door is open; this one
-proves a container can start.
+The sandbox check exercises container startup and execution. With a policy
+that disallows the default image, use an explicit approved image in a
+[`run` check](/operations/policy#start-with-an-offline-policy) instead.
 
 ## `doctor mcp`
 
-For the MCP workflow, `doctor mcp` proves an offline sandbox can run your
-toolchain before you wire it into a client:
-
-```sh
-execletctl doctor mcp --profile pytest --workspace .
-execletctl doctor mcp --profile go --workspace . --check-deps
-```
+`doctor mcp` checks the offline toolchain before wiring it into a client.
+Build the example image and run the commands in the [MCP guide](/guides/mcp).
 
 On success it prints **only** client configuration JSON with absolute paths. A
 failure prints a diagnostic to stderr and nothing to stdout, so you can pipe the
 output straight into a config file.
 
 <Warning>
-`--collect` syncs and collects tests, which **executes project code**. Use it
-only for a project you trust.
+`--collect` syncs the workspace and imports tests **inside the sandbox**.
+Use it only for a project you trust.
 </Warning>

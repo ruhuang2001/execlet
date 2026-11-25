@@ -7,8 +7,8 @@ import (
 	"io"
 	"time"
 
-	"github.com/ruhuang2001/tiny-sandbox/internal/daemon"
-	"github.com/ruhuang2001/tiny-sandbox/internal/guestprotocol"
+	"github.com/ruhuang2001/execlet/internal/daemon"
+	"github.com/ruhuang2001/execlet/internal/guestprotocol"
 )
 
 type guestProcess struct {

@@ -14,9 +14,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ruhuang2001/tiny-sandbox/internal/daemon"
-	"github.com/ruhuang2001/tiny-sandbox/internal/dockerapi"
-	"github.com/ruhuang2001/tiny-sandbox/internal/dockerbackend"
+	"github.com/ruhuang2001/execlet/internal/daemon"
+	"github.com/ruhuang2001/execlet/internal/dockerapi"
+	"github.com/ruhuang2001/execlet/internal/dockerbackend"
 )
 
 var version = "dev"
@@ -78,6 +78,10 @@ func main() {
 	}
 	if err := backend.SetGuestAgent(*guestMode); err != nil {
 		slog.Error("invalid guest mode", "error", err)
+		os.Exit(1)
+	}
+	if err := backend.CheckLegacyOwner(ctx, *owner); err != nil {
+		slog.Error("startup ownership check failed; refusing admission", "error", err)
 		os.Exit(1)
 	}
 	if journal == nil {

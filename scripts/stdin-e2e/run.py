@@ -15,7 +15,7 @@ base = urlsplit(os.environ['SANDBOX_DOMAIN'])
 checks = []
 records = []
 secret = 'unprinted-input-' + uuid.uuid4().hex
-sources = [Path('scripts/stdin-e2e/run.py'), Path('scripts/e2e-stdin.sh'), Path('sandbox-go/live_stdin_test.go'), out / 'sandboxd', out / 'sandboxctl']
+sources = [Path('scripts/stdin-e2e/run.py'), Path('scripts/e2e-stdin.sh'), Path('sandbox-go/live_stdin_test.go'), out / 'execletd', out / 'execletctl']
 (out / 'stdin-source-sha256.json').write_text(json.dumps({str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources}, indent=2) + '\n')
 
 
@@ -106,7 +106,7 @@ try:
 finally:
     request('DELETE', '/v1/sandboxes/' + sandbox_id)
 
-cli = str(out / 'sandboxctl')
+cli = str(out / 'execletctl')
 fixture = 'CLI 世界\n'.encode() + b'\0literal $HOME\n\n'
 (out / 'cli-input.bin').write_bytes(fixture)
 result = subprocess.run([cli, 'run', '--rm', '--stdin-file', str(out / 'cli-input.bin'), '--', 'cat'], capture_output=True, timeout=30)

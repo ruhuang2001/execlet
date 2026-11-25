@@ -1,24 +1,24 @@
 version: 2
 
-project_name: tiny-sandbox
+project_name: execlet
 
 before:
   hooks:
     - make agent
 
 builds:
-  - id: sandboxd
-    main: ./cmd/sandboxd
-    binary: sandboxd
+  - id: execletd
+    main: ./cmd/execletd
+    binary: execletd
     ldflags:
       - -s -w -X main.version={{.Version}}
     goos: [linux, darwin]
     goarch: [amd64, arm64]
     env: [CGO_ENABLED=0]
 
-  - id: sandboxctl
-    main: ./cmd/sandboxctl
-    binary: sandboxctl
+  - id: execletctl
+    main: ./cmd/execletctl
+    binary: execletctl
     ldflags:
       - -s -w -X main.version={{.Version}}
     goos: [linux, darwin]

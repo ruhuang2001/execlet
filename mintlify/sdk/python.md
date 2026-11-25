@@ -3,32 +3,45 @@ title: "Python SDK"
 description: "A synchronous, dependency-free client with typed dataclasses and context-managed sandboxes."
 ---
 
+## Install from source
+
+Set `EXECLET_SRC` to the absolute path of the [checkout](/installation#use-the-sdks-from-a-checkout)
+that built your daemon. From your application directory, create a virtual
+environment and install from that checkout:
+
 ```sh
-pip install execlet
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install "$EXECLET_SRC/sandbox-python"
 ```
 
-Python 3.10+. No runtime dependencies outside the standard library. There is no
-async client; create a new client in each child process after `fork` — using or
+The distribution and import are both named `execlet`. The SDK is synchronous,
+requires Python 3.10+, and has no runtime dependencies outside the standard
+library. Create a new client in each child process after `fork`; using or
 closing an inherited client raises `forked_client`.
 
-## The shortest useful program
+## Run a command and stream it
+
+With the daemon running, save this as `demo.py` and run `python demo.py`:
 
 ```python
-from execlet import Client, CreateSandboxRequest, Error
+import sys
+
+from execlet import Client, CreateSandboxRequest
 
 with Client() as client:
-    with client.sandbox(CreateSandboxRequest(image="alpine:3.20")) as sandbox:
-        execution = client.exec_stream(
+    with client.sandbox(CreateSandboxRequest(image="python:3.12-alpine", network="none")) as sandbox:
+        client.exec_stream(
             sandbox.id,
-            ["sh", "-c", "echo hello; sleep 1; echo done"],
+            ["python3", "-c", "print(2 ** 10)"],
             on_stdout=lambda chunk: print(chunk, end="", flush=True),
-            on_stderr=lambda chunk: print(chunk, end="", flush=True),
+            on_stderr=lambda chunk: print(chunk, end="", flush=True, file=sys.stderr),
         )
-        print(execution.exit_code, execution.termination_reason)
 ```
 
-`client.sandbox(request)` creates a sandbox, yields it, and kills it on exit —
-including exceptional exit — using a fresh five-second cleanup budget.
+It prints `1024`. `client.sandbox(request)` creates a sandbox, yields it, and
+requests removal on exit, including exceptional exit, using a fresh five-second
+cleanup budget.
 
 <Warning>
 `with Client()` only closes client resources. It does **not** remove sandboxes
@@ -59,7 +72,7 @@ a `CancellationToken` for a local deadline or explicit caller cancellation.
 ## Requests are typed, and omission is meaningful
 
 `CreateSandboxRequest` accepts `image`, `memory_mb`, `max_concurrent_executions`,
-`pids_limit`, `nano_cpus`, `network`, `timeout_seconds`, `timeout_action`,
+`pids_limit`, `nano_cpus`, `network`, `runtime`, `timeout_seconds`, `timeout_action`,
 `idle_timeout_seconds`, `idle_timeout_action`, and `env`.
 
 `None` omits a field. Explicit zero is sent, which is how you distinguish "use
@@ -80,11 +93,14 @@ Neither is echoed back in resource metadata.
 ## Changing a lifetime
 
 ```python
+from execlet import UpdateSandboxRequest
+
 client.update_sandbox(sandbox_id, UpdateSandboxRequest(extend_seconds=300))
 ```
 
-`timeout_seconds` replaces the deadline; `extend_seconds` adds without ever
-shortening it. Exactly one operation per request. A `PATCH` is **not**
+`timeout_seconds` sets a new deadline relative to now. `extend_seconds` keeps
+the later of the current deadline and now plus the supplied duration; it does
+not add to the existing deadline. Supply exactly one field. A `PATCH` is **not**
 automatically replayed after an ambiguous response — extending twice is not the
 same as extending once.
 
@@ -94,7 +110,7 @@ same as extending once.
 from execlet import Error
 
 try:
-    client.exec_stream(sandbox_id, ["false"])
+    client.exec(sandbox_id, ["false"])
 except Error as error:
     print(error.code)
     if error.execution is not None:
@@ -103,14 +119,20 @@ except Error as error:
 
 `error.code` is the stable field to branch on; the message text is not.
 
-Completed commands do not raise, even with a nonzero exit code. Only transport,
-protocol, and API failures raise `Error`.
+`exec` and `exec_stream` raise `Error` for failed commands, including
+`nonzero_exit` for an ordinary nonzero exit. The exception can carry the final
+`execution`. To handle the terminal snapshot yourself, call `start_execution`
+with an `ExecuteRequest`, then `stream_execution` with the returned ID.
+`stream_execution` returns the snapshot regardless of the command's outcome;
+transport, API, and observation errors can still raise.
 
 ## Streaming behavior
 
 `exec_stream` reconnects with `Last-Event-ID` and suppresses duplicates. The
 retry budget is cumulative per call and does not reset when output arrives.
 
-Returning an error from a callback closes the stream and raises — it does not
-cancel the remote execution. That separation is intentional: a bug in your
-printer should not kill a ten-minute build.
+A callback that raises closes the stream and surfaces `Error` with code
+`callback`; it does not cancel the command. Canceling an active observation via
+`CancellationToken` does request remote cancellation by default. Pass
+`cancel_remote=False` to `stream_execution` to stop waiting without canceling,
+and check for `cancel_unconfirmed` before assuming cleanup succeeded.

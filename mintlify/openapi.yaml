@@ -1,11 +1,10 @@
 openapi: 3.1.0
 info:
-  title: tiny-sandbox
-  version: 0.0.3
+  title: execlet
+  version: 0.1.0
   summary: Code-execution sandbox for AI agents
   description: |
     Normative HTTP contract for the execlet reference server.
-    This page is generated from the specification the server validates its router against.
     Every handled response includes X-Request-ID. A single incoming value with
     1-128 ASCII letters, digits, dots, underscores, or hyphens is preserved;
     otherwise the server generates a UUID. Access logs use route templates and

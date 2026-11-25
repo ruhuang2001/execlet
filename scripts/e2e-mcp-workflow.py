@@ -31,7 +31,7 @@ def run(args, tmp):
     release = tmp / "release"
     release.mkdir()
     command("tar", "-xzf", args.archive, "-C", release)
-    cli = release / "sandboxctl"
+    cli = release / "execletctl"
     env = dict(os.environ, HOME=str(tmp), SANDBOX_API_KEY="")
     if not env.get("DOCKER_HOST"):
         env["DOCKER_HOST"] = command(
@@ -103,7 +103,7 @@ def run(args, tmp):
         assert_doctor_fails(env, "daemon:", cli, "doctor", "mcp", "--workspace", work)
     owner = "mcp-workflow-" + uuid.uuid4().hex
     with args.out.with_suffix(".log").open("w") as log, subprocess.Popen(
-        [release / "sandboxd", "-addr", address, "-owner", owner],
+        [release / "execletd", "-addr", address, "-owner", owner],
         env=env,
         stdout=log,
         stderr=log,
@@ -115,15 +115,15 @@ def run(args, tmp):
                     break
                 except OSError:
                     if daemon.poll() is not None:
-                        raise RuntimeError("sandboxd exited; see daemon log")
+                        raise RuntimeError("execletd exited; see daemon log")
                     time.sleep(0.1)
             else:
-                raise RuntimeError("sandboxd did not become ready")
+                raise RuntimeError("execletd did not become ready")
 
             doctor = [cli, "doctor", "mcp", "--workspace", work, "--image", image]
             doctor += ["--profile", "go", "--check-deps"] if go else ["--collect"]
             config = json.loads(command(*doctor, env=env, capture_output=True).stdout)
-            server = config["mcpServers"]["tiny-sandbox"]
+            server = config["mcpServers"]["execlet"]
             assert server["args"] == ["mcp", "--workspace", str(work), "--image", image]
             assert server["env"] == {"SANDBOX_DOMAIN": domain}
             assert pathlib.Path(server["command"]).samefile(cli)
@@ -153,7 +153,7 @@ def run(args, tmp):
                     "--workspace",
                     work,
                     "--image",
-                    "127.0.0.1:1/tiny-sandbox-missing:local",
+                    "127.0.0.1:1/execlet-missing:local",
                 )
                 dependency = work / "test_missing_dependency.py"
                 dependency.write_text("import demo_missing_dependency\n")
@@ -181,7 +181,7 @@ def run(args, tmp):
                 "ps",
                 "-aq",
                 "--filter",
-                f"label=tiny-sandbox.owner={owner}",
+                f"label=execlet.owner={owner}",
                 capture_output=True,
             ).stdout.strip()
         finally:
@@ -194,7 +194,7 @@ def run(args, tmp):
                 daemon.wait(timeout=CLEANUP_TIMEOUT)
                 if not failing:
                     raise
-                print("sandboxd did not stop within 30 seconds", file=sys.stderr)
+                print("execletd did not stop within 30 seconds", file=sys.stderr)
             finally:
                 if failing:
                     try:
@@ -204,7 +204,7 @@ def run(args, tmp):
                                 "ps",
                                 "-aq",
                                 "--filter",
-                                f"label=tiny-sandbox.owner={owner}",
+                                f"label=execlet.owner={owner}",
                             ],
                             timeout=CLEANUP_TIMEOUT,
                             text=True,
@@ -316,7 +316,7 @@ def workflow(args, server, env, owner, source, fixed, test, failure_text):
                     "ps",
                     "-q",
                     "--filter",
-                    f"label=tiny-sandbox.owner={owner}",
+                    f"label=execlet.owner={owner}",
                     capture_output=True,
                     text=True,
                 ).stdout.split()

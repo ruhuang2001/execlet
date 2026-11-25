@@ -6,8 +6,8 @@ import subprocess
 from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
-from tiny_sandbox import Client, CreateSandboxRequest
-from tiny_sandbox.e2b import Sandbox as E2BSandbox
+from execlet import Client, CreateSandboxRequest
+from execlet.e2b import Sandbox as E2BSandbox
 from archive_checks import check_archives
 
 out = pathlib.Path(os.environ['E2E_ARTIFACT_DIR'])
@@ -66,7 +66,7 @@ try:
     client.pause_sandbox(sb.id)
     assert len(client.list_files(sb.id,'/listing').entries)==7
     assert client.get_sandbox(sb.id).state=='running'
-    for name,cmd in [('go',[str(out/'go-files'),sb.id]),('typescript',['node','scripts/file-e2e/typescript.mjs',sb.id]),('cli',[str(out/'sandboxctl'),'files','list',sb.id,'/listing','--limit','2'])]:
+    for name,cmd in [('go',[str(out/'go-files'),sb.id]),('typescript',['node','scripts/file-e2e/typescript.mjs',sb.id]),('cli',[str(out/'execletctl'),'files','list',sb.id,'/listing','--limit','2'])]:
         result=subprocess.run(cmd,text=True,capture_output=True,timeout=40)
         (out/(name+'.stdout')).write_text(result.stdout)
         (out/(name+'.stderr')).write_text(result.stderr)

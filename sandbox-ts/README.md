@@ -1,6 +1,6 @@
-# @tiny-sandbox/sdk
+# @execlet/sdk
 
-TypeScript SDK for tiny-sandbox: lifecycle, binary files, authenticated SSE,
+TypeScript SDK for execlet: lifecycle, binary files, authenticated SSE,
 bounded retries, idempotent starts and confirmed AbortSignal cancellation.
 ESM, Node 22+ or modern browsers, no runtime dependencies.
 
@@ -12,11 +12,12 @@ npm ci
 npm pack
 ```
 
-Install the emitted `.tgz` in your application with `npm install /path/to/package.tgz`.
+Install the emitted `execlet-sdk-VERSION.tgz` in your application with
+`npm install /path/to/execlet-sdk-VERSION.tgz`, using the filename from `npm pack`.
 Use client and server builds from compatible revisions.
 
 ~~~ts
-import { Client, SandboxError } from '@tiny-sandbox/sdk';
+import { Client, SandboxError } from '@execlet/sdk';
 
 const client = new Client({ domain: 'http://localhost:8080' });
 const sandbox = await client.createSandbox({ timeout_seconds: 300 });
@@ -46,7 +47,7 @@ commands resolve outcomes; transport/API/cancellation failures reject.
 
 See the [SDK guide](../docs/sdk-typescript.md) for the complete method, error,
 retry and compatibility contract. Browser usage requires same-origin hosting
-or a CORS-configured proxy; sandboxd does not itself enable CORS. Do not bundle
+or a CORS-configured proxy; execletd does not itself enable CORS. Do not bundle
 privileged bearer credentials.
 
 From the repository root, verify against real Docker:
@@ -59,7 +60,7 @@ Evidence is retained under `artifacts/typescript-e2e`.
 
 ## Optional E2B facade
 
-`import { Sandbox, CommandExitError } from '@tiny-sandbox/sdk/e2b'` exposes the
+`import { Sandbox, CommandExitError } from '@execlet/sdk/e2b'` exposes the
 E2B 2.64.0 Sandbox subset for Node: lifecycle, foreground/background Bash commands
 with serial callbacks, compatible errors, text/binary files and bounded directory lists.
 It has no E2B runtime dependency or cloud-key requirement. Set
@@ -71,7 +72,7 @@ capability cache belongs to each client and its immutable endpoint/credential.
 
 ```ts
 import { writeFile } from 'node:fs/promises';
-import { Sandbox, type CommandHandle } from '@tiny-sandbox/sdk/e2b';
+import { Sandbox, type CommandHandle } from '@execlet/sdk/e2b';
 
 const sandbox = await Sandbox.create();
 const command: CommandHandle = await sandbox.commands.run('sleep 2; printf done', {
@@ -91,7 +92,7 @@ deadline and the sandbox lifetime alone.
 
 ```ts
 import { readFile } from 'node:fs/promises';
-import { Sandbox } from '@tiny-sandbox/sdk/e2b';
+import { Sandbox } from '@execlet/sdk/e2b';
 
 const { sandboxId, pid } = JSON.parse(await readFile('command.json', 'utf8'));
 const connected = await Sandbox.connect(sandboxId);

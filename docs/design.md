@@ -1,6 +1,6 @@
 # Design
 
-tiny-sandbox provides Docker-backed code execution for AI agents through Go, Python, and TypeScript SDKs, a CLI, and an HTTP API. It uses in-memory state by default, with opt-in local restart recovery. It does not provide hardened isolation or multi-tenant access controls.
+execlet provides Docker-backed code execution for AI agents through Go, Python, and TypeScript SDKs, a CLI, and an HTTP API. It uses in-memory state by default, with opt-in local restart recovery. It does not provide hardened isolation or multi-tenant access controls.
 
 This document is the design source for the implementation. `api.md`, `sdk.md` and `cli.md` are normative contracts; where this document disagrees with them, they win.
 
@@ -14,7 +14,7 @@ Coding agents increasingly run the code they write. Running that code is easy; r
 - A command exited with 137. Was it an OOM kill, a timeout, a cancellation, or an external eviction?
 - Which requests are safe to retry, and how does a retry avoid running a command twice?
 
-The module is `github.com/ruhuang2001/tiny-sandbox`; `sandbox-go` is the package `sandbox` inside it, so SDK imports read `github.com/ruhuang2001/tiny-sandbox/sandbox-go`.
+The module is `github.com/ruhuang2001/execlet`; `sandbox-go` is the package `sandbox` inside it, so SDK imports read `github.com/ruhuang2001/execlet/sandbox-go`.
 
 This project answers those questions with working code and tests rather than prose. The API semantics follow the public documentation of PPIO Sandbox and E2B where they agree; it does not claim wire compatibility with either.
 
@@ -32,11 +32,11 @@ Process checkpoints, persistent volumes, secret injection, multi-tenancy, billin
 ## Architecture
 
 ```text
-sandboxctl / Go application
+execletctl / Go application
           |
       sandbox-go          HTTP JSON + SSE
           |
-       sandboxd
+       execletd
           |
    daemon.Backend  ---- in-memory backend (unit and contract tests)
           |
@@ -45,11 +45,11 @@ sandboxctl / Go application
    one container per sandbox
 ```
 
-The daemon depends on a `Backend` interface rather than Docker. `dockerbackend` implements that interface using `dockerapi`, which handles the Docker Engine HTTP protocol. `sandboxd` wires these packages together; the SDK uses the public HTTP API. The CLI uses the SDK, with direct health and local Docker checks in `doctor`.
+The daemon depends on a `Backend` interface rather than Docker. `dockerbackend` implements that interface using `dockerapi`, which handles the Docker Engine HTTP protocol. `execletd` wires these packages together; the SDK uses the public HTTP API. The CLI uses the SDK, with direct health and local Docker checks in `doctor`.
 
 ```
-cmd/sandboxd/            main, flags, wiring
-cmd/sandboxctl/          one file per command group: run, doctor, ops, main
+cmd/execletd/            main, flags, wiring
+cmd/execletctl/          one file per command group: run, doctor, ops, main
 internal/daemon/         state machine, execution engine, classification, HTTP handlers
 internal/dockerapi/      minimal Engine API client: create, start, exec, inspect, pause, kill
 internal/dockerbackend/  Backend implementation over dockerapi; cgroup reads
@@ -158,7 +158,7 @@ sequenceDiagram
     autonumber
     participant Caller as Application / CLI
     participant SDK as Go SDK
-    participant Server as sandboxd
+    participant Server as execletd
     participant Runtime as Docker backend
 
     Caller->>SDK: ExecStream(ctx, sandboxID, command, onEvent)
@@ -219,7 +219,7 @@ sequenceDiagram
     autonumber
     participant Caller as Application / CLI
     participant SDK as Go SDK
-    participant Server as sandboxd
+    participant Server as execletd
     participant Runtime as Docker backend
     participant Group as Command process group
 
@@ -305,11 +305,11 @@ cleanup behavior when the runtime fails.
 - Errors are a single `*Error` type carrying status, code, the full `Execution` where one exists, and an idempotency key where recovery failed. `errors.Is` works against sentinel values for every termination reason.
 - Time fields carry their unit in the name (`timeout_seconds`), because SDKs in different languages disagree on units.
 - The CLI writes command output to stdout and its own status to stderr. It passes through command exit codes 1–125 and returns 130 for confirmed cancellation; see [CLI exit codes](cli.md#exit-codes).
-- `sandboxctl doctor` checks configuration, server health, authentication, and Docker, then creates a sandbox, runs a command, and removes it.
+- `execletctl doctor` checks configuration, server health, authentication, and Docker, then creates a sandbox, runs a command, and removes it.
 
 ### Operational visibility
 
-sandboxd writes JSON logs through log/slog. Each handled HTTP request receives
+execletd writes JSON logs through log/slog. Each handled HTTP request receives
 a validated or generated X-Request-ID echoed in the response; its context carries
 the same logger through execution start and completion. Access records contain
 request_id, method, route template, status, duration_ms, bytes, and completed. Runtime errors expose only
@@ -338,7 +338,7 @@ Live state is held in memory and bounded on four axes:
 The event log owns replay data. When a client asks for full output, the log appends any unindexed chunks to a per-stream buffer. Repeated reads share immutable string prefixes instead of rescanning or copying past output. The buffers cost up to another copy of the retained text plus allocation headroom; the output limits count payload bytes, not heap usage.
 
 Without `-state-dir`, startup removes containers carrying its owner label
-(`tiny-sandbox.owner=<owner>`, `-owner` defaults to the listen address);
+(`execlet.owner=<owner>`, `-owner` defaults to the listen address);
 incomplete cleanup prevents admission. An ordinary stop closes streams, drains
 HTTP for up to ten seconds, then attempts bounded container removal. Pin
 `-owner` when the listen address can change.

@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ruhuang2001/tiny-sandbox/internal/daemon"
-	"github.com/ruhuang2001/tiny-sandbox/internal/daemon/membackend"
+	"github.com/ruhuang2001/execlet/internal/daemon"
+	"github.com/ruhuang2001/execlet/internal/daemon/membackend"
 )
 
 type cliHarness struct {
@@ -130,7 +130,7 @@ func TestRunPrintsStatusLinesAndStreamsOutput(t *testing.T) {
 		t.Errorf("stdout = %q, want only command output", got.stdout)
 	}
 	if !strings.Contains(got.stderr, "sandbox: sbx_") ||
-		!strings.Contains(got.stderr, "(created; remove with: sandboxctl kill sbx_") {
+		!strings.Contains(got.stderr, "(created; remove with: execletctl kill sbx_") {
 		t.Errorf("missing sandbox status line: %q", got.stderr)
 	}
 	if !strings.Contains(got.stderr, "execution: exe_") {
@@ -220,7 +220,7 @@ func TestRunOOMAndTimeoutHints(t *testing.T) {
 	if hintFor(&fakeTimeout{}) != "increase --timeout or --exec-timeout" {
 		t.Error("timeout hint is missing")
 	}
-	if hintFor(&fakeEvicted{}) != "the container was stopped outside sandboxd" {
+	if hintFor(&fakeEvicted{}) != "the container was stopped outside execletd" {
 		t.Error("evicted hint is missing")
 	}
 	if hintFor(&fakeBusy{}) != "wait for the running execution or cancel it" {
@@ -343,7 +343,7 @@ func TestRunAndFilesListPreserveMetadataAndTruncation(t *testing.T) {
 	if got.code != 0 {
 		t.Fatalf("run = %+v", got)
 	}
-	if !strings.Contains(got.stderr, "sandboxctl: output truncated") {
+	if !strings.Contains(got.stderr, "execletctl: output truncated") {
 		t.Errorf("run stderr missing truncation notice: %q", got.stderr)
 	}
 
@@ -355,7 +355,7 @@ func TestRunAndFilesListPreserveMetadataAndTruncation(t *testing.T) {
 		}
 	}
 	logsRes := h.invoke("logs", id, execID)
-	if !strings.Contains(logsRes.stderr, "sandboxctl: output truncated") {
+	if !strings.Contains(logsRes.stderr, "execletctl: output truncated") {
 		t.Errorf("logs stderr missing truncation notice: %q", logsRes.stderr)
 	}
 
@@ -428,7 +428,7 @@ func TestConnectionRefusedHint(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("exit = %d, want 1", code)
 	}
-	if !strings.Contains(errOut.String(), "hint: start sandboxd or set SANDBOX_DOMAIN") {
+	if !strings.Contains(errOut.String(), "hint: start execletd or set SANDBOX_DOMAIN") {
 		t.Errorf("stderr = %q", errOut.String())
 	}
 }

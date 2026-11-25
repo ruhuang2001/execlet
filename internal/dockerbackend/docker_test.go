@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ruhuang2001/tiny-sandbox/internal/daemon"
-	"github.com/ruhuang2001/tiny-sandbox/internal/dockerapi"
+	"github.com/ruhuang2001/execlet/internal/daemon"
+	"github.com/ruhuang2001/execlet/internal/dockerapi"
 )
 
 func dockerSocket(t *testing.T) string {
@@ -450,7 +450,7 @@ func TestRealCreateNameConflict(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := t.Context()
 			id := "sbx_" + rand.Text()
-			name := "tiny-sandbox-" + id
+			name := "execlet-" + id
 			labels := map[string]string{daemon.OwnerLabelKey: h.owner, daemon.SandboxIDLabelKey: id}
 			if tc.foreignOwner {
 				labels[daemon.OwnerLabelKey] += "-other"

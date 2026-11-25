@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ruhuang2001/tiny-sandbox/internal/filearchive"
+	"github.com/ruhuang2001/execlet/internal/filearchive"
 )
 
 type workspaceDelta struct {

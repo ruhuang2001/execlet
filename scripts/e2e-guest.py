@@ -27,7 +27,7 @@ def run(args):
                 "--target",
                 stage,
                 "-t",
-                "tiny-sandbox-guest:" + stage,
+                "execlet-guest:" + stage,
                 str(root / "examples/guest"),
             ],
             check=True,
@@ -82,7 +82,7 @@ def run(args):
                     sb = request(
                         "POST",
                         "/v1/sandboxes",
-                        {"image": "tiny-sandbox-guest:" + stage, "network": "none"},
+                        {"image": "execlet-guest:" + stage, "network": "none"},
                     )
                     latencies.append((time.monotonic_ns() - started) / 1e6)
                     base = "/v1/sandboxes/" + sb["id"]
@@ -150,14 +150,14 @@ def run(args):
                         "ps",
                         "-aq",
                         "--filter",
-                        "label=tiny-sandbox.owner=" + owner,
+                        "label=execlet.owner=" + owner,
                     ]
                 ).strip()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--server", type=Path, default=Path("bin/sandboxd"))
+    parser.add_argument("--server", type=Path, default=Path("bin/execletd"))
     parser.add_argument("--out", type=Path, default=Path("artifacts/guest"))
     parser.add_argument("--samples", type=int, default=30)
     run(parser.parse_args())

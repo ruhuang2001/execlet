@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/ruhuang2001/tiny-sandbox/internal/wirejson"
+	"github.com/ruhuang2001/execlet/internal/wirejson"
 )
 
 type TerminalBackend interface {

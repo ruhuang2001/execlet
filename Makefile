@@ -9,8 +9,8 @@ LDFLAGS := -X main.version=$(VERSION)
 .PHONY: build test vet lint comment-lint-env comment-lint comment-lint-e2e race fmt check-commit install-hooks python-build python-e2e typescript typescript-e2e clean
 
 build: agent
-	go build -ldflags '$(LDFLAGS)' -o $(BIN)/sandboxd ./cmd/sandboxd
-	go build -ldflags '$(LDFLAGS)' -o $(BIN)/sandboxctl ./cmd/sandboxctl
+	go build -ldflags '$(LDFLAGS)' -o $(BIN)/execletd ./cmd/execletd
+	go build -ldflags '$(LDFLAGS)' -o $(BIN)/execletctl ./cmd/execletctl
 
 test:
 	go test ./...
@@ -48,6 +48,7 @@ install-hooks:
 
 python-build:
 	$(PYTHON) -m build --outdir artifacts/python-dist sandbox-python
+	$(PYTHON) scripts/check-sdk-wheel.py artifacts/python-dist/execlet-*.whl
 
 python-e2e:
 	PYTHON=$(PYTHON) bash scripts/e2e-python.sh artifacts/python-e2e
@@ -73,7 +74,7 @@ agent: internal/dockerbackend/guestbin/guest-linux-amd64 internal/dockerbackend/
 internal/dockerbackend/guestbin/guest-linux-%: $(wildcard sandbox-agent/cmd/guest/*.go internal/guestprotocol/*.go sandbox-agent/go.*)
 	cd sandbox-agent && GOFLAGS= CGO_ENABLED=0 GOOS=linux GOARCH=$* go build -trimpath -ldflags='-s -w' -o ../$@ ./cmd/guest
 
-.PHONY: feature-e2e runtime-e2e
+.PHONY: feature-e2e runtime-e2e runtime-image docs-openapi docs-check
 
 feature-e2e: build typescript
 	$(PYTHON) scripts/e2e-mcp.py $(ARTIFACTS)/mcp-e2e
@@ -83,13 +84,15 @@ feature-e2e: build typescript
 	$(PYTHON) scripts/guest-transport-probe.py --out $(ARTIFACTS)/guest-transport
 	$(PYTHON) scripts/e2e-terminal.py --out $(ARTIFACTS)/terminal
 	$(PYTHON) scripts/e2e-terminal-sdks.py --out $(ARTIFACTS)/terminal-sdks
-	$(PYTHON) scripts/e2e-guest-idle.py --server bin/sandboxd --out $(ARTIFACTS)/guest-idle/acceptance.json
+	$(PYTHON) scripts/e2e-guest-idle.py --server bin/execletd --out $(ARTIFACTS)/guest-idle/acceptance.json
 	$(PYTHON) scripts/e2e-output-retention.py --out $(ARTIFACTS)/output-retention
 	$(PYTHON) scripts/egress-e2e/run.py --out $(ARTIFACTS)/egress
 	$(PYTHON) scripts/e2e-templates.py --out $(ARTIFACTS)/templates
 	$(PYTHON) scripts/e2e-prewarm.py --samples 2 --out $(ARTIFACTS)/prewarm-e2e
 
-runtime-e2e: build
-	docker build --target minimal -t tiny-sandbox-guest:minimal -f examples/guest/Dockerfile.agent-minimal examples/guest
+runtime-image:
+	docker build --target minimal -t execlet-guest:minimal -f examples/guest/Dockerfile.agent-minimal examples/guest
+
+runtime-e2e: build runtime-image
 	$(PYTHON) scripts/e2e-runtime.py --out $(ARTIFACTS)/runtime
 	$(PYTHON) scripts/e2e-templates.py --runtime runsc --out $(ARTIFACTS)/runsc-template

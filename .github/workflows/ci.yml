@@ -10,6 +10,10 @@ on:
         description: Exact source revision to validate
         type: string
         default: ''
+    outputs:
+      legacy_tag:
+        description: Original release tag for an explicitly selected pre-rename commit
+        value: ${{ jobs.profile.outputs.legacy_tag }}
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.run_id }}
@@ -20,9 +24,32 @@ permissions:
 
 env:
   GOTOOLCHAIN: local
+  CI_SOURCE: ${{ inputs.ref || github.sha }}
 
 jobs:
+  profile:
+    runs-on: ubuntu-latest
+    outputs:
+      legacy_tag: ${{ steps.select.outputs.tag }}
+      sdks: ${{ steps.select.outputs.sdks }}
+      guest: ${{ steps.select.outputs.guest }}
+    steps:
+      - id: select
+        env:
+          REQUESTED_REF: ${{ inputs.ref }}
+        run: |
+          sdks=true
+          guest=true
+          case "$REQUESTED_REF" in
+            7e83ac243ac13ea2a36a3ddbc7e51420cc93f956) tag=v0.0.1; sdks=false; guest=false ;;
+            28912c69c245df6903536f7b9fac165340f64f56) tag=v0.0.2; guest=false ;;
+            92d22400f12aa4d73a172866942d41cb8d9ebd8b) tag=v0.0.3 ;;
+            *) tag='' ;;
+          esac
+          printf '%s\n' "tag=$tag" "sdks=$sdks" "guest=$guest" >> "$GITHUB_OUTPUT"
+
   e2b-compatibility:
+    needs: profile
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -33,41 +60,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ env.CI_SOURCE }}
           fetch-depth: 0
-      - name: require the installed-package acceptance suite
-        id: suite
-        env:
-          REQUESTED_REF: ${{ inputs.ref }}
-        run: |
-          if test -f scripts/e2b-compatibility/installed.sh; then
-            echo 'present=true' >> "$GITHUB_OUTPUT"
-            if test -f scripts/e2b-compatibility/background-reference.json && test -f scripts/e2e-operations.py; then
-              echo 'background=true' >> "$GITHUB_OUTPUT"
-            elif test -n "$REQUESTED_REF" &&
-                 git merge-base --is-ancestor HEAD 'refs/tags/v0.0.2^{commit}'; then
-              echo 'Validating the historical foreground-only profile.'
-            else
-              echo 'Missing required background/operations acceptance.' >&2
-              exit 1
-            fi
-          elif test -n "$REQUESTED_REF" &&
-               test "$(git rev-parse HEAD)" = "$(git rev-parse --verify 'refs/tags/v0.0.1^{commit}' 2>/dev/null)"; then
-            echo 'The published v0.0.1 source predates the E2B adapter.'
-          else
-            echo 'Missing required installed E2B acceptance suite.' >&2
-            exit 1
-          fi
       - uses: actions/setup-go@v5
-        if: steps.suite.outputs.present == 'true'
+        if: needs.profile.outputs.sdks == 'true'
         with:
           go-version-file: go.mod
           cache: true
       - name: embed guest agents for integration
-        if: hashFiles('sandbox-agent/go.mod') != ''
+        if: needs.profile.outputs.guest == 'true'
         run: make agent
       - uses: actions/setup-node@v4
-        if: steps.suite.outputs.present == 'true'
+        if: needs.profile.outputs.sdks == 'true'
         with:
           node-version: '22'
           cache: npm
@@ -75,48 +79,50 @@ jobs:
             sandbox-ts/package-lock.json
             scripts/e2b-compatibility/package-lock.json
       - uses: actions/setup-python@v5
-        if: steps.suite.outputs.present == 'true'
+        if: needs.profile.outputs.sdks == 'true'
         with:
           python-version: '3.15'
       - name: prepare pinned references and SDK build tools
-        if: steps.suite.outputs.present == 'true'
+        if: needs.profile.outputs.sdks == 'true'
         run: |
           mkdir -p artifacts/e2b-setup
           bash scripts/e2b-compatibility/setup.sh 2>&1 | tee artifacts/e2b-setup/references.log
           npm --prefix sandbox-ts ci 2>&1 | tee artifacts/e2b-setup/sdk.log
       - name: verify the comparison gate fails closed
-        if: steps.suite.outputs.present == 'true'
+        if: needs.profile.outputs.sdks == 'true'
         run: python scripts/e2b-compatibility/selfcheck.py | tee artifacts/e2b-setup/selfcheck.log
       - name: build and pin the local compatibility image
-        if: steps.suite.outputs.present == 'true'
+        if: needs.profile.outputs.sdks == 'true'
         run: |
-          docker build --progress=plain -t tiny-sandbox-e2b:ci examples/e2b 2>&1 | tee artifacts/e2b-setup/image-build.log
-          image=$(docker image inspect tiny-sandbox-e2b:ci --format '{{.Id}}')
+          docker build --progress=plain -t execlet-e2b:ci examples/e2b 2>&1 | tee artifacts/e2b-setup/image-build.log
+          image=$(docker image inspect execlet-e2b:ci --format '{{.Id}}')
           echo "SANDBOX_E2B_IMAGE=$image" >> "$GITHUB_ENV"
       - name: installed Python and TypeScript acceptance plus compare
-        if: steps.suite.outputs.present == 'true'
+        if: needs.profile.outputs.sdks == 'true'
         env:
-          BACKGROUND_PROFILE: ${{ steps.suite.outputs.background }}
+          BACKGROUND_PROFILE: ${{ needs.profile.outputs.guest }}
         run: |
           args=()
           if [ "$BACKGROUND_PROFILE" = true ]; then args+=(--profile background); fi
           bash scripts/e2b-compatibility/installed.sh artifacts/e2b-ci "$SANDBOX_E2B_IMAGE" "${args[@]}"
       - name: deployment policy, recovery, faults and latency baseline
-        if: steps.suite.outputs.background == 'true'
+        if: needs.profile.outputs.guest == 'true'
+        env:
+          DAEMON: ${{ needs.profile.outputs.legacy_tag && 'sandboxd' || 'execletd' }}
         run: |
           mkdir -p artifacts/operations-coverage
-          go build -cover -covermode=atomic -coverpkg=./... -o artifacts/e2b-setup/sandboxd ./cmd/sandboxd
-          GOCOVERDIR="$PWD/artifacts/operations-coverage" python scripts/e2e-operations.py --server artifacts/e2b-setup/sandboxd \
+          go build -cover -covermode=atomic -coverpkg=./... -o artifacts/e2b-setup/execletd "./cmd/$DAEMON"
+          GOCOVERDIR="$PWD/artifacts/operations-coverage" python scripts/e2e-operations.py --server artifacts/e2b-setup/execletd \
             --image "$SANDBOX_E2B_IMAGE" --out artifacts/operations
       - uses: actions/upload-artifact@v4
-        if: steps.suite.outputs.background == 'true'
+        if: needs.profile.outputs.guest == 'true'
         with:
           name: coverage-operations
           path: artifacts/operations-coverage/
           if-no-files-found: error
           retention-days: 3
       - uses: actions/upload-artifact@v4
-        if: steps.suite.outputs.background == 'true'
+        if: needs.profile.outputs.guest == 'true'
         with:
           name: sdk-distributions
           path: |
@@ -125,14 +131,17 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - name: no containers remain
-        if: always() && steps.suite.outputs.present == 'true'
+        if: always() && needs.profile.outputs.sdks == 'true'
         run: |
           mkdir -p artifacts/e2b-setup
-          docker ps -aq --filter 'label=tiny-sandbox.owner' > artifacts/e2b-setup/remaining-containers.txt
+          {
+            docker ps -aq --filter 'label=execlet.owner'
+            docker ps -aq --filter 'label=tiny-sandbox.owner'
+          } > artifacts/e2b-setup/remaining-containers.txt
           cat artifacts/e2b-setup/remaining-containers.txt
           test ! -s artifacts/e2b-setup/remaining-containers.txt
       - uses: actions/upload-artifact@v4
-        if: always() && steps.suite.outputs.present == 'true'
+        if: always() && needs.profile.outputs.sdks == 'true'
         with:
           name: e2b-compatibility-artifacts
           path: |
@@ -141,37 +150,31 @@ jobs:
             artifacts/operations/
             !artifacts/operations/state/**
             !artifacts/operations/**/*.sock
+            !artifacts/e2b-setup/execletd
             !artifacts/e2b-setup/sandboxd
             !artifacts/e2b-ci/venv/**
             !artifacts/e2b-ci/consumer/**
+            !artifacts/e2b-ci/run/execletd
             !artifacts/e2b-ci/run/sandboxd
             !artifacts/e2b-ci/**/*.sock
           retention-days: 7
 
   stdin-e2e:
+    needs: profile
+    if: needs.profile.outputs.sdks == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ env.CI_SOURCE }}
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
       - name: embed guest agents for integration
-        if: hashFiles('sandbox-agent/go.mod') != ''
+        if: needs.profile.outputs.guest == 'true'
         run: make agent
-      - env:
-          HISTORICAL_REF: ${{ inputs.ref }}
-        run: |
-          if test -f scripts/e2e-stdin.sh; then
-            bash scripts/e2e-stdin.sh artifacts/stdin-e2e
-          elif [ -n "$HISTORICAL_REF" ]; then
-            echo 'No stdin E2E suite in this historical revision.'
-          else
-            echo 'Missing required stdin E2E suite.' >&2
-            exit 1
-          fi
+      - run: bash scripts/e2e-stdin.sh artifacts/stdin-e2e
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -180,115 +183,95 @@ jobs:
           retention-days: 7
 
   files-e2e:
+    needs: profile
+    if: needs.profile.outputs.sdks == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref || github.ref }}
-      - name: detect file E2E at the requested revision
-        id: files
-        env:
-          REQUESTED_REF: ${{ inputs.ref }}
-        run: |
-          if test -f scripts/e2e-files.sh; then
-            echo 'present=true' >> "$GITHUB_OUTPUT"
-          elif test -n "$REQUESTED_REF"; then
-            echo 'No file E2E in this historical revision.'
-          else
-            echo 'Missing required scripts/e2e-files.sh on normal CI.' >&2
-            exit 1
-          fi
+          ref: ${{ env.CI_SOURCE }}
       - uses: actions/setup-go@v5
-        if: steps.files.outputs.present == 'true'
         with:
           go-version-file: go.mod
       - name: embed guest agents for integration
-        if: hashFiles('sandbox-agent/go.mod') != ''
+        if: needs.profile.outputs.guest == 'true'
         run: make agent
       - uses: actions/setup-node@v4
-        if: steps.files.outputs.present == 'true'
         with:
           node-version: '22'
       - uses: actions/setup-python@v5
-        if: steps.files.outputs.present == 'true'
         with:
           python-version: '3.15'
       - name: Three SDKs and CLI file scenarios against real Docker
-        if: steps.files.outputs.present == 'true'
         run: bash scripts/e2e-files.sh artifacts/files-e2e
       - uses: actions/upload-artifact@v4
-        if: always() && steps.files.outputs.present == 'true'
+        if: always()
         with:
           name: files-e2e-artifacts
           path: artifacts/files-e2e/
           retention-days: 7
 
   typescript:
+    needs: profile
+    if: needs.profile.outputs.sdks == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref || github.ref }}
-      - name: detect TypeScript SDK at the requested revision
-        id: sdk
-        run: |
-          if test -f sandbox-ts/package-lock.json; then
-            echo 'present=true' >> "$GITHUB_OUTPUT"
-          else
-            echo 'No TypeScript SDK in this historical revision.'
-          fi
+          ref: ${{ env.CI_SOURCE }}
       - uses: actions/setup-go@v5
-        if: steps.sdk.outputs.present == 'true'
         with:
           go-version-file: go.mod
           cache: true
       - name: embed guest agents for integration
-        if: hashFiles('sandbox-agent/go.mod') != ''
+        if: needs.profile.outputs.guest == 'true'
         run: make agent
       - uses: actions/setup-node@v4
-        if: steps.sdk.outputs.present == 'true'
         with:
           node-version: '22'
           cache: npm
           cache-dependency-path: sandbox-ts/package-lock.json
       - name: TypeScript package and real Docker contract scenarios
-        if: steps.sdk.outputs.present == 'true'
         run: bash scripts/e2e-typescript.sh artifacts/typescript-e2e
       - name: SDK public background and capability regressions
-        if: steps.sdk.outputs.present == 'true'
-        run: |
-          if test -d sandbox-ts/tests; then node --test sandbox-ts/tests/*.test.mjs; fi
+        if: needs.profile.outputs.guest == 'true'
+        run: node --test sandbox-ts/tests/*.test.mjs
       - uses: actions/upload-artifact@v4
-        if: always() && steps.sdk.outputs.present == 'true'
+        if: always()
         with:
           name: typescript-e2e-artifacts
           path: artifacts/typescript-e2e/
           retention-days: 7
 
   lint:
+    needs: profile
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ env.CI_SOURCE }}
           fetch-depth: 0
       - uses: actions/setup-python@v5
-        if: inputs.ref == '' || hashFiles('scripts/comment-lint/check.py') != ''
+        if: needs.profile.outputs.guest == 'true'
         with:
           python-version: '3.12'
       - name: enforce the comment ratchet
-        if: inputs.ref == '' || hashFiles('scripts/comment-lint/check.py') != ''
+        if: needs.profile.outputs.guest == 'true'
         env:
           COMMENT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
           HISTORICAL_REF: ${{ inputs.ref }}
         run: |
           if [ -n "$HISTORICAL_REF" ]; then COMMENT_BASE=$(git rev-parse HEAD^); fi
           make PYTHON=python comment-lint comment-lint-e2e
+      - name: verify the Mintlify OpenAPI copy
+        if: needs.profile.outputs.legacy_tag == ''
+        run: python3 scripts/sync-docs-openapi.py --check
       - uses: actions/upload-artifact@v4
-        if: hashFiles('artifacts/comment-lint/e2e.json') != ''
+        if: needs.profile.outputs.guest == 'true'
         with:
           name: comment-lint-e2e
           path: artifacts/comment-lint/e2e.json
+          if-no-files-found: error
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -304,7 +287,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ env.CI_SOURCE }}
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -322,29 +305,37 @@ jobs:
           retention-days: 3
 
   build:
+    needs: profile
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ env.CI_SOURCE }}
+          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
       - name: build and vet both Linux guest architectures
-        if: hashFiles('sandbox-agent/go.mod') != ''
+        if: needs.profile.outputs.guest == 'true'
         run: |
           make agent
+          (cd sandbox-agent && go test ./...)
           for arch in amd64 arm64; do
             (cd sandbox-agent && GOOS=linux GOARCH="$arch" CGO_ENABLED=0 go vet ./...)
           done
       - name: build every command and the example
+        env:
+          PREFIX: ${{ needs.profile.outputs.legacy_tag && 'sandbox' || 'execlet' }}
         run: |
           go build ./...
-          go build -o /dev/null ./cmd/sandboxd
-          go build -o /dev/null ./cmd/sandboxctl
+          go build -o /dev/null "./cmd/${PREFIX}d"
+          go build -o /dev/null "./cmd/${PREFIX}ctl"
           go build -o /dev/null ./examples/agent-tool/cmd/demo
+      - name: verify installer selection and checksums
+        if: needs.profile.outputs.legacy_tag == ''
+        run: python3 scripts/test-install.py -v
       - name: check release configuration
         uses: goreleaser/goreleaser-action@v6
         with:
@@ -356,14 +347,20 @@ jobs:
           version: '~> v2'
           args: release --snapshot --clean
       - name: verify checksums and supported platform archives
+        env:
+          PROJECT: ${{ needs.profile.outputs.legacy_tag && 'tiny-sandbox' || 'execlet' }}
         run: |
           python3 - <<'PY'
           import json
+          import os
           import pathlib
           dist = pathlib.Path("dist")
-          version = json.loads((dist / "metadata.json").read_text())["version"]
+          metadata = json.loads((dist / "metadata.json").read_text())
+          version = metadata["version"]
+          project = os.environ["PROJECT"]
+          assert metadata["project_name"] == project, metadata
           expected = {
-              f"tiny-sandbox_{version}_{system}_{arch}.tar.gz"
+              f"{project}_{version}_{system}_{arch}.tar.gz"
               for system in ["linux", "darwin"]
               for arch in ["amd64", "arm64"]
           }
@@ -375,9 +372,9 @@ jobs:
           PY
           (cd dist && sha256sum -c --quiet checksums.txt)
       - name: exercise offline MCP repair from the release archive
-        if: inputs.ref == '' || hashFiles('scripts/e2e-mcp-workflow.py') != ''
+        if: needs.profile.outputs.legacy_tag == ''
         run: |
-          go build -o "$RUNNER_TEMP/mcp-client" ./cmd/sandboxctl/testdata/mcp-client
+          go build -o "$RUNNER_TEMP/mcp-client" ./cmd/execletctl/testdata/mcp-client
           python3 scripts/e2e-mcp-workflow.py dist/*_linux_amd64.tar.gz "$RUNNER_TEMP/mcp-client" --runs 1 --out dist/mcp-python.json
           python3 scripts/e2e-mcp-workflow.py dist/*_linux_amd64.tar.gz "$RUNNER_TEMP/mcp-client" --go --runs 1 --out dist/mcp-go.json
       - uses: actions/upload-artifact@v4
@@ -388,17 +385,18 @@ jobs:
           retention-days: 3
 
   e2e:
+    needs: profile
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ env.CI_SOURCE }}
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
       - name: embed guest agents for integration
-        if: hashFiles('sandbox-agent/go.mod') != ''
+        if: needs.profile.outputs.guest == 'true'
         run: make agent
       - uses: actions/setup-node@v4
         with:
@@ -411,6 +409,7 @@ jobs:
           E2E_COVERAGE: "1"
         run: bash scripts/e2e.sh artifacts/e2e
       - name: observability and readiness with real Docker
+        if: needs.profile.outputs.sdks == 'true'
         run: bash scripts/e2e-observability.sh artifacts/observability-e2e
       - uses: actions/upload-artifact@v4
         with:
@@ -420,9 +419,10 @@ jobs:
           retention-days: 3
       - name: no containers remain
         run: |
-          remaining=$(docker ps -aq --filter 'label=tiny-sandbox.owner' | wc -l | tr -d ' ')
-          echo "containers remaining: $remaining"
-          test "$remaining" -eq 0
+          remaining=$(docker ps -aq --filter 'label=execlet.owner')
+          test -z "$remaining"
+          legacy=$(docker ps -aq --filter 'label=tiny-sandbox.owner')
+          test -z "$legacy"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -431,11 +431,12 @@ jobs:
           retention-days: 7
 
   feature-e2e:
+    needs: profile
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ env.CI_SOURCE }}
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -446,25 +447,25 @@ jobs:
         with:
           node-version: '22'
       - uses: docker/setup-qemu-action@v3
-        if: hashFiles('sandbox-agent/go.mod') != ''
+        if: needs.profile.outputs.guest == 'true'
         with:
           platforms: arm64
       - name: exercise guest commands and terminals
-        if: hashFiles('sandbox-agent/go.mod') != ''
+        if: needs.profile.outputs.guest == 'true'
         run: |
           docker pull python:3.12-alpine
           mkdir -p artifacts/feature-coverage
           export GOCOVERDIR="$PWD/artifacts/feature-coverage"
           GOFLAGS='-cover -covermode=atomic -coverpkg=./...' make feature-e2e
       - uses: actions/upload-artifact@v4
-        if: success() && hashFiles('sandbox-agent/go.mod') != ''
+        if: needs.profile.outputs.guest == 'true'
         with:
           name: coverage-features
           path: artifacts/feature-coverage
           if-no-files-found: error
           retention-days: 3
       - uses: actions/upload-artifact@v4
-        if: always() && hashFiles('sandbox-agent/go.mod') != ''
+        if: always() && needs.profile.outputs.guest == 'true'
         with:
           name: feature-evidence
           path: |
@@ -473,11 +474,12 @@ jobs:
           retention-days: 7
 
   runtime-e2e:
+    needs: profile
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ env.CI_SOURCE }}
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -485,7 +487,7 @@ jobs:
         with:
           python-version: '3.15'
       - name: configure runsc on the disposable Linux runner
-        if: hashFiles('sandbox-agent/go.mod') != ''
+        if: needs.profile.outputs.guest == 'true'
         run: |
           cd "$RUNNER_TEMP"
           base=https://storage.googleapis.com/gvisor/releases/release/20261116.0/x86_64
@@ -494,43 +496,52 @@ jobs:
           sha512sum -c gvisor.tar.zstd.sha512
           mkdir gvisor
           tar -I zstd -xf gvisor.tar.zstd -C gvisor
-          sudo install -m 0755 "$(find gvisor -type f -name runsc -print -quit)" /usr/local/bin/runsc
+          sudo install -m 0755 gvisor/runsc /usr/local/bin/runsc
+          sudo install -d -m 0755 /usr/local/bin/gvisor-bin
+          sudo install -m 0755 gvisor/gvisor-bin/* /usr/local/bin/gvisor-bin/
           sudo runsc install
           sudo systemctl restart docker
-      - name: verify kernel limits and filesystem snapshots with both runtimes
-        if: hashFiles('sandbox-agent/go.mod') != ''
+      - name: build the local runtime fixture
+        if: needs.profile.outputs.guest == 'true'
+        env:
+          IMAGE: ${{ needs.profile.outputs.legacy_tag && 'tiny-sandbox-guest:minimal' || 'execlet-guest:minimal' }}
         run: |
           docker pull python:3.12-alpine
           mkdir -p artifacts/runtime-coverage
-          export GOCOVERDIR="$PWD/artifacts/runtime-coverage"
           GOFLAGS='-cover -covermode=atomic -coverpkg=./...' make build
-          docker build --target minimal -t tiny-sandbox-guest:minimal -f examples/guest/Dockerfile.agent-minimal examples/guest
-          sudo env "PATH=$PATH" "GOCOVERDIR=$GOCOVERDIR" python3 scripts/e2e-runtime.py
-          sudo env "PATH=$PATH" "GOCOVERDIR=$GOCOVERDIR" python3 scripts/e2e-templates.py --runtime runsc --out artifacts/runsc-template
-          sudo chown -R "$(id -u):$(id -g)" artifacts
+          docker build --target minimal -t "$IMAGE" -f examples/guest/Dockerfile.agent-minimal examples/guest
+      - name: verify runtime behavior and filesystem snapshots
+        if: needs.profile.outputs.guest == 'true'
+        run: |
+          sudo env "PATH=$PATH" "GOCOVERDIR=$PWD/artifacts/runtime-coverage" python3 scripts/e2e-runtime.py
+          sudo env "PATH=$PATH" "GOCOVERDIR=$PWD/artifacts/runtime-coverage" python3 scripts/e2e-templates.py --runtime runsc --out artifacts/runsc-template
+      - name: make runtime evidence readable
+        if: always() && needs.profile.outputs.guest == 'true'
+        run: if test -d artifacts; then sudo chown -R "$(id -u):$(id -g)" artifacts; fi
       - uses: actions/upload-artifact@v4
-        if: success() && hashFiles('sandbox-agent/go.mod') != ''
+        if: needs.profile.outputs.guest == 'true'
         with:
           name: coverage-runtimes
           path: artifacts/runtime-coverage
           if-no-files-found: error
           retention-days: 3
       - uses: actions/upload-artifact@v4
-        if: always() && hashFiles('sandbox-agent/go.mod') != ''
+        if: always() && needs.profile.outputs.guest == 'true'
         with:
           name: runtime-evidence
           path: |
             artifacts/runtime/*.json
+            artifacts/runtime/*.log
             artifacts/runsc-template/*.json
           retention-days: 7
 
   coverage:
     runs-on: ubuntu-latest
-    needs: [test, e2e, e2b-compatibility, feature-e2e, runtime-e2e]
+    needs: [profile, test, e2e, e2b-compatibility, feature-e2e, runtime-e2e]
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ env.CI_SOURCE }}
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -544,33 +555,35 @@ jobs:
           name: coverage-e2e
           path: artifacts/e2e
       - uses: actions/download-artifact@v4
-        if: hashFiles('scripts/e2e-operations.py') != ''
+        if: needs.profile.outputs.guest == 'true'
         with:
           name: coverage-operations
           path: artifacts/operations
       - uses: actions/download-artifact@v4
-        if: hashFiles('sandbox-agent/go.mod') != ''
+        if: needs.profile.outputs.guest == 'true'
         with:
           name: coverage-features
           path: artifacts/features
       - uses: actions/download-artifact@v4
-        if: hashFiles('sandbox-agent/go.mod') != ''
+        if: needs.profile.outputs.guest == 'true'
         with:
           name: coverage-runtimes
           path: artifacts/runtimes
       - name: merge coverage and enforce the gate
+        env:
+          GUEST: ${{ needs.profile.outputs.guest }}
         run: |
           e2e=artifacts/e2e
-          if test -f scripts/e2e-operations.py; then
+          if [ "$GUEST" = true ]; then
             mkdir -p artifacts/combined
-            inputs=artifacts/e2e,artifacts/operations
-            if test -d artifacts/features; then inputs+=,artifacts/features,artifacts/runtimes; fi
-            go tool covdata merge -i="$inputs" -o=artifacts/combined
+            go tool covdata merge -i=artifacts/e2e,artifacts/operations,artifacts/features,artifacts/runtimes -o=artifacts/combined
             e2e=artifacts/combined
           fi
           bash scripts/coverage.sh artifacts/unit "$e2e" 70
 
   python-sdk:
+    needs: profile
+    if: needs.profile.outputs.sdks == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -579,13 +592,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref || github.ref }}
+          ref: ${{ env.CI_SOURCE }}
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
       - name: embed guest agents for integration
-        if: hashFiles('sandbox-agent/go.mod') != ''
+        if: needs.profile.outputs.guest == 'true'
         run: make agent
       - uses: actions/setup-python@v5
         with:
@@ -594,21 +607,26 @@ jobs:
         run: |
           python -m pip install build
           python -m build --outdir artifacts/python-dist sandbox-python
-          python -m pip install --force-reinstall artifacts/python-dist/*.whl
+      - name: verify the wheel before installation
+        if: needs.profile.outputs.legacy_tag == ''
+        run: python scripts/check-sdk-wheel.py artifacts/python-dist/*.whl
+      - name: install the built wheel
+        run: python -m pip install --force-reinstall artifacts/python-dist/*.whl
       - name: Python end-to-end contract and entry gate
         env:
           PYTHON: python
           SDK_INSTALLED: '1'
         run: bash scripts/e2e-python.sh artifacts/python-e2e
       - name: installed SDK public background and capability regressions
-        run: |
-          if test -d sandbox-python/tests; then python -B -m unittest discover -s sandbox-python/tests -v; fi
+        if: needs.profile.outputs.guest == 'true'
+        run: python -B -m unittest discover -s sandbox-python/tests -v
       - name: no containers remain
         if: always()
         run: |
-          remaining=$(docker ps -aq --filter 'label=tiny-sandbox.owner' | wc -l | tr -d ' ')
-          echo "containers remaining: $remaining"
-          test "$remaining" -eq 0
+          remaining=$(docker ps -aq --filter 'label=execlet.owner')
+          test -z "$remaining"
+          legacy=$(docker ps -aq --filter 'label=tiny-sandbox.owner')
+          test -z "$legacy"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

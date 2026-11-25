@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ruhuang2001/tiny-sandbox/internal/dockerapi"
+	"github.com/ruhuang2001/execlet/internal/dockerapi"
 )
 
 func TestOOMHelperCalls(t *testing.T) {

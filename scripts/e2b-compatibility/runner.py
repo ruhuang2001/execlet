@@ -351,9 +351,9 @@ def run(args):
                 raise NotRun('compatibility image is not installed locally')
             images = json.loads(check.stdout)
             report['image'] = [{'id':i['Id'], 'digests':i.get('RepoDigests', [])} for i in images]
-            server = out / 'sandboxd'
+            server = out / 'execletd'
             with (out / 'build.log').open('w') as log:
-                subprocess.run(['go','build','-o',str(server),'./cmd/sandboxd'], cwd=ROOT, stdout=log, stderr=log, check=True, timeout=120)
+                subprocess.run(['go','build','-o',str(server),'./cmd/execletd'], cwd=ROOT, stdout=log, stderr=log, check=True, timeout=120)
             env.update(CONTRACT_SERVER=str(server), CONTRACT_IMAGE=args.image)
             if PROFILE == 'background' and set(selected) & {'A16', 'B18'}:
                 import io
@@ -511,7 +511,7 @@ def main():
     p.add_argument('--python', default=str(HERE / '.venv/bin/python'))
     p.add_argument('--allow-cloud', action='store_true')
     p.add_argument('--image')
-    p.add_argument('--module', help='tiny-provider adapter module; defaults to tiny_sandbox.e2b')
+    p.add_argument('--module', help='tiny-provider adapter module; defaults to execlet.e2b')
     p.add_argument('--profile', choices=['baseline', 'background'], default=argparse.SUPPRESS)
     p = sub.add_parser('compare')
     p.add_argument('report', help='tiny report.json to gate against reference.json')

@@ -71,7 +71,7 @@ remain required for stale handles, sandbox scoping and group termination.
 ## Cases
 
 `Reference` means an assertion derived from the pinned source. `Local` means
-an explicit tiny-sandbox extension or safety limit. `Mixed` rows must record
+an explicit execlet extension or safety limit. `Mixed` rows must record
 their reference and local subassertions separately; a local pass is not a
 live E2B comparison.
 

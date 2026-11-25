@@ -47,8 +47,7 @@
       },
       {
         "tab": "API reference",
-        "openapi": "openapi.yaml",
-        "groups": ["health", "sandboxes", "executions", "files"]
+        "openapi": "openapi.yaml"
       },
       {
         "tab": "Operations",
@@ -68,15 +67,18 @@
           {
             "group": "Project",
             "icon": "folder-tree",
-            "pages": ["changelog"]
+            "pages": ["release-history"]
           }
         ]
       }
     ]
   },
+  "redirects": [
+    { "source": "/changelog", "destination": "/release-history" }
+  ],
   "footer": {
     "socials": {
-      "github": "https://github.com/ruhuang2001/tiny-sandbox"
+      "github": "https://github.com/ruhuang2001/execlet"
     }
   },
   "contextual": {

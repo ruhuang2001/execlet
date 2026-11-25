@@ -59,7 +59,7 @@ connection reset. SDK proxy behavior is unchanged.
 `concurrency.json` retains successful and failed checks, every known owned
 sandbox ID, the original exception type/message, and each cleanup outcome.
 Transport and response-decoding failures include the method, path and request
-ID in `request_errors`, for correlation with `sandboxd.log`. Unexpected HTTP
+ID in `request_errors`, for correlation with `execletd.log`. Unexpected HTTP
 statuses include the same identity in the assertion error. Request bodies and
 headers are not added to the transport diagnostics.
 

@@ -89,8 +89,10 @@ jobs:
           version: v2.20.0
           args: release --clean --skip=publish
       - name: verify release artifacts
+        env:
+          LEGACY_TAG: ${{ needs.validate.outputs.legacy_tag }}
         run: |
-          python3 - <<'PY'
+          project=$(python3 - <<'PY'
           import json
           import os
           import pathlib
@@ -99,8 +101,13 @@ jobs:
           metadata = json.loads((dist / "metadata.json").read_text())
           assert metadata["version"] == version, metadata
           assert metadata["commit"] == os.environ["RELEASE_SHA"], metadata
+          legacy_tag = os.environ["LEGACY_TAG"]
+          if legacy_tag or version in {"0.0.1", "0.0.2", "0.0.3"}:
+              assert legacy_tag == os.environ["RELEASE_TAG"], "historical tag/commit mismatch"
+          project = "tiny-sandbox" if legacy_tag else "execlet"
+          assert metadata["project_name"] == project, metadata
           expected = {
-              f"tiny-sandbox_{version}_{system}_{arch}.tar.gz"
+              f"{project}_{version}_{system}_{arch}.tar.gz"
               for system in ["linux", "darwin"]
               for arch in ["amd64", "arm64"]
           }
@@ -109,13 +116,19 @@ jobs:
           checksums = (dist / "checksums.txt").read_text().splitlines()
           assert len(checksums) == len(expected), checksums
           assert {line.split()[1] for line in checksums} == expected, checksums
+          print(project)
           PY
-          (cd dist && sha256sum -c checksums.txt)
+          )
+          (cd dist && sha256sum -c --strict checksums.txt)
+          case "$project" in
+            execlet) cli=execletctl; daemon=execletd ;;
+            tiny-sandbox) cli=sandboxctl; daemon=sandboxd ;;
+          esac
           mkdir -p "$RUNNER_TEMP/release-smoke"
-          tar -xzf "dist/tiny-sandbox_${RELEASE_TAG#v}_linux_amd64.tar.gz" \
-            -C "$RUNNER_TEMP/release-smoke" sandboxctl sandboxd
-          test "$("$RUNNER_TEMP/release-smoke/sandboxctl" version)" = "${RELEASE_TAG#v}"
-          test "$("$RUNNER_TEMP/release-smoke/sandboxd" -version)" = "${RELEASE_TAG#v}"
+          tar -xzf "dist/${project}_${RELEASE_TAG#v}_linux_amd64.tar.gz" \
+            -C "$RUNNER_TEMP/release-smoke" "$cli" "$daemon"
+          test "$("$RUNNER_TEMP/release-smoke/$cli" version)" = "${RELEASE_TAG#v}"
+          test "$("$RUNNER_TEMP/release-smoke/$daemon" -version)" = "${RELEASE_TAG#v}"
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ needs.resolve.outputs.tag }}
@@ -155,7 +168,7 @@ jobs:
           gh release download "$RELEASE_TAG" --dir "$download"
           test "$(gh release view "$RELEASE_TAG" --json assets --jq '.assets | length')" -eq 5
           cmp dist/checksums.txt "$download/checksums.txt"
-          (cd "$download" && sha256sum -c checksums.txt)
+          (cd "$download" && sha256sum -c --strict checksums.txt)
           gh release view "$RELEASE_TAG" --json body --jq .body > "$RUNNER_TEMP/release-notes.md"
           printf '\n\nPublished by [GitHub Actions](%s/%s/actions/runs/%s) from `%s`.\n' \
             "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$RELEASE_SHA" \

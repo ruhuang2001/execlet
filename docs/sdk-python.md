@@ -1,7 +1,7 @@
 # Python SDK
 
-Status: normative. Contract for `sandbox-python`, the `tiny-sandbox` Python
-distribution imported as `tiny_sandbox`. The SDK speaks the [HTTP contract](api.md).
+Status: normative. Contract for `sandbox-python`, the `execlet` Python
+distribution imported as `execlet`. The SDK speaks the [HTTP contract](api.md).
 
 ## Installation and quick start
 
@@ -9,16 +9,16 @@ Python 3.10 or newer is required. The synchronous client has no runtime
 dependencies outside the Python standard library. There is no async client.
 Create a new client in each child process after `fork`. Using or closing an
 inherited client raises `forked_client`; its sockets belong to the parent.
-Install from a repository checkout:
+Install the unreleased `0.1.0` SDK from this checkout, not from a registry:
 
 ```sh
 python3 -m pip install ./sandbox-python
 ```
 
-Start `sandboxd` with access to Docker, then run:
+Start `execletd` with access to Docker, then run:
 
 ```python
-from tiny_sandbox import Client, CreateSandboxRequest, Error
+from execlet import Client, CreateSandboxRequest, Error
 
 with Client() as client:
     with client.sandbox(CreateSandboxRequest(image="alpine:3.20")) as sandbox:
@@ -78,7 +78,7 @@ one lifetime operation: replace the deadline or extend without shortening it.
 ambiguous response. See the [lifecycle contract](api.md) for state constraints.
 
 ```python
-from tiny_sandbox import CreateSandboxRequest, ExecuteRequest
+from execlet import CreateSandboxRequest, ExecuteRequest
 
 sandbox_request = CreateSandboxRequest(
     image="alpine:3.20", memory_mb=256, pids_limit=512,
@@ -161,7 +161,7 @@ the sandbox normally remains available. An omitted or zero timeout leaves the
 execution without its own deadline. The sandbox lifetime policy still applies.
 
 ```python
-from tiny_sandbox import CancellationToken, ExecuteRequest
+from execlet import CancellationToken, ExecuteRequest
 
 execution = client.start_execution(
     sandbox.id, ExecuteRequest(command=["sh", "-c", "sleep 30"], timeout_seconds=5)
@@ -191,7 +191,7 @@ accept `cancel_remote=False`. An interrupted in-flight wait raises `wait_timeout
 with the start key or execution identity, without remote cancellation. Pass it
 to both calls when composing a start and stream. Pre-canceled starts still send
 nothing. The default remains `True`; `exec`/`exec_stream` keep remote cancellation.
-The optional [E2B facade](../examples/e2b/README.md), imported as `tiny_sandbox.e2b`,
+The optional [E2B facade](../examples/e2b/README.md), imported as `execlet.e2b`,
 uses this wait-only path, Bash command strings and compatible error families.
 It does not change the native argv API or require an E2B dependency.
 
@@ -294,7 +294,7 @@ exception subclass per API code. The package exports the string constants
 and `ERR_INVALID_STATE` for use with `matches` or direct code comparison.
 
 ```python
-from tiny_sandbox import Error
+from execlet import Error
 
 try:
     result = client.exec(sandbox.id, ["sh", "-c", "echo useful-output; exit 7"])
@@ -349,7 +349,7 @@ image validation or support for mixed-version load balancers.
 
 Native `get_command` returns the execution and atomic event watermark;
 `kill_execution` sends one immediate managed kill, without retrying uncertain
-acknowledgements. The optional `tiny_sandbox.e2b.CommandHandle` supplies
+acknowledgements. The optional `execlet.e2b.CommandHandle` supplies
 background run/connect/wait/disconnect/kill; see the [package examples](../sandbox-python/README.md)
 and [normative contract](e2b-background-commands.md). Native graceful cancellation
 and seconds-based deadlines remain unchanged.
@@ -370,7 +370,7 @@ managers instead of Go contexts, pointer options, and `errors.Is`.
 
 ## End-to-end verification
 
-The end-to-end suite uses a real `sandboxd` and Docker, with an HTTP fault proxy
+The end-to-end suite uses a real `execletd` and Docker, with an HTTP fault proxy
 for dropped connections and replay. The central scenario runs a long command,
 drops its stream, verifies reconnect with `Last-Event-ID` and output
 deduplication, then cancels and requires a terminal snapshot. It also exercises
@@ -379,6 +379,7 @@ unconfirmed cancellation instead of treating an accepted request as success.
 ```sh
 python3 -m pip install build
 python3 -m build --outdir artifacts/python-dist sandbox-python
+python3 scripts/check-sdk-wheel.py artifacts/python-dist/*.whl
 python3 -m pip install --force-reinstall artifacts/python-dist/*.whl
 PYTHON=python3 SDK_INSTALLED=1 bash scripts/e2e-python.sh artifacts/python-e2e
 ```

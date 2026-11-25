@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ruhuang2001/tiny-sandbox/internal/wirejson"
+	"github.com/ruhuang2001/execlet/internal/wirejson"
 )
 
 type Handler struct {
@@ -79,7 +79,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		logger.InfoContext(r.Context(), "http request", "status", status, "duration_ms", float64(time.Since(started).Microseconds())/1000, "bytes", recorded.bytes, "completed", completed)
 		if h.store != nil {
-			h.store.metrics.observe(fmt.Sprintf("tiny_sandbox_http_seconds{route=%q,status=%q}", pattern, strconv.Itoa(status)), started)
+			h.store.metrics.observe(fmt.Sprintf("execlet_http_seconds{route=%q,status=%q}", pattern, strconv.Itoa(status)), started)
 		}
 	}()
 	if h.apiKey != "" && r.URL.Path != "/healthz" && r.URL.Path != "/readyz" && !h.authorized(r) {

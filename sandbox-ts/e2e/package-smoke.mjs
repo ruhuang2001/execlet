@@ -16,7 +16,7 @@ const results = [];
 try {
   const bundled = await build({
     entryPoints: [resolve(root, 'dist/index.js')], bundle: true,
-    platform: 'browser', format: 'iife', globalName: 'TinySandbox',
+    platform: 'browser', format: 'iife', globalName: 'Execlet',
     write: false, metafile: true,
   });
   const bundle = bundled.outputFiles[0].text;
@@ -31,7 +31,7 @@ try {
   const browserResult = await vm.runInContext(`
     (async () => {
       const absentGlobals = ['process', 'Buffer', 'require'].filter(name => typeof globalThis[name] === 'undefined');
-      const client = new TinySandbox.Client(configuration);
+      const client = new Execlet.Client(configuration);
       const sandbox = await client.createSandbox({ timeout_seconds: 0 });
       try {
         await client.writeFile(sandbox.id, '/work/browser.bin', new Uint8Array([0, 255, 128, 10]));
@@ -64,11 +64,11 @@ try {
   assert.ok(packedPaths.includes('LICENSE'), 'package includes LICENSE');
   assert.equal(packedPaths.filter(path => path.endsWith('.map')).length, 0, 'clean package excludes stale sourcemaps');
   results.push({ name: 'tarball contains docs and no stale maps', passed: true, files: packedPaths });
-  writeFileSync(resolve(consumer, 'package.json'), JSON.stringify({ name: 'tiny-sandbox-e2e-consumer', private: true, type: 'module' }, null, 2));
+  writeFileSync(resolve(consumer, 'package.json'), JSON.stringify({ name: 'execlet-e2e-consumer', private: true, type: 'module' }, null, 2));
   const installOutput = execFileSync('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', resolve(packDir, packed.filename)], { cwd: consumer, encoding: 'utf8' });
   writeFileSync(resolve(out, 'npm-install.log'), installOutput);
   writeFileSync(resolve(consumer, 'contract.ts'), `
-import { Client, SandboxError, type Event, type ExecutionOutcome } from '@tiny-sandbox/sdk';
+import { Client, SandboxError, type Event, type ExecutionOutcome } from '@execlet/sdk';
 const client = new Client({ domain: 'http://127.0.0.1', maxRetries: 2 });
 const controller = new AbortController();
 const events: AsyncIterable<Event> = client.streamExecution('sandbox', 'execution', { signal: controller.signal });
@@ -86,7 +86,7 @@ void [events, completion, outcome, explain, SandboxError];
   const typesOutput = execFileSync(process.execPath, [resolve(root, 'node_modules/typescript/bin/tsc'), '--noEmit', '--strict', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', '--target', 'ES2022', '--lib', 'ES2022,DOM,DOM.Iterable', 'contract.ts'], { cwd: consumer, encoding: 'utf8' });
   writeFileSync(resolve(out, 'installed-types.log'), typesOutput + 'PASS: installed tarball strict TypeScript contract\n');
   writeFileSync(resolve(consumer, 'smoke.mjs'), `
-import { Client } from '@tiny-sandbox/sdk';
+import { Client } from '@execlet/sdk';
 import { writeFileSync } from 'node:fs';
 const client = new Client({ domain: process.env.SANDBOX_DOMAIN, apiKey: process.env.SANDBOX_API_KEY });
 const sandbox = await client.createSandbox({ timeout_seconds: 0 });

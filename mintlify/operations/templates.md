@@ -3,39 +3,41 @@ title: "Templates and prewarming"
 description: "Save a configured sandbox as an image, then keep containers ready so the first command is fast."
 ---
 
-A template is a named, immutable image snapshot of a sandbox you configured.
-Prewarming keeps containers started from that template alive, so a request pays
-for neither image pull nor process startup.
+A template names an immutable image snapshot of a configured sandbox. A
+matching prewarmed container lets a create request skip the image pull and
+container startup. If none is available, the daemon creates a fresh container.
 
 Templates keep **files**. They do not keep processes, memory, or execution
 records. A sandbox created from a template starts fresh.
 
 ## Save a template
 
-Install dependencies first, then save — whatever you saved is what you get.
+Start with a daemon using an [admission policy](/operations/policy). Prepare a
+sandbox with the dependencies and files you want, then let writes finish. Set
+`SANDBOX_ID` to its ID, `EXECLET_OWNER` to the daemon's `-owner` value, and
+`POLICY_PATH` to its policy file. From the checkout root, with the Docker CLI
+pointed at the same engine as the daemon:
 
 ```sh
 python3 scripts/template-admin.py save \
-  --policy /etc/execlet/policy.json \
-  --owner prod-host-1 \
+  --policy "$POLICY_PATH" \
+  --owner "$EXECLET_OWNER" \
   --sandbox "$SANDBOX_ID" \
-  --name python-test
+  --name test-ready
 ```
+
+`save` requires a new name. It imports a local Docker image and atomically
+adds its ID to `templates` in the policy file. It does not push to a registry.
+The daemon reads the updated mapping without restarting. With `SANDBOX_DOMAIN`
+pointing at that daemon, try an image that provides `echo`:
 
 ```sh
-execletctl run --image template:python-test --rm -- python3 -m pytest
+./bin/execletctl run --image template:test-ready --rm -- echo template-ok
 ```
 
-Save requires a **new** name. Then make it reachable:
-
-```json
-{
-  "templates": { "python-test": "sha256:<the published digest>" }
-}
-```
-
-The policy is re-read per admission, so a new template becomes available while
-the daemon runs. Budgets and runtime settings still need a restart.
+Use `template-admin.py delete --policy "$POLICY_PATH" --name test-ready` to
+remove the alias. The tool may also remove its local snapshot tag when the
+image is no longer approved. Existing sandboxes are separate from the alias.
 
 ## What the snapshot contains — and what it drops
 
@@ -55,7 +57,7 @@ credentials you wrote to disk**. A token left in `~/.config` is now in an image
 that other sandboxes can start from. Clean the sandbox before saving it.
 </Warning>
 
-A hard link that points at an excluded path fails publication, rather than
+A hard link that points at an excluded path fails the save, rather than
 silently producing a broken image.
 
 ## Runtime differences
@@ -77,20 +79,20 @@ execution records start fresh.
 
 ## Prewarming
 
+After saving `test-ready`, add this `prewarm` field to the policy file and
+restart the daemon. The targets must fit within the policy budgets. Use the
+same image, resource settings, network and runtime in the create request:
+
 ```json
 {
-  "templates": {
-    "python-test": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-  },
   "prewarm": [
     {
-      "image": "template:python-test",
+      "image": "template:test-ready",
       "count": 1,
       "memory_mb": 256,
       "pids_limit": 128,
       "nano_cpus": 500000000,
-      "network": "none",
-      "runtime": "runc"
+      "network": "none"
     }
   ]
 }
@@ -99,7 +101,7 @@ execution records start fresh.
 How the pool behaves:
 
 - Standby containers count against the budgets **from the start of provisioning**, not from handoff.
-- A request claims an instance matching image digest, memory, CPU, pid limit, network, and runtime under one lock.
+- A request can claim an instance matching image digest, memory, CPU, PID limit, network, and runtime.
 - A miss takes the ordinary creation path, subject to quota.
 - The pool assigns the sandbox ID, Docker name, and ownership labels when the container is provisioned, and admission claims that identity atomically.
 - The sandbox **lifetime starts at handoff**, not at provisioning. A standby that sits idle does not burn someone's lifetime.
@@ -116,6 +118,8 @@ target dormant, including across restarts — registering the name again reactiv
 
 ## Measuring whether it helped
 
+From the built checkout, run the local prewarm test with Docker available:
+
 ```sh
 python3 scripts/e2e-prewarm.py --samples 10
 ```
@@ -125,5 +129,5 @@ single-layer image: a cold pull, a local image, template resolution, and a
 confirmed pool hit. Samples, P50, P95, saturation, and recovery results go to
 `artifacts/prewarm-e2e/acceptance.json`.
 
-Report P50 and P95 from that file rather than from a single warm run — the first
-number after a pull is not a latency measurement, it is a network measurement.
+Compare P50 and P95 from repeated runs on the same host. Keep cold image pulls
+separate from runs that use a local image.

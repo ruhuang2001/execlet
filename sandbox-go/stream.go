@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	json "github.com/ruhuang2001/tiny-sandbox/internal/wirejson"
+	json "github.com/ruhuang2001/execlet/internal/wirejson"
 )
 
 func (c *Client) StreamExecution(ctx context.Context, sandboxID, executionID string, onEvent func(Event) error) (*Execution, error) {

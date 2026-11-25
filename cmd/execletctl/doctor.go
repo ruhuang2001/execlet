@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	sandbox "github.com/ruhuang2001/tiny-sandbox/sandbox-go"
+	sandbox "github.com/ruhuang2001/execlet/sandbox-go"
 )
 
 func (in *invocation) doctor(args []string) int {
@@ -22,7 +22,7 @@ func (in *invocation) doctor(args []string) int {
 		return in.doctorMCP(args[1:])
 	}
 	if len(args) > 0 {
-		_, _ = fmt.Fprintln(in.stderr, "usage: sandboxctl doctor")
+		_, _ = fmt.Fprintln(in.stderr, "usage: execletctl doctor")
 		return 2
 	}
 
@@ -103,9 +103,9 @@ func (in *invocation) doctorMCP(args []string) int {
 		return 2
 	}
 	if *image == "" {
-		*image = "tiny-sandbox-mcp:local"
+		*image = "execlet-mcp:local"
 		if *profile == "go" {
-			*image = "tiny-sandbox-mcp-go:local"
+			*image = "execlet-mcp-go:local"
 		}
 	}
 	if fs.NArg() != 0 || *dir == "" || strings.TrimSpace(*image) == "" {
@@ -147,7 +147,7 @@ func (in *invocation) doctorMCP(args []string) int {
 		}
 		return in.fail(err)
 	}
-	config := map[string]any{"mcpServers": map[string]any{"tiny-sandbox": map[string]any{
+	config := map[string]any{"mcpServers": map[string]any{"execlet": map[string]any{
 		"command": binary, "args": []string{"mcp", "--workspace", workspace, "--image", *image},
 		"env": map[string]string{"SANDBOX_DOMAIN": domain},
 	}}}

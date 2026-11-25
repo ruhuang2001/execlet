@@ -5,7 +5,7 @@ and the [background-command profile](../../docs/testing/e2b-background-failures.
 The harness must report a missing adapter, key, image or Docker as `not_run`,
 fail a narrowed selection or any failed cleanup, and remove only sandboxes with
 its own owner label.
-The production adapters are `tiny_sandbox.e2b` and `@tiny-sandbox/sdk/e2b` in
+The production adapters are `execlet.e2b` and `@execlet/sdk/e2b` in
 the SDK packages. A passing run is evidence for the cases it covers and nothing
 wider; a missing module still reports `not_run`, never a pass.
 
@@ -25,8 +25,8 @@ Prefer the installed-package gate from the repository root:
 ```sh
 bash scripts/e2b-compatibility/setup.sh
 npm --prefix sandbox-ts ci
-docker build -t tiny-sandbox-e2b:local examples/e2b
-IMAGE=$(docker image inspect tiny-sandbox-e2b:local --format '{{.Id}}')
+docker build -t execlet-e2b:local examples/e2b
+IMAGE=$(docker image inspect execlet-e2b:local --format '{{.Id}}')
 PYTHON=python3.15 bash scripts/e2b-compatibility/installed.sh artifacts/e2b-installed "$IMAGE" --profile background
 ```
 
@@ -74,7 +74,7 @@ and confirmed cleanup.
 
 `--module <import path>` points the tiny provider at another adapter module.
 It exists for harness validation and experiments; the default is
-`tiny_sandbox.e2b` (`@tiny-sandbox/sdk/e2b` in TypeScript).
+`execlet.e2b` (`@execlet/sdk/e2b` in TypeScript).
 For a combined run using custom modules, pass the Python name via `--module`
 and the TypeScript module name or file URL via `CONTRACT_TS_MODULE`.
 `CONTRACT_TS_WORKER` selects the compiled worker location for isolated package
@@ -101,7 +101,7 @@ No E2B key or E2B runtime dependency is needed, and cloud mode is refused for
 this profile even with `--allow-cloud`.
 
 ```sh
-IMAGE=$(docker image inspect tiny-sandbox-e2b:local --format '{{.Id}}')
+IMAGE=$(docker image inspect execlet-e2b:local --format '{{.Id}}')
 PYTHON=python3.15 bash scripts/e2b-compatibility/installed.sh artifacts/e2b-bg "$IMAGE" \
   --profile background
 ```
@@ -162,7 +162,7 @@ Each run creates a fresh directory, refusing an existing one:
 | `<lang>-<case>/case.json` | That case's own verdict and every check with its evidence |
 | `<lang>-<case>/worker-*.jsonl` | Requests and responses through the real SDK; large payloads are hashed |
 | `<lang>-<case>/proxy.jsonl` | HTTP fault-proxy trace: paths, injected faults, SSE frames |
-| `<lang>-<case>/sandboxd.log`, `docker.sock` | Private server log and the Docker proxy the server used |
+| `<lang>-<case>/execletd.log`, `docker.sock` | Private server log and the Docker proxy the server used |
 | `<lang>-<case>/cleanup.json` | Independent observer result per owned ID, plus the owner sweep |
 
 Statuses are `passed`, `failed`, and `not_run`. `not_run` means a prerequisite
@@ -187,12 +187,12 @@ the remote execution.
 ## Boundaries
 
 Parity cases exercise source-derived E2B application semantics through the
-selected module against a private real `sandboxd`. Local cases exercise tiny's
+selected module against a private real `execletd`. Local cases exercise tiny's
 limits and fault recovery and never claim E2B server behavior. The optional
 cloud mode runs parity cases with the official SDK. No mock stands in for a
 missing SDK. Sandbox IDs are persisted before use, cleanup runs in a fresh process, and
 the Docker guard only ever removes containers carrying a run-minted
-`tiny-sandbox.owner` label.
+`execlet.owner` label.
 
 `selfcheck.py` verifies the harness itself: manifest coverage, fixture
 asymmetry, digest stability, `not_run` for missing prerequisites, and that the

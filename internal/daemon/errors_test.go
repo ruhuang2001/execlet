@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ruhuang2001/tiny-sandbox/internal/daemon"
-	"github.com/ruhuang2001/tiny-sandbox/internal/daemon/membackend"
+	"github.com/ruhuang2001/execlet/internal/daemon"
+	"github.com/ruhuang2001/execlet/internal/daemon/membackend"
 )
 
 func TestBackendFailures(t *testing.T) {

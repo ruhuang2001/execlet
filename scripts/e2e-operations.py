@@ -64,7 +64,7 @@ def main():
         return subprocess.check_output(['docker', *command], text=True, stderr=subprocess.STDOUT).strip()
 
     def owned():
-        return cli('ps', '-aq', '--filter', 'label=tiny-sandbox.owner=' + owner).split()
+        return cli('ps', '-aq', '--filter', 'label=execlet.owner=' + owner).split()
 
     def http(path, method='GET', payload=None, auth=True, headers=None):
         h = dict(headers or {})
@@ -142,19 +142,19 @@ def main():
             deletes = list(pool.map(lambda pair: http('/v1/sandboxes/' + pair[1]['id'], 'DELETE')[0], starts))
             check('Docker refuses every removal', deletes == [502] * 64, deletes)
             metrics = http('/metrics')[1].splitlines()
-            check('all cleanup obligations remain visible', 'tiny_sandbox_cleanup_pending 64' in metrics
-                  and 'tiny_sandbox_live 0' in metrics)
+            check('all cleanup obligations remain visible', 'execlet_cleanup_pending 64' in metrics
+                  and 'execlet_live 0' in metrics)
             refused = list(pool.map(lambda _: create()[0], range(8)))
             check('pending cleanup blocks new admission without policy', refused == [429] * 8, refused)
             check('Docker retains exactly the original containers', sorted(owned()) == containers)
         proxy.arm(False)
         until = time.monotonic() + 90
         while time.monotonic() < until:
-            if not owned() and 'tiny_sandbox_cleanup_pending 0' in http('/metrics')[1].splitlines():
+            if not owned() and 'execlet_cleanup_pending 0' in http('/metrics')[1].splitlines():
                 break
             time.sleep(.2)
         check('background retries confirm every original removal', not owned()
-              and 'tiny_sandbox_cleanup_pending 0' in http('/metrics')[1].splitlines())
+              and 'execlet_cleanup_pending 0' in http('/metrics')[1].splitlines())
         status, sb = create()
         check('confirmed cleanup restores default admission', status == 201, sb)
         kill(sb['id'])
@@ -273,7 +273,7 @@ def main():
                   cli('exec', container, 'cat', '/tmp/reliability-count') == 'x')
             check(label + ' failed removal remains visible',
                   http('/v1/sandboxes/' + sid, 'DELETE')[0] == 502
-                  and 'tiny_sandbox_cleanup_pending 1' in http('/metrics')[1])
+                  and 'execlet_cleanup_pending 1' in http('/metrics')[1])
         check(label + ' exactly one Docker start', len(proxy.start_faults) == 1, list(proxy.start_faults))
         proxy.arm(False)
         proxy.release_start.set()
@@ -344,11 +344,11 @@ def main():
         limits = run(sid, "from pathlib import Path; print('|'.join(Path('/sys/fs/cgroup/'+n).read_text().strip() for n in ['memory.max','memory.swap.max','pids.max','cpu.max'])); print(','.join(sorted(p.name for p in Path('/sys/class/net').iterdir())))")
         check('kernel limits and isolated namespace', limits['exit_code'] == 0 and
               limits['stdout'].splitlines() == ['67108864|0|64|50000 100000', 'lo'], limits)
-        peer = cli('run', '-d', '--label', 'tiny-sandbox.owner=' + owner, '--network', 'bridge',
+        peer = cli('run', '-d', '--label', 'execlet.owner=' + owner, '--network', 'bridge',
                    args.image, 'python3', '-m', 'http.server', '8765', '--bind', '0.0.0.0')
         peer_ip = cli('inspect', peer, '--format', '{{.NetworkSettings.Networks.bridge.IPAddress}}')
         connect = "import socket; s=socket.create_connection((%r,8765),1); print('connected'); s.close()" % peer_ip
-        allowed = subprocess.run(['docker', 'run', '--rm', '--label', 'tiny-sandbox.owner=' + owner,
+        allowed = subprocess.run(['docker', 'run', '--rm', '--label', 'execlet.owner=' + owner,
             '--network', 'bridge', args.image, 'python3', '-c', connect], capture_output=True, text=True)
         check('bridge positive control to private peer', allowed.returncode == 0 and allowed.stdout.strip() == 'connected', allowed.stderr)
         for target in [peer_ip, '169.254.169.254', '10.0.0.1']:
@@ -363,7 +363,7 @@ def main():
         metrics = http('/metrics')[1]
         (out / 'policy-metrics.txt').write_text(metrics)
         check('rejection metric without identifier labels', 'outcome="rate_limited"' in metrics
-              and 'tiny_sandbox_reserved_memory_bytes 0' in metrics and token not in metrics
+              and 'execlet_reserved_memory_bytes 0' in metrics and token not in metrics
               and all(s not in metrics for s in accepted))
         stop()
         start(['-policy', str(policy)], legacy_faults=True)
@@ -397,7 +397,7 @@ def main():
         proxy.arm(True)
         check('failed removal keeps reservation', http('/v1/sandboxes/' + held['id'], 'DELETE')[0] == 502
               and create()[0] == 429 and len(owned()) == 1)
-        check('cleanup failure visible in metrics', 'tiny_sandbox_cleanup_pending 1' in http('/metrics')[1])
+        check('cleanup failure visible in metrics', 'execlet_cleanup_pending 1' in http('/metrics')[1])
         proxy.arm(False)
         until = time.monotonic() + 10
         while owned() and time.monotonic() < until:
@@ -532,13 +532,13 @@ def main():
         metrics = http('/metrics')[1]
         (out / 'metrics.txt').write_text(metrics)
         check('latency and cleanup metrics', all(name in metrics for name in [
-            'tiny_sandbox_create_seconds_bucket', 'tiny_sandbox_first_output_seconds_count',
-            'tiny_sandbox_execution_start_seconds_sum', 'tiny_sandbox_cleanup_pending 0']))
+            'execlet_create_seconds_bucket', 'execlet_first_output_seconds_count',
+            'execlet_execution_start_seconds_sum', 'execlet_cleanup_pending 0']))
         check('Prometheus family types declared once', all(metrics.count('# TYPE ' + name + ' ' + kind + '\n') == 1
-              for name, kind in [('tiny_sandbox_create_seconds', 'histogram'),
-                                 ('tiny_sandbox_http_seconds', 'histogram'),
-                                 ('tiny_sandbox_cleanup_failures_total', 'counter'),
-                                 ('tiny_sandbox_live', 'gauge')]))
+              for name, kind in [('execlet_create_seconds', 'histogram'),
+                                 ('execlet_http_seconds', 'histogram'),
+                                 ('execlet_cleanup_failures_total', 'counter'),
+                                 ('execlet_live', 'gauge')]))
         stop()
         short_benchmark()
     finally:

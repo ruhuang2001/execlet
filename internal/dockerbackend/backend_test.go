@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ruhuang2001/tiny-sandbox/internal/daemon"
+	"github.com/ruhuang2001/execlet/internal/daemon"
 )
 
 func TestCreateSendsLimitsAndLabels(t *testing.T) {
@@ -20,7 +20,7 @@ func TestCreateSendsLimitsAndLabels(t *testing.T) {
 	id, err := b.Create(context.Background(), daemon.ContainerSpec{
 		Image:    "python:3.12-alpine",
 		MemoryMB: 256,
-		Name:     "tiny-sandbox-sbx_1",
+		Name:     "execlet-sbx_1",
 		Labels:   map[string]string{daemon.OwnerLabelKey: "127.0.0.1:8080"},
 	})
 	if err != nil {
@@ -69,7 +69,7 @@ func TestCreateSendsLimitsAndLabels(t *testing.T) {
 	if cfg.Labels[daemon.OwnerLabelKey] != "127.0.0.1:8080" {
 		t.Errorf("labels = %v", cfg.Labels)
 	}
-	if f.createNames[0] != "tiny-sandbox-sbx_1" {
+	if f.createNames[0] != "execlet-sbx_1" {
 		t.Errorf("name = %q", f.createNames[0])
 	}
 }
@@ -200,12 +200,12 @@ func TestCreateRetriesAfterNameConflict(t *testing.T) {
 	leftover := strings.Repeat("1", 64)
 	labels := map[string]string{daemon.OwnerLabelKey: "test", daemon.SandboxIDLabelKey: "sbx_1"}
 	f.containers[leftover] = &fakeContainer{id: leftover, state: "exited", labels: labels}
-	f.byName["tiny-sandbox-sbx_1"] = leftover
+	f.byName["execlet-sbx_1"] = leftover
 	f.mu.Unlock()
 
 	b := f.backend(t)
 	id, err := b.Create(context.Background(), daemon.ContainerSpec{
-		Image: "alpine:3.20", MemoryMB: 64, Name: "tiny-sandbox-sbx_1", Labels: labels,
+		Image: "alpine:3.20", MemoryMB: 64, Name: "execlet-sbx_1", Labels: labels,
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)

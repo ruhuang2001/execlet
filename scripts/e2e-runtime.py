@@ -17,8 +17,8 @@ from pathlib import Path
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--server", type=Path, default=Path("bin/sandboxd"))
-    parser.add_argument("--image", default="tiny-sandbox-guest:minimal")
+    parser.add_argument("--server", type=Path, default=Path("bin/execletd"))
+    parser.add_argument("--image", default="execlet-guest:minimal")
     parser.add_argument("--out", type=Path, default=Path("artifacts/runtime"))
     parser.add_argument(
         "--engine-default",
@@ -119,7 +119,7 @@ def main():
         )
         for _ in range(100):
             if proc.poll() is not None:
-                raise RuntimeError("sandboxd exited during startup")
+                raise RuntimeError("execletd exited during startup")
             try:
                 if request("GET", "/readyz"):
                     return proc
@@ -127,7 +127,7 @@ def main():
                 time.sleep(0.05)
         proc.terminate()
         proc.wait(timeout=20)
-        raise RuntimeError("sandboxd readiness timed out")
+        raise RuntimeError("execletd readiness timed out")
 
     srv = start()
     try:
@@ -151,7 +151,7 @@ def main():
                     "inspect",
                     "--format",
                     "{{.Id}}",
-                    "tiny-sandbox-" + sb["id"],
+                    "execlet-" + sb["id"],
                 )
                 assert (
                     cli("docker", "inspect", "--format", "{{.HostConfig.Runtime}}", cid)
@@ -254,7 +254,7 @@ def main():
         srv.wait(timeout=25)
         log.close()
         assert not cli(
-            "docker", "ps", "-aq", "--filter", "label=tiny-sandbox.owner=" + owner
+            "docker", "ps", "-aq", "--filter", "label=execlet.owner=" + owner
         )
 
 

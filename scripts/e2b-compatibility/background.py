@@ -168,8 +168,8 @@ def native_sandbox(ctx, slots=2, memory=128):
 
 
 def container(ctx, sid):
-    value = json.loads(subprocess.check_output(['docker', 'inspect', 'tiny-sandbox-' + sid], text=True))[0]
-    assert value['Config']['Labels'].get('tiny-sandbox.owner') == ctx.env['CONTRACT_OWNER']
+    value = json.loads(subprocess.check_output(['docker', 'inspect', 'execlet-' + sid], text=True))[0]
+    assert value['Config']['Labels'].get('execlet.owner') == ctx.env['CONTRACT_OWNER']
     return value['Id']
 
 

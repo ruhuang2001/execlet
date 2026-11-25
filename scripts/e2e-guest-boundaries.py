@@ -1,4 +1,4 @@
-"""Exercise the guest control boundary through sandboxd HTTP and a real Docker Engine."""
+"""Exercise the guest control boundary through execletd HTTP and a real Docker Engine."""
 
 import argparse
 import hashlib
@@ -83,7 +83,7 @@ def run(binary, out, image):
                     {"image": image, "network": "none", "max_concurrent_executions": 2},
                 )
                 base = "/v1/sandboxes/" + sb["id"]
-                cid = "tiny-sandbox-" + sb["id"]
+                cid = "execlet-" + sb["id"]
                 assert sb["agent_mode"] == ("guest" if mode == "auto" else "legacy")
                 if mode == "auto":
                     p = "/tmp"
@@ -239,14 +239,14 @@ for i in range(1001):
                             "POST", "/v1/sandboxes", {"image": ref, "network": "none"}
                         )
                         try:
-                            oid = "tiny-sandbox-" + other["id"]
+                            oid = "execlet-" + other["id"]
                             assert other["agent_mode"] == "guest", other
                             inspected = docker(
                                 "image", "inspect", "--format", "{{.Architecture}}", ref
                             )
                             assert inspected == arch
                             actual = docker(
-                                "exec", oid, "sha256sum", "/.tiny-sandbox/guest"
+                                "exec", oid, "sha256sum", "/.execlet/guest"
                             ).split()[0]
                             wanted = hashlib.sha256(
                                 (
@@ -260,14 +260,14 @@ for i in range(1001):
                                 "GET",
                                 "/v1/sandboxes/"
                                 + other["id"]
-                                + "/files/stat?path=/.tiny-sandbox/guest",
+                                + "/files/stat?path=/.execlet/guest",
                             )
                             assert st["mode"] == 0o755 and st["uid"] == st["gid"] == 0
                             socket_stat = ok(
                                 "GET",
                                 "/v1/sandboxes/"
                                 + other["id"]
-                                + "/files/stat?path=/run/tiny-sandbox/agent.sock",
+                                + "/files/stat?path=/run/execlet/agent.sock",
                             )
                             assert (
                                 socket_stat["mode"] == 0o600
@@ -286,13 +286,13 @@ for i in range(1001):
                 ok("DELETE", base)
             finally:
                 for cleanup_id in docker(
-                    "ps", "-aq", "--filter", "label=tiny-sandbox.owner=" + owner
+                    "ps", "-aq", "--filter", "label=execlet.owner=" + owner
                 ).split():
                     docker("rm", "-f", cleanup_id)
                 daemon.terminate()
                 daemon.wait(timeout=30)
                 assert not docker(
-                    "ps", "-aq", "--filter", "label=tiny-sandbox.owner=" + owner
+                    "ps", "-aq", "--filter", "label=execlet.owner=" + owner
                 )
     assert pages["auto"] == pages["off"], pages
     record("cleanup", True)
@@ -300,7 +300,7 @@ for i in range(1001):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--server", type=Path, default=Path("bin/sandboxd"))
+    parser.add_argument("--server", type=Path, default=Path("bin/execletd"))
     parser.add_argument("--out", type=Path, default=Path("artifacts/guest-boundaries"))
     parser.add_argument("--image", default="python:3.12-alpine")
     args = parser.parse_args()

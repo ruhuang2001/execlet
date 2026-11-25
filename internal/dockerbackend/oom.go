@@ -4,7 +4,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/ruhuang2001/tiny-sandbox/internal/dockerapi"
+	"github.com/ruhuang2001/execlet/internal/dockerapi"
 )
 
 func localOOMKillCount(root, id string) (int64, bool) {

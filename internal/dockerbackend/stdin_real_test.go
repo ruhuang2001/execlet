@@ -7,7 +7,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/ruhuang2001/tiny-sandbox/internal/daemon"
+	"github.com/ruhuang2001/execlet/internal/daemon"
 )
 
 func TestRealNonRootPrivateStdin(t *testing.T) {

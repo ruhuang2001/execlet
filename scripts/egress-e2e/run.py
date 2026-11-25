@@ -1,4 +1,4 @@
-"""Run a sandboxd and an authenticated HTTPS fixture on an internal Docker network."""
+"""Run a execletd and an authenticated HTTPS fixture on an internal Docker network."""
 
 import argparse
 import hashlib
@@ -51,7 +51,7 @@ def main():
             else []
         )
         subprocess.run(
-            ["go", "build", "-o", work / "sandboxd", "./cmd/sandboxd"],
+            ["go", "build", "-o", work / "execletd", "./cmd/execletd"],
             cwd=ROOT,
             check=True,
             env={**os.environ, "CGO_ENABLED": "0", "GOOS": "linux", "GOARCH": arch},
@@ -176,13 +176,13 @@ def main():
                 "-v",
                 str(work) + ":/fixture:ro",
                 IMAGE,
-                "/fixture/sandboxd",
+                "/fixture/execletd",
                 "-owner",
                 owner,
                 "-policy",
                 "/fixture/policy.json",
                 "-state-dir",
-                "/tmp/sandboxd-state",
+                "/tmp/execletd-state",
                 env=fixture_env,
             )
 
@@ -217,7 +217,7 @@ def main():
             sb = api("POST", "/v1/sandboxes", {"image": IMAGE, "network": "filtered"})
             ident = sb["id"]
             assert sb["agent_mode"] == "guest"
-            container = "tiny-sandbox-" + ident
+            container = "execlet-" + ident
 
             def execute(script):
                 ex = api(
@@ -318,7 +318,7 @@ with tempfile.TemporaryDirectory() as tmp:
             status = command(
                 "docker",
                 "exec",
-                "tiny-sandbox-" + unprivileged["id"],
+                "execlet-" + unprivileged["id"],
                 "sh",
                 "-c",
                 "wget --timeout=5 -S -O /dev/null http://127.0.0.1:8888/credential 2>&1 || true",
@@ -329,7 +329,7 @@ with tempfile.TemporaryDirectory() as tmp:
             second = api(
                 "POST", "/v1/sandboxes", {"image": IMAGE, "network": "filtered"}
             )
-            second_container = "tiny-sandbox-" + second["id"]
+            second_container = "execlet-" + second["id"]
             command("docker", "stop", "--time", "20", controller)
             output = command(
                 "docker",
@@ -373,7 +373,7 @@ with tempfile.TemporaryDirectory() as tmp:
                 stderr=subprocess.DEVNULL,
             )
             for cid in command(
-                "docker", "ps", "-aq", "--filter", "label=tiny-sandbox.owner=" + owner
+                "docker", "ps", "-aq", "--filter", "label=execlet.owner=" + owner
             ).splitlines():
                 command("docker", "rm", "-f", cid)
             command("docker", "network", "rm", network)

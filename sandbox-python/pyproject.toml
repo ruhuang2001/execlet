@@ -1,11 +1,11 @@
 [build-system]
-requires = ["setuptools>=77"]
-build-backend = "setuptools.build_meta"
+requires = ["flit_core>=3.12,<4"]
+build-backend = "flit_core.buildapi"
 
 [project]
-name = "tiny-sandbox"
-version = "0.0.3"
-description = "Synchronous Python SDK for tiny-sandbox with resumable execution streams"
+name = "execlet"
+version = "0.1.0"
+description = "Synchronous Python SDK for execlet with resumable execution streams"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -13,10 +13,4 @@ license-files = ["LICENSE"]
 dependencies = []
 
 [project.urls]
-Repository = "https://github.com/ruhuang2001/tiny-sandbox"
-
-[tool.setuptools.packages.find]
-where = ["src"]
-
-[tool.setuptools.package-data]
-tiny_sandbox = ["py.typed"]
+Repository = "https://github.com/ruhuang2001/execlet"

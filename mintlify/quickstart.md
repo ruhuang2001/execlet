@@ -1,125 +1,94 @@
 ---
 title: "Quickstart"
-description: "Install execlet, start the daemon, and run Python in a fresh sandbox."
+description: "Build Execlet, start the daemon, and run Python in a fresh Docker sandbox."
 ---
 
-This walkthrough takes about five minutes. You need a running Docker daemon
-and the Docker CLI — no Git clone, no Go toolchain, and no model API key.
+Run `print(2 ** 10)` in a fresh sandbox and get `1024` back. You need the
+current source checkout, Go 1.27+, Make, Docker running Linux containers, and
+the Docker CLI. No local Python interpreter or model API key is needed.
 
 macOS and Linux on amd64 or arm64 are supported, with a reachable Docker Unix
-socket. Windows is not supported, and WSL2 is not a tested environment.
+socket. Windows is not supported. WSL2 is not tested.
 
-<Note>
-The installer downloads published binaries, while this documentation describes
-the current source. Check `execletctl version` for the build you actually have.
-To try unreleased features, see [Build from source](/installation).
-</Note>
+## Build the binaries
 
-<Steps>
-  <Step title="Install the binaries">
-    ```sh
-    curl -fsSL https://raw.githubusercontent.com/ruhuang2001/tiny-sandbox/main/scripts/install.sh | sh
-    ```
+Run this in the root of the [checkout](/installation#build):
 
-    The installer selects your platform and writes `execletd` and `execletctl`
-    into a quickstart directory. It needs no `sudo`.
-  </Step>
+```sh
+make build
+```
 
-  <Step title="Start the daemon">
-    In terminal A:
+This writes `bin/execletd` and `bin/execletctl`. The historical v0.0.3
+archives contain the old binaries and are not used here.
 
-    ```sh
-    cd "$HOME/tiny-sandbox-quickstart"
-    docker info
-    export DOCKER_HOST="${DOCKER_HOST:-$(docker context inspect --format '{{.Endpoints.docker.Host}}')}"
-    ./execletd
-    ```
+## Start the daemon
 
-    Keep this terminal open. The daemon listens on `127.0.0.1:8080`.
+From the checkout root, check Docker and start the daemon in your first terminal:
 
-    <Warning>
-    `execletd` needs a local Docker **Unix socket**. A TCP endpoint such as
-    `tcp://127.0.0.1:2375` will not work. If `docker info` fails, fix Docker
-    first; you can also pass the socket explicitly with
-    `./execletd -docker /path/to/docker.sock`.
-    </Warning>
-  </Step>
+```sh
+docker info
+export DOCKER_HOST="${DOCKER_HOST:-$(docker context inspect --format '{{.Endpoints.docker.Host}}')}"
+./bin/execletd
+```
 
-  <Step title="Check that it answers">
-    In terminal B:
+Keep this terminal open. The daemon listens on `127.0.0.1:8080`. If your
+Docker context points at TCP or SSH, switch to a local Unix-socket context or
+pass the socket's filesystem path with `./bin/execletd -docker /path/to/docker.sock`.
 
-    ```sh
-    cd "$HOME/tiny-sandbox-quickstart"
-    export SANDBOX_DOMAIN=http://127.0.0.1:8080
-    ./execletctl doctor
-    ```
+## Run Python
 
-    It ends with `Ready`. `doctor` is the one command that talks to the server
-    outside the SDK, which is deliberate: it has to work when the SDK does not.
-  </Step>
+Open a second terminal in the same checkout:
 
-  <Step title="Run Python">
-    ```sh
-    ./execletctl run --rm -- code 'print(2 ** 10)'
-    ```
+```sh
+export SANDBOX_DOMAIN=http://127.0.0.1:8080
+./bin/execletctl doctor
+./bin/execletctl run --rm --network none -- code 'print(2 ** 10)'
+```
 
-    Expected stdout:
+`doctor` should end with `Ready`. The Python command prints `1024` to stdout
+and `completed (exited), exit 0` in the status line on stderr. The daemon pulls
+`alpine:3.20` for `doctor` and `python:3.12-alpine` for `code` if they are not
+available locally. The pull requires registry access from Docker, even though
+`--network none` leaves the Python sandbox offline.
 
-    ```text
-    1024
-    ```
+Each `run` without `--sandbox` creates a fresh container. `--rm` requests its
+removal after the command ends.
 
-    Command stdout goes to stdout; the execution status line and the command's
-    own stderr go to stderr. That split is what makes
-    `execletctl run -- cmd > out.txt` capture only your program's output.
+## Stream output and try a deadline
 
-    `--rm` asks the daemon to clean up the sandbox this invocation created. Each
-    run without `--sandbox` starts from a fresh container.
-  </Step>
+Watch Python flush one line per second:
 
-  <Step title="Watch output stream, then time out">
-    This program prints one, two, three about a second apart:
+```sh
+./bin/execletctl run --rm --network none -- code 'import time
+for i in range(1, 4):
+    print(i, flush=True)
+    time.sleep(1)'
+```
 
-    ```sh
-    ./execletctl run --rm -- code '
-    import time
-    for i in range(1, 4):
-        print(i, flush=True)
-        time.sleep(1)
-    '
-    ```
+Now give a ten-second program a two-second execution deadline:
 
-    Output appears as it is produced, not when the command exits. Now bound it:
+```sh
+./bin/execletctl run --rm --network none --exec-timeout 2 -- code 'import time; time.sleep(10)'
+```
 
-    ```sh
-    ./execletctl run --rm --exec-timeout 1 -- code '
-    import time
-    time.sleep(30)
-    '
-    ```
+The CLI exits with status `1` and reports `timeout`. Branch on the
+[termination reason](/concepts/errors), not the command's exit code alone.
 
-    The command is killed and the status line names the reason. Notice what you
-    are *not* doing: inferring it from exit code 137. See
-    [Typed failures](/concepts/errors).
-  </Step>
-</Steps>
+## Finish and troubleshoot
 
-## Next
-
-<Columns cols={2}>
-  <Card title="Keep a sandbox around" icon="recycle" href="/concepts/lifecycle">
-    Pause costs memory retention; kill costs files. Learn which one you want.
-  </Card>
-  <Card title="Use an SDK" icon="code" href="/sdk/python">
-    The CLI covers the ergonomics; the SDKs cover retries, streams, and errors.
-  </Card>
-</Columns>
-
-## When something is wrong
+Stop the daemon with Ctrl+C in its terminal when done. If the CLI reports
+unconfirmed cleanup, check Docker; the daemon retries pending removals in the
+background. A `killed` record alone is not proof the container is gone.
 
 | Symptom | Check |
 | --- | --- |
-| `execletd` exits at startup | Is `DOCKER_HOST` a `unix://` path the user can read? |
-| A command needs network and hangs | Network defaults to `bridge`; confirm the image can reach a registry |
-| The sandbox vanished | A lifetime timeout fired. It defaults to 300 seconds |
-| First run is slow | The image is being pulled. Pre-pull it, or pin a local image tag |
+| `execletd` cannot reach Docker | Run `docker info` and check that `DOCKER_HOST` is a reachable `unix://` endpoint |
+| Port 8080 is already in use | Start the daemon with `-addr 127.0.0.1:8081` and change `SANDBOX_DOMAIN` to match. Keep `-owner` stable if reusing a deployment |
+| `doctor` reports an authentication failure | If the daemon uses `SANDBOX_API_KEY`, set the same value in the client terminal |
+| The first run is slow or fails to pull an image | Check Docker's registry access or pre-pull the images |
+
+## Next steps
+
+- [CLI reference](/cli): reuse a sandbox, stream an existing execution, or transfer files.
+- [Sandbox lifecycle](/concepts/lifecycle): see what pause, resume, and deletion preserve.
+- [SDK installation](/installation#use-the-sdks-from-a-checkout): call the same daemon from your application.

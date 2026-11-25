@@ -1,6 +1,6 @@
 # Agent tool example: run_python
 
-This directory demonstrates how an AI agent can use tiny-sandbox to execute
+This directory demonstrates how an AI agent can use execlet to execute
 Python. It is an **example tool adapter built on the Go SDK**: the model generates
 tool arguments, your application calls the adapter, and your application sends
 the result back to the model.
@@ -13,7 +13,7 @@ the result back to the model.
 | Your agent application | Call the model, dispatch tools, associate call IDs, return results, control the loop |
 | This adapter | Expose Python execution through ToolDefinition, Tool.Run, and ResultJSON |
 | [Go SDK](../../docs/sdk.md) | Manage sandboxes, execute commands, collect output, and handle errors over HTTP |
-| sandboxd | Create containers and execute programs through the Docker backend |
+| execletd | Create containers and execute programs through the Docker backend |
 
     User task -> model generates a run_python call
                              |
@@ -21,7 +21,7 @@ the result back to the model.
                              |
                  agenttool.Tool.Run(ctx, input)
                              |
-                   Go SDK -> sandboxd -> Docker / Python
+                   Go SDK -> execletd -> Docker / Python
                              |
                   Result -> tool-result message -> model continues
 
@@ -29,7 +29,7 @@ Your application calls the SDK; the model does not call Go methods directly.
 This example does not include a model API client, a conversation loop, or an MCP
 server, and it does not register itself with a chat client.
 
-Use the [sandboxctl CLI](../../docs/cli.md) to run code manually. Use the SDK
+Use the [execletctl CLI](../../docs/cli.md) to run code manually. Use the SDK
 directly to manage sandboxes, files, or other commands. Use this adapter as a
 starting point when exposing a run_python tool to an agent.
 
@@ -57,16 +57,16 @@ This command demonstrates a simulated failure; a nonzero exit status is expected
 Do not insert -- between cmd/demo and its flags. Go's standard flag package
 treats -- as the end of flag parsing, so subsequent flags would be ignored.
 
-## Execute real Python with sandboxd
+## Execute real Python with execletd
 
 Start a Docker daemon, then start the service in one terminal:
 
-    go run ./cmd/sandboxd
+    go run ./cmd/execletd
 
 The default listen address is 127.0.0.1:8080 and the default Docker socket is
 /var/run/docker.sock. For a different Unix socket, set
 DOCKER_HOST=unix:///path/to/docker.sock or pass -docker /path/to/docker.sock
-to sandboxd.
+to execletd.
 
 In a second terminal, run arbitrary Python:
 
@@ -90,8 +90,8 @@ Each Tool.Run call creates a fresh sandbox:
 
 ## Integrate with your agent application
 
-Import github.com/ruhuang2001/tiny-sandbox/examples/agent-tool as agenttool.
-The SDK package is github.com/ruhuang2001/tiny-sandbox/sandbox-go.
+Import github.com/ruhuang2001/execlet/examples/agent-tool as agenttool.
+The SDK package is github.com/ruhuang2001/execlet/sandbox-go.
 
 1. Configure the service address and authentication with sandbox.NewClient,
    then create the tool with agenttool.New(client).

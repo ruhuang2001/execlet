@@ -7,11 +7,11 @@ OUT=$(cd "$OUT" && pwd)
 unset SANDBOX_API_KEY || true
 export DOCKER_HOST=${DOCKER_HOST:-$(docker context inspect --format '{{.Endpoints.docker.Host}}')}
 if [[ "$DOCKER_HOST" != unix://* ]]; then echo 'stdin-e2e requires a Unix Docker endpoint' >&2; exit 1; fi
-(cd "$ROOT" && go build -o "$OUT/sandboxd" ./cmd/sandboxd && go build -o "$OUT/sandboxctl" ./cmd/sandboxctl)
+(cd "$ROOT" && go build -o "$OUT/execletd" ./cmd/execletd && go build -o "$OUT/execletctl" ./cmd/execletctl)
 PORT=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()')
 OWNER=127.0.0.1:$PORT
 export SANDBOX_DOMAIN=http://$OWNER
-"$OUT/sandboxd" -addr "$OWNER" >"$OUT/sandboxd.log" 2>&1 &
+"$OUT/execletd" -addr "$OWNER" >"$OUT/execletd.log" 2>&1 &
 PID=$!
 cleanup() {
  local process_result=$?
@@ -19,13 +19,13 @@ cleanup() {
  trap - EXIT
  kill "$PID" 2>/dev/null || true
  wait "$PID" 2>/dev/null || true
- if ! docker ps -aq --filter "label=tiny-sandbox.owner=$OWNER" >"$OUT/containers.txt"; then result=1; fi
+ if ! docker ps -aq --filter "label=execlet.owner=$OWNER" >"$OUT/containers.txt"; then result=1; fi
  if [ -s "$OUT/containers.txt" ]; then result=1; fi
  : >"$OUT/cleanup-errors.txt"
  while IFS= read -r id; do
    if [ -n "$id" ] && ! docker rm -f "$id" >>"$OUT/cleanup.log" 2>>"$OUT/cleanup-errors.txt"; then result=1; fi
  done <"$OUT/containers.txt"
- if ! docker ps -aq --filter "label=tiny-sandbox.owner=$OWNER" >"$OUT/containers-after-cleanup.txt"; then result=1; fi
+ if ! docker ps -aq --filter "label=execlet.owner=$OWNER" >"$OUT/containers-after-cleanup.txt"; then result=1; fi
  if [ -s "$OUT/containers-after-cleanup.txt" ]; then result=1; fi
  printf '{"exit_code":%s,"process_exit_code":%s,"leaked_before_cleanup":%s,"remaining_containers":%s}\n' "$result" "$process_result" "$(wc -l <"$OUT/containers.txt" | tr -d ' ')" "$(wc -l <"$OUT/containers-after-cleanup.txt" | tr -d ' ')" >"$OUT/result.json"
  exit "$result"
@@ -33,7 +33,7 @@ cleanup() {
 trap cleanup EXIT
 for _ in $(seq 1 100); do
  if curl -fsS "$SANDBOX_DOMAIN/healthz" >"$OUT/healthz.json" 2>/dev/null; then break; fi
- kill -0 "$PID" 2>/dev/null || { cat "$OUT/sandboxd.log" >&2; exit 1; }
+ kill -0 "$PID" 2>/dev/null || { cat "$OUT/execletd.log" >&2; exit 1; }
  sleep .1
 done
 curl -fsS "$SANDBOX_DOMAIN/healthz" >/dev/null

@@ -93,7 +93,7 @@ def python_source(command):
         return None, None
     args = list(command.children_by_field_name("argument"))
     name = command.child_by_field_name("name").text.strip(b"'\x22")
-    if name.split(b"/")[-1] == b"sandboxctl" and args and args[0].text == b"run":
+    if name.split(b"/")[-1] == b"execletctl" and args and args[0].text == b"run":
         separator = next((i for i, arg in enumerate(args) if arg.text == b"--"), len(args))
         args = args[separator + 1:]
         if not args:

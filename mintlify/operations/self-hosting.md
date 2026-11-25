@@ -1,61 +1,66 @@
 ---
 title: "Self-hosting"
-description: "One daemon, one host, one trust boundary. What that means before you expose it."
+description: "Run a private Execlet daemon, configure authentication, and check readiness."
 ---
 
-execlet is designed to run as a single daemon on a host you control. That shape
-is not a limitation to work around; it is the deployment model, and the
-security properties follow from it.
+Run `execletd` on a host you control with access to a Docker Unix socket.
+Keep the daemon private and use it for one trust domain.
 
 ```text
 your app / agent host  ──►  execletd (127.0.0.1)  ──►  Docker Engine (unix socket)
 ```
 
-## The trust boundary is the API key
+## Authentication and access
 
-One API key authorizes the **whole daemon**, not one tenant. Every caller with
-that key can see and kill every sandbox, read every file, and run any allowed
-image.
+Set `SANDBOX_API_KEY` in the daemon's environment to require a matching
+`Authorization: Bearer` header on API and metrics requests. The daemon
+refuses to bind a non-loopback address without a key, but that check does
+not enable TLS. Put a TLS-authenticated private proxy in front of routes
+that must be reached remotely.
+
+One key authorizes the **whole daemon**, not one tenant. Anyone with access
+can inspect and kill any sandbox, read its files, and run any approved image.
 
 | Deployment | Reasonable? |
 | --- | --- |
 | Loopback on a laptop for one developer | Yes |
-| A build host for one team, key held by their CI | Yes, with a policy file |
+| A private build host for one team, key held by their CI | Yes, with a policy file |
 | Public internet endpoint | No |
 | Two customers sharing one daemon | No |
 
 <Warning>
-"Do not use execlet as a security boundary for untrusted multi-tenant
-workloads" is not boilerplate. Docker container isolation is a usability
-feature here, not a hostile-tenant boundary. If you need tenants, use one
-daemon (or one host) per tenant.
+Do not use one daemon as a security boundary between untrusted tenants.
+An owner label separates cleanup, not security. Use separate hosts or an
+independently isolated deployment for separate trust domains.
 </Warning>
 
 ## First production checklist
 
 ```text
-1. Bind to loopback. Put TLS + auth in front if anything else must reach it.
+1. Bind to loopback and set SANDBOX_API_KEY for shared access.
 2. Write a policy file. Budgets, images, and networks — all required.
 3. Pin images by digest. A mutable tag is not a pin.
 4. Set -state-dir on private local storage for restart recovery.
 5. Set -owner to a unique value. Never share it between daemons.
-6. Scrape /metrics. Alert on policy rejection, cleanup backlog, and OOM.
+6. Scrape /metrics for policy rejections and cleanup backlog. Track OOM outcomes in execution logs.
 ```
 
 ## Daemon flags that matter
 
 | Flag | Why |
 | --- | --- |
-| `-docker` | Explicit socket path, when context discovery is wrong |
+| `-addr` | Listen address; defaults to `127.0.0.1:8080` |
+| `-docker` | Unix socket path; defaults to the `unix://` path in `DOCKER_HOST`, or `/var/run/docker.sock` |
 | `-policy` | Absolute path to the admission policy; absent means no aggregate limits |
 | `-state-dir` | Private directory enabling conservative restart recovery |
-| `-owner` | Stable unique owner for container adoption; must not be shared |
-| `-api-key` | Enables bearer authentication |
+| `-owner` | Stable label for container cleanup and adoption; defaults to `-addr`, never share it between daemons on the same engine |
+| `-guest-agent` | `auto` (default) or `off`; filtered egress and runsc require the guest agent |
 
 <Note>
 Without a policy file the daemon enforces only its built-in limits: 64
-admission slots and per-sandbox resource limits. A policy file is what turns
-"some limits" into "a host that cannot be exhausted by one caller".
+admission slots and per-sandbox resource limits. Use a
+[policy](/operations/policy) to bound aggregate reservations. These budgets do
+not, by themselves, cover all host resources such as the Docker image store.
 </Note>
 
 ## Health and readiness
@@ -63,30 +68,46 @@ admission slots and per-sandbox resource limits. A policy file is what turns
 | Endpoint | Use |
 | --- | --- |
 | `GET /healthz` | The process is up. Use for a cheap liveness check |
-| `GET /readyz` | Docker is reachable and the daemon can serve. Use for readiness |
+| `GET /readyz` | Checks Docker connectivity and journal health. Returns 503 when either check fails |
 
-Point a liveness probe at `/healthz` and a readiness probe at `/readyz`. A
-liveness probe on `/readyz` will restart the daemon every time Docker hiccups,
-which turns a Docker problem into a container-churn problem.
+These two endpoints do not require a bearer token. Use `/healthz` for
+liveness and `/readyz` for readiness; Docker or journal errors do not imply
+that the process needs to be restarted by its watchdog.
 
 ## Upgrading
 
-Stop the daemon, keep the state directory intact, and check that the new binary
-can read it before serving traffic:
+When switching from tiny-sandbox, stop new admissions, save needed files,
+and retire existing sandboxes using the old daemon. Stop it and
+take a consistent backup of its state directory. A durable shutdown alone
+can preserve idle containers. On the same Docker engine, set `OWNER` to the
+old daemon's exact owner (its listen address if `-owner` was omitted) and run:
 
 ```sh
-execletd -version
-execletd -state-dir /var/lib/execlet -owner prod-host-1
+docker ps -aq --filter "label=tiny-sandbox.owner=${OWNER:?set the old owner}"
 ```
 
-Durable state is a journal, not a database. An older binary may not understand a
-newer journal, so **do not downgrade against a state directory you cannot back
-up**. Back it up before upgrading, and never clear state to get past a
-validation error — that is how you lose the record of containers you still own.
+The command must succeed with no output. Even a stopped container with that
+label prevents the renamed daemon from starting; it will not adopt it. If IDs
+remain, reconcile them with the old deployment. Do not relabel containers,
+pick a new owner, or delete the journal to get past the check.
+
+For upgrades between Execlet versions, stop the daemon and back up the state
+directory. In either case, check the new binary's version and reuse **your
+existing** owner, state directory, policy, and other settings. These paths and
+owner are examples:
+
+```sh
+./bin/execletd -version
+./bin/execletd -state-dir /var/lib/execlet -owner prod-host-1 -policy /etc/execlet/policy.json
+```
+
+Use `/readyz` before restoring traffic. An older binary may not understand a
+newer journal. Do not clear it to bypass a validation failure; consult
+[Restart recovery](/operations/recovery).
 
 ## What is not included
 
-No clustering, no leader election, no canarying, no automated rollback, no
-multi-tenant authorization, and no billing. Running two daemons against one
-Docker socket is not supported: they will each try to adopt the other's
-containers, and `-owner` exists precisely because that must never happen.
+Execlet does not provide clustering, failover or per-tenant authorization.
+Each daemon must have its own owner and state directory. Two daemons with the
+same owner can remove each other's containers, even with separate journals.
+Policies on the same Docker host do not coordinate resource budgets.

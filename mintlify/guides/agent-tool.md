@@ -3,8 +3,8 @@ title: "Give an agent a run_python tool"
 description: "A tool adapter between a model's function call and a sandboxed execution."
 ---
 
-An agent that writes code needs a tool that runs it. The shape is always the
-same three layers, and only the middle one is your code:
+Expose `run_python` to a model without giving it direct access to your daemon.
+Your application dispatches the tool call and sends the result back to the model:
 
 ```text
 model ──► tool call ──► YOUR ADAPTER ──► execlet ──► Docker
@@ -12,122 +12,69 @@ model ──► tool call ──► YOUR ADAPTER ──► execlet ──► Doc
   └────────── tool result (stdout, reason) ◄────────────┘
 ```
 
-The model never talks to execlet. Your application owns the loop: it declares
-the tool, dispatches the call, and turns the execution result into a message.
+The [`examples/agent-tool`](https://github.com/ruhuang2001/execlet/tree/main/examples/agent-tool)
+directory implements the adapter with the [Go SDK](/sdk/go). It does not
+include a model client or send messages to a model.
 
-The [`examples/agent-tool`](https://github.com/ruhuang2001/tiny-sandbox/tree/main/examples/agent-tool)
-directory contains a complete Go adapter you can copy.
+## Run the example
 
-## What the tool definition should expose
+From the checkout root, print the tool definition, then run real Python against
+the [quickstart daemon](/quickstart#start-the-daemon):
 
-Keep it small. A `run_python` tool with one string argument is enough for most
-agents, and every extra parameter is one more thing the model can get wrong.
-
-| Field | Why it is there |
-| --- | --- |
-| `code` | The only required input |
-| `stdin` | Optional; covers programs that read input |
-| `timeout_seconds` | Optional; lets the agent ask for less time, never more than your ceiling |
-
-Do not expose `image`, `network`, or `memory` to the model. Those are your
-policy decisions, and a model that can widen its own sandbox is not a sandbox.
-
-## The four decisions your adapter makes
-
-1. **One sandbox per call, or a reused one?** Fresh is safer and slower;
-   reused keeps installed packages and files. Start fresh.
-2. **What happens on timeout?** Return the typed reason to the model, not a
-   stack trace. "Your code exceeded 10 seconds" is actionable; `exit 137` is not.
-3. **Who cleans up?** Defer a kill. An agent loop that forgets to kill leaves
-   containers behind on every failure path.
-4. **What goes back to the model?** stdout, stderr, the reason, and the exit
-   code. Truncate stdout before sending it — a runaway print loop can produce
-   megabytes of output that will cost you tokens and tell the model nothing.
-
-## A complete adapter, in outline
-
-The image, the deadline, and `NetworkNone` are the adapter's decisions. The
-model supplies code and nothing else.
-
-```go
-func (t *Tool) Run(ctx context.Context, code string) (Result, error) {
-    sb, err := t.client.CreateSandbox(ctx, sandbox.CreateSandboxRequest{
-        Image:          "python:3.12-alpine",
-        TimeoutSeconds: ptr(30),
-        Network:        ptr(sandbox.NetworkNone),
-    })
-    if err != nil {
-        return Result{}, err
-    }
-    defer func() {
-        cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-        defer cancel()
-        _ = t.client.KillSandbox(cleanupCtx, sb.ID)
-    }()
-
-    var stdout, stderr strings.Builder
-    final, err := t.client.StartExecution(ctx, sb.ID, sandbox.ExecuteRequest{
-        Command:  []string{"python3", "-c", code},
-        TimeoutMS: ptr(t.execDeadline.Milliseconds()),
-    })
-    if err != nil {
-        return Result{}, err
-    }
-    final, err = t.client.StreamExecution(ctx, sb.ID, final.ID, func(e sandbox.Event) error {
-        switch e.Type {
-        case sandbox.EventStdout:
-            if stdout.Len() < maxToolOutput {
-                stdout.WriteString(e.Data)
-            }
-        case sandbox.EventStderr:
-            if stderr.Len() < maxToolOutput {
-                stderr.WriteString(e.Data)
-            }
-        }
-        return nil
-    })
-    if err != nil {
-        return Result{}, err
-    }
-
-    return Result{
-        IsError: final.TerminationReason != sandbox.ReasonExited || final.ExitCode != 0,
-        Stdout:  truncate(stdout.String(), maxToolOutput),
-        Stderr:  truncate(stderr.String(), maxToolOutput),
-        Reason:  final.TerminationReason,
-        ExitCode: final.ExitCode,
-    }, nil
-}
+```sh
+go run ./examples/agent-tool/cmd/demo -definition
+SANDBOX_DOMAIN="${SANDBOX_DOMAIN:-http://127.0.0.1:8080}" \
+  go run ./examples/agent-tool/cmd/demo -code 'print(sum([10, 20, 30]))'
 ```
 
-The returned `Reason` is the server's typed classification. It is what lets the
-model act on a failure instead of guessing from exit code 137.
+The second command should return the following fields. Without `SANDBOX_DOMAIN`,
+the demo uses an in-memory stub that does not run Python.
 
-## Why the reason field is the whole point
-
-Most agent tools hand the model an exit code and a wall of stderr. The model
-then guesses what went wrong and usually guesses "syntax error". Passing the
-termination reason changes what the agent can do next:
-
-| Reason | What a good agent does |
-| --- | --- |
-| `exited` with non-zero | Read stderr, fix the code |
-| `timeout` | Simplify the task, or stop looping |
-| `oom` | Use less memory, or stream results instead of building a list |
-| `canceled` | The user interrupted; do not retry |
-| `evicted` | Infrastructure; retry once |
-| `unknown` | Log it and stop. Repeated retries here are an infinite loop |
-
-## Verifying the adapter
-
-Test it against the three cases that actually break adapters, not against
-`print("hello")`:
-
-```text
-infinite loop           → must return timeout, not hang the host
-print 100 MB             → must truncate, and the tool must still return
-sys.exit(1)              → must be is_error, with stderr preserved
+```json
+{"is_error": false, "outcome": "exited", "exit_code": 0, "stdout": "60\n"}
 ```
 
-Then check the container count after each run. An adapter that leaks one
-container per failed call looks fine in a demo and fills a host in an hour.
+## Wire it into your agent
+
+1. Create the adapter with `agenttool.New(client)` and use
+   `agenttool.ToolDefinition()` to declare the tool in your model's format.
+2. Decode each call into `agenttool.Input`, validate it, and pass it to
+   `tool.Run(ctx, input)`. `code` is required; `timeout_seconds` is optional
+   and defaults to 60. It sets the new sandbox's lifetime, not CPU time.
+   There is no stdin field and the example does not clamp the requested
+   lifetime. Set a maximum in your application.
+3. Use `agenttool.ResultJSON(result)` to serialize the result. Return it with
+   the original call ID. Check `is_error` and `output_truncated`, and cap
+   what you send to the model to fit its context budget.
+
+`Run` uses a fresh `python:3.12-alpine` sandbox with 256 MiB of memory. It
+leaves the network mode to the daemon; use a [policy](/operations/policy)
+with `allowed_networks: ["none"]` if the workload must run offline. Keep
+image, network, and resource settings under application control. The example
+requests cleanup with a separate timeout but ignores cleanup errors. In an
+application, log and reconcile unconfirmed removals.
+
+To reuse files, create a sandbox yourself and call
+`tool.RunIn(ctx, sandboxID, input)`. Each call still starts a new Python
+process. Here a positive `timeout_seconds` limits the command, not the
+sandbox lifetime, and cleanup is the caller's responsibility.
+
+## Handle failures
+
+Branch on the adapter's `outcome`, not just its `exit_code`:
+
+| Outcome | Next step |
+| --- | --- |
+| `exited` | Use the output; the process exited with status 0 |
+| `nonzero_exit` | Inspect stderr and correct the code |
+| `timeout` | Simplify the task or adjust the deadline within your budget |
+| `oom` | Reduce memory use or process data in smaller batches |
+| `canceled` | Respect the cancellation; do not retry automatically |
+| `evicted` / `unavailable` | Check daemon and sandbox state before starting more work |
+| `unknown` | The outcome or cancellation could not be confirmed; reconcile any side effects before retrying |
+| `invalid_input` | Supply nonempty code |
+
+For side-effecting work, keep the execution ID at the SDK layer so you can
+inspect it later; the tool result does not include it. Test a deadline, a
+nonzero exit, and output truncation against a real daemon, and check for
+leftover containers after each run.

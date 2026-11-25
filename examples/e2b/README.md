@@ -1,7 +1,7 @@
 # Migrate the E2B basic Sandbox subset
 
 This checkout provides a synchronous Python facade and a TypeScript facade over
-tiny-sandbox. No E2B Cloud account, key or runtime package is required. This is
+execlet. No E2B Cloud account, key or runtime package is required. This is
 application-source compatibility for part of E2B's basic Sandbox API, not an
 E2B HTTP endpoint or a replacement package named `e2b`. See the
 [command contract](../../docs/e2b-background-commands.md) for deadlines,
@@ -15,21 +15,21 @@ the image user's home, not the client's current directory.
 
 ## Prepare the server, image and packages
 
-Build and run `sandboxd` from the same checkout as the SDKs, following the
+Build and run `execletd` from the same checkout as the SDKs, following the
 [server instructions](../../docs/quickstart.md). Do not assume an older release
 supports these fields. If the server requires authentication, configure
 `SANDBOX_API_KEY` through your environment’s secret store. From the repository root:
 
 ```sh
-docker build -t tiny-sandbox-e2b:local examples/e2b
-export SANDBOX_E2B_IMAGE=$(docker image inspect tiny-sandbox-e2b:local --format '{{.Id}}')
+docker build -t execlet-e2b:local examples/e2b
+export SANDBOX_E2B_IMAGE=$(docker image inspect execlet-e2b:local --format '{{.Id}}')
 export SANDBOX_DOMAIN=http://localhost:8080
 python3 -m pip install ./sandbox-python
 npm --prefix sandbox-ts ci
-npm --prefix sandbox-ts pack
+(cd sandbox-ts && npm pack)
 ```
 
-Install the emitted npm tarball in your application. The compatibility profile
+Install `sandbox-ts/execlet-sdk-<version>.tgz` in your application. The compatibility profile
 targets Python 3.11+ and Node 22+ (the reference harness requires Node 22.19+).
 The image has Bash, Python 3, coreutils and a non-root `user` with `/home/user`;
 it does not reproduce every package in E2B's cloud template. Pin the **resulting
@@ -41,7 +41,7 @@ Change imports, connection settings and the local image selection. Application
 command strings, result fields and exception branches remain the same:
 
 ```python
-from tiny_sandbox.e2b import Sandbox, CommandExitException
+from execlet.e2b import Sandbox, CommandExitException
 
 with Sandbox.create(envs={"TASK": "migration"}, timeout=120) as sandbox:
     sandbox.files.write("input.txt", "hello 世界\n")
@@ -60,7 +60,7 @@ with Sandbox.create(envs={"TASK": "migration"}, timeout=120) as sandbox:
 ## TypeScript
 
 ```ts
-import { Sandbox, CommandExitError } from '@tiny-sandbox/sdk/e2b';
+import { Sandbox, CommandExitError } from '@execlet/sdk/e2b';
 
 const sandbox = await Sandbox.create({ envs: { TASK: 'migration' }, timeoutMs: 120_000 });
 try {
@@ -87,19 +87,23 @@ try {
   are not read. Only omitted template or `base` is accepted.
 - `connect(id)` preserves workspace/env and extends lifetime without shortening
   it; `set_timeout` / `setTimeout` replaces lifetime and may shorten it.
-- Command timeout means **stop waiting, not stop the process**. Timeout, callback
-  failure and output truncation can leave the execution slot occupied. Explicit
-  sandbox cleanup is still your responsibility. Native client cancellation
-  keeps its original remote-cancel behavior.
+- `commands.run` sets a remote deadline as well as a local observation timeout,
+  for foreground and background commands. `commands.connect(pid)` only limits
+  local observation; it does not extend the original remote deadline.
+- `background=True` (Python) or `{ background: true }` (TypeScript) returns a
+  `CommandHandle`. Use `wait()` for the result, `disconnect()` to stop observing
+  locally, or `kill()` to request SIGKILL of that execution. A local timeout
+  does not confirm termination. Sandbox cleanup remains your responsibility.
 - `TimeoutException` / `TimeoutError` retains available execution identity,
   idempotency key and partial output. Do not blindly rerun an uncertain command.
 - Files are limited to 10 MiB; output to 1 MiB combined; directory enumeration
   is bounded. `AdapterError.code == 'output_truncated'` is not an ordinary exit.
   Backend cleanup failure is an error, including repeated kill calls.
-- `stdin=True`, background handles, PTY, Code Interpreter, pause/resume and
+- `stdin=True`, PTY, Code Interpreter, pause/resume and
   recursive listing are outside this facade. Use native APIs for native features.
-- Only matched builds are tested. There is no old-server capability negotiation,
-  cloud parity certification, persistence or VM-isolation claim.
+- Command run, connect and kill preflight `e2b.background.v1`. A server missing
+  it fails with `incompatible_server`; there is no foreground-only fallback.
+  The acceptance suite does not certify cloud parity, persistence or VM isolation.
 
 Run the [installed-package acceptance gate](../../scripts/e2b-compatibility/README.md)
 before using a different image or server revision. SDK/image publication is

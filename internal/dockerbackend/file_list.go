@@ -13,7 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/ruhuang2001/tiny-sandbox/internal/daemon"
+	"github.com/ruhuang2001/execlet/internal/daemon"
 )
 
 const statBatchScript = `if [ -f /etc/passwd ] && [ -r /etc/passwd ]; then cut -d: -f1,3 /etc/passwd 2>/dev/null; fi

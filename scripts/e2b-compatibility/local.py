@@ -1,4 +1,4 @@
-"""Private real sandboxd plus fault proxies. Only run-owned resources are touched."""
+"""Private real execletd plus fault proxies. Only run-owned resources are touched."""
 from __future__ import annotations
 
 import importlib.util
@@ -11,6 +11,7 @@ import select
 import socket
 import socketserver
 import subprocess
+import sys
 import threading
 import time
 
@@ -21,6 +22,7 @@ ROOT = HERE.parent.parent
 def _load(name, path):
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -88,7 +90,7 @@ class DockerFault:
                     if outer.fail_identity and line.startswith('POST ') and path.endswith('/exec'):
                         command = json.loads(body).get('Cmd', [])
                         if (len(command) == 2 and command[0] == 'cat'
-                                and command[1].startswith('/run/tiny-sandbox/')
+                                and command[1].startswith('/run/execlet/')
                                 and not command[1].endswith('.result')):
                             outer.failed_identities.append(line)
                             fail = True
@@ -215,7 +217,7 @@ class Local:
     def start(self):
         if self.docker is None:
             self.docker = DockerFault(self.out / 'docker.sock')
-        logfile = self.out / 'sandboxd.log'
+        logfile = self.out / 'execletd.log'
         for attempt in range(3):
             self.port = self._free_port()
             with logfile.open('w') as log:
@@ -227,7 +229,7 @@ class Local:
                 if self.process.poll() is not None:
                     if attempt < 2 and 'address already in use' in logfile.read_text():
                         break
-                    raise RuntimeError('sandboxd exited during startup; see sandboxd.log')
+                    raise RuntimeError('execletd exited during startup; see execletd.log')
                 conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=2)
                 try:
                     conn.request('GET', '/v1/sandboxes', headers={'Authorization': 'Bearer ' + self.api_key})
@@ -243,7 +245,7 @@ class Local:
                     conn.close()
                 time.sleep(.1)
             else:
-                raise RuntimeError('sandboxd never became healthy')
+                raise RuntimeError('execletd never became healthy')
 
     def environment(self, language):
         """Adapter connection configuration. Native names, no E2B cloud fallback."""

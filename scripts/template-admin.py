@@ -18,7 +18,7 @@ from pathlib import Path, PurePosixPath
 NAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
 TRANSIENT_DIRS = {"tmp", "var/tmp", "run", "dev", "proc", "sys"}
 EXCLUDED = {
-    ".tiny-sandbox",
+    ".execlet",
     ".dockerenv",
     "etc/hostname",
     "etc/hosts",
@@ -191,7 +191,7 @@ def runsc_export(source, work, archive, mounts, runtime_root):
 
 def image_settings(base, name):
     cfg = base["Config"]
-    settings = ["LABEL tiny-sandbox.template=" + name]
+    settings = ["LABEL execlet.template=" + name]
     for key in ["User", "WorkingDir"]:
         if cfg.get(key):
             settings.append(("USER " if key == "User" else "WORKDIR ") + cfg[key])
@@ -218,18 +218,18 @@ def image_settings(base, name):
 def publish(args, cleanup):
     if not re.fullmatch(r"sbx_[a-zA-Z0-9_-]+", args.sandbox):
         raise ValueError("expected a sandbox ID")
-    source = inspect("container", "tiny-sandbox-" + args.sandbox)
-    if (source["Config"].get("Labels") or {}).get("tiny-sandbox.owner") != args.owner:
+    source = inspect("container", "execlet-" + args.sandbox)
+    if (source["Config"].get("Labels") or {}).get("execlet.owner") != args.owner:
         raise ValueError("source belongs to a different deployment owner")
     if not source["State"]["Running"]:
         raise ValueError("source sandbox must be running or paused")
     base = inspect("image", source["Image"])
     settings = image_settings(base, args.name)
     mounts = {m["Destination"].strip("/") for m in source.get("Mounts", [])}
-    tag = "tiny-sandbox-template/" + args.name + ":snapshot-" + uuid.uuid4().hex
+    tag = "execlet-template/" + args.name + ":snapshot-" + uuid.uuid4().hex
     with (
         ExitStack() as staging,
-        tempfile.TemporaryDirectory(prefix="tiny-sandbox-template-") as work,
+        tempfile.TemporaryDirectory(prefix="execlet-template-") as work,
     ):
         archive = Path(work) / "filesystem.tar"
         if source["HostConfig"].get("Runtime") == "runsc":
@@ -316,12 +316,12 @@ def main():
                 if result.returncode == 0:
                     image = json.loads(result.stdout)[0]
                     origin = (image["Config"].get("Labels") or {}).get(
-                        "tiny-sandbox.template"
+                        "execlet.template"
                     )
                     if origin and NAME.fullmatch(origin):
                         for tag in image.get("RepoTags") or []:
                             if tag.startswith(
-                                "tiny-sandbox-template/" + origin + ":snapshot-"
+                                "execlet-template/" + origin + ":snapshot-"
                             ):
                                 docker("image", "rm", "--force", tag)
     print(json.dumps(dict(name=args.name, image=digest, action=args.action)))

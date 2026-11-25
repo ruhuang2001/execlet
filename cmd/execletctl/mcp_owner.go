@@ -17,7 +17,7 @@ import (
 	"syscall"
 	"time"
 
-	sandbox "github.com/ruhuang2001/tiny-sandbox/sandbox-go"
+	sandbox "github.com/ruhuang2001/execlet/sandbox-go"
 )
 
 var errSandboxGone = toolError("sandbox_not_running", "sandbox has expired or was destroyed")
@@ -56,7 +56,7 @@ func (s *sandboxTools) ownerScope(in *invocation) (string, error) {
 		return "", err
 	}
 	s.origin = fmt.Sprintf("%x", sha256.Sum256(origin))
-	scope := []any{"sandboxctl-mcp-v1", workspace, endpoint[0], endpoint[1], sorted(s.images), sorted(s.networks)}
+	scope := []any{"execletctl-mcp-v1", workspace, endpoint[0], endpoint[1], sorted(s.images), sorted(s.networks)}
 	data, err := json.Marshal(scope)
 	if err != nil {
 		return "", err

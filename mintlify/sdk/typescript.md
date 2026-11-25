@@ -3,12 +3,22 @@ title: "TypeScript SDK"
 description: "Browser-safe fetch and SSE with AbortSignal, discriminated outcomes, and no runtime dependencies."
 ---
 
+## Install a local build
+
+Set `EXECLET_SRC` to the absolute path of the [checkout](/installation#use-the-sdks-from-a-checkout)
+that built your daemon. In a new directory for this example, build a tarball
+and install it into a local consumer:
+
 ```sh
-npm install @execlet/sdk
+npm init -y
+npm --prefix "$EXECLET_SRC/sandbox-ts" ci
+SDK_TARBALL=$(npm pack "$EXECLET_SRC/sandbox-ts" --silent)
+npm install "./$SDK_TARBALL"
 ```
 
-Node 22+ or a modern browser. No runtime dependencies and no Node built-in
-imports: the host supplies `fetch`, `ReadableStream`, `TextDecoder`,
+The installed package is `@execlet/sdk`. It runs in Node 22+ or a modern
+browser. It has no runtime dependencies or Node built-in imports: the host
+supplies `fetch`, `ReadableStream`, `TextDecoder`,
 `AbortController`, and Web Crypto. Declarations support TypeScript 5.9+ with DOM
 types.
 
@@ -33,41 +43,37 @@ the same build usable in a browser and a worker.
 ## Outcomes, not exceptions, for program results
 
 A completed command **resolves**, even when it failed. The result is a
-discriminated union:
+discriminated union. With the daemon running, save this as `demo.mjs` and run
+`node demo.mjs`:
 
 ```ts
-const sandbox = await client.createSandbox({ timeout_seconds: 300 });
+import { Client } from "@execlet/sdk";
 
-const outcome = await client.execStream(
-  sandbox.id,
-  ["sh", "-c", "echo hi; exit 3"],
-  (event) => {
-    if (event.type === "stdout" || event.type === "stderr") process.stdout.write(event.data);
-  },
-);
-
-switch (outcome.reason) {
-  case "exited":
-    if (outcome.execution.exit_code !== 0) console.log("failed");
-    break;
-  case "timeout":
-  case "oom":
-  case "evicted":
-  case "canceled":
-    break;
-  case "unknown":
-    console.log("unexplained", outcome.execution.termination_reason);
-    break;
+const client = new Client();
+const sandbox = await client.createSandbox({ image: "alpine:3.20", network: "none" });
+try {
+  const outcome = await client.execStream(sandbox.id, ["sh", "-c", "echo hi; exit 3"], (event) => {
+    if (event.type === "stdout") process.stdout.write(event.data);
+    if (event.type === "stderr") process.stderr.write(event.data);
+  });
+  if (outcome.reason === "exited") {
+    console.log(`exit ${outcome.execution.exit_code}`);
+  } else if (outcome.reason === "unknown") {
+    console.error("unexplained", outcome.terminationReason);
+  } else {
+    console.error(outcome.reason);
+  }
+} finally {
+  await client.killSandbox(sandbox.id);
 }
 ```
 
+It prints `hi` and `exit 3`. The nonzero command exit is not a rejected promise.
 `execStream` starts, streams, and resolves an outcome. The `unknown` variant
-carries the original `termination_reason` so it can be logged rather than guessed
-at.
+carries the original value in `terminationReason`.
 
 Only `exited` with exit code zero is command success. `unknown` is a failure
-variant, never a success. An exhaustive switch is the point: adding a variant
-later becomes a compile error rather than a silent fall-through.
+variant, never a success.
 
 Thrown `SandboxError` is reserved for things that are not program results: API
 errors, transport failures, protocol errors, callback errors, and cancellation.
@@ -92,7 +98,7 @@ operation. Creation is still yours to decide.
 ```ts
 const controller = new AbortController();
 
-for await (const event of client.streamEvents(sandboxID, exeID, { signal: controller.signal })) {
+for await (const event of client.streamExecution(sandboxID, exeID, { signal: controller.signal })) {
   if (event.type === "stdout") process.stdout.write(event.data);
   if (event.type === "complete") break;
 }
@@ -107,21 +113,24 @@ Four behaviors worth relying on:
 - Breaking out of `for await`, or calling `iterator.return()`, closes the
   connection. **It does not cancel the execution.** Abandoning an iterator
   without closing it is not a cleanup mechanism.
-- Aborting the caller's signal *does* cancel, and raises even after cleanup
-  succeeds.
+- Aborting the caller's signal requests cancellation by default. Observation
+  rejects even if cancellation is confirmed; check for `cancel_unconfirmed`
+  before assuming the command stopped. Set `cancelRemote: false` on
+  `streamExecution` to end observation without sending cancellation.
 
 Unknown event types surface as `type: "unknown"` with the original `event_type`
 and raw data rather than being dropped; their IDs still advance the cursor.
 
 ## Retries
 
-Repeatable operations — GET, DELETE, ordinary file PUT, pause/resume/cancel,
-and keyed starts — retry transport failures and 429/500/502/503/504. Backoff is
+Repeatable operations such as GET, ordinary file PUT, pause/resume/cancel,
+and keyed starts retry transport failures and 429/500/502/503/504.
+`startExecution` generates a key if you do not supply one. Backoff is
 `min(2000ms, 200ms * 2^attempt)`, uniformly sampled between half and the full
 cap. A positive integer `Retry-After` overrides it; SSE reconnects ignore it.
 
-**Attempted once, never retried:** sandbox creation, relative lifetime
-`PATCH`, and archive uploads. Their effects are not safely repeatable.
+**Attempted once, never retried:** sandbox creation, lifetime `PATCH`, and
+archive uploads. Their effects are not safely repeatable.
 
 ## Browser notes
 

@@ -11,12 +11,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "sandbox-python/src"))
-from tiny_sandbox import Client, CreateSandboxRequest, Error
+from execlet import Client, CreateSandboxRequest, Error
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--server", default="bin/sandboxd")
+    parser.add_argument("--server", default="bin/execletd")
     parser.add_argument("--out", type=Path, default=Path("artifacts/templates"))
     parser.add_argument("--runtime", choices=("runc", "runsc"), default="runc")
     args = parser.parse_args()
@@ -55,7 +55,7 @@ def main():
     rows = []
 
     def start():
-        log = (args.out / "sandboxd.log").open("a")
+        log = (args.out / "execletd.log").open("a")
         proc = subprocess.Popen(
             [
                 args.server,
@@ -72,7 +72,7 @@ def main():
         log.close()
         for _ in range(200):
             if proc.poll() is not None:
-                raise RuntimeError("sandboxd exited")
+                raise RuntimeError("execletd exited")
             try:
                 client.list_sandboxes()
                 return proc
@@ -80,7 +80,7 @@ def main():
                 time.sleep(0.05)
         proc.terminate()
         proc.wait()
-        raise RuntimeError("sandboxd readiness timed out")
+        raise RuntimeError("execletd readiness timed out")
 
     def template(op, name, *extra):
         return subprocess.run(
@@ -116,7 +116,7 @@ def main():
         source = create("python")
         command(
             source,
-            "mkdir -p /project /tmp/cache /var/tmp/cache /.tiny-sandbox; echo initial >/project/main; python3 -m venv /opt/project-env; echo private >/tmp/cache/token; echo secret >/var/tmp/cache/token; echo temporary >/mnt/scratch/token; echo ephemeral >/.tiny-sandbox/snapshot-marker",
+            "mkdir -p /project /tmp/cache /var/tmp/cache /.execlet; echo initial >/project/main; python3 -m venv /opt/project-env; echo private >/tmp/cache/token; echo secret >/var/tmp/cache/token; echo temporary >/mnt/scratch/token; echo ephemeral >/.execlet/snapshot-marker",
         )
         command(
             source,
@@ -159,7 +159,7 @@ def main():
                         "inspect",
                         "--format",
                         "{{.State.Paused}}",
-                        "tiny-sandbox-" + source,
+                        "execlet-" + source,
                     ],
                     text=True,
                 ).strip()
@@ -199,7 +199,7 @@ def main():
             assert (
                 command(
                     sid,
-                    'cat /project/main; test /project/main -ef /project/linked; test ! -e /etc/alpine-release; test "$(ls /etc/apk/keys)" = only; /opt/project-env/bin/pip --version >/dev/null; test ! -e /tmp/cache/token; test ! -e /var/tmp/cache/token; test ! -e /mnt/scratch/token; test ! -e /.tiny-sandbox/snapshot-marker',
+                    'cat /project/main; test /project/main -ef /project/linked; test ! -e /etc/alpine-release; test "$(ls /etc/apk/keys)" = only; /opt/project-env/bin/pip --version >/dev/null; test ! -e /tmp/cache/token; test ! -e /var/tmp/cache/token; test ! -e /mnt/scratch/token; test ! -e /.execlet/snapshot-marker',
                 )
                 == "initial"
             )
@@ -217,7 +217,7 @@ def main():
                         "/tmp/cache",
                         "/var/tmp/cache",
                         "/mnt/scratch",
-                        "/.tiny-sandbox/snapshot-marker",
+                        "/.execlet/snapshot-marker",
                     ],
                 )
             )
@@ -276,7 +276,7 @@ def main():
             ["docker", "image", "rm", digest], check=True, capture_output=True
         )
     assert not subprocess.check_output(
-        ["docker", "ps", "-aq", "--filter", "label=tiny-sandbox.owner=" + owner]
+        ["docker", "ps", "-aq", "--filter", "label=execlet.owner=" + owner]
     ).strip()
     (args.out / "report.json").write_text(
         json.dumps(

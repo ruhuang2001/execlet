@@ -3,49 +3,40 @@ title: "Typed failures"
 description: "Why exit 137 is not an answer, and what to branch on instead."
 ---
 
-A command exited with code 137. Something sent it SIGKILL. Was it your cancel?
-A deadline? The kernel's OOM killer? The host evicting the container? The exit
-code alone cannot tell you, and every choice you make from it is a guess.
-
-execlet records the reason.
+A command returned exit code 137. It might have been killed, or it might have
+explicitly exited with 137. Use Execlet's recorded outcome rather than guessing
+from the exit code alone.
 
 ## Two different questions
-
-Do not conflate them. They are answered by different fields, on different
-objects.
 
 | Question | Field | On |
 | --- | --- | --- |
 | Why did this command end? | `termination_reason` | the execution |
-| Why does this sandbox no longer exist? | `kill_reason` | the sandbox |
+| Why did this sandbox become `killed`? | `kill_reason` | the sandbox |
 
-A single execution can end with `timeout` while its sandbox keeps running. A
-sandbox can be `evicted` while three executions end with `evicted` and a fourth
-finished normally two seconds earlier.
+A command can time out while its sandbox keeps running. Losing a sandbox can
+end multiple in-flight executions without changing ones that already completed.
 
 ## Termination reasons
 
 | Reason | Condition | Typical reaction |
 | --- | --- | --- |
 | `exited` | The process exited with no higher-priority reason | Inspect `exit_code` |
-| `canceled` | You cancelled it, or the sandbox was deleted | Expected; do not retry blindly |
-| `timeout` | Lifetime kill, native timeout, or managed `timeout_ms` | Raise the deadline or split the work |
-| `oom` | Positive cgroup OOM evidence, single-execution sandbox | Reduce memory use or raise the limit |
-| `evicted` | The container stopped or disappeared | Infrastructure problem; recreate and retry |
-| `unknown` | Unexplained 137 with concurrency > 1, unconfirmed start, or interrupted by recovery | Treat as failure; never as success |
+| `canceled` | A cancellation or sandbox deletion ended the command | Respect the cancellation |
+| `timeout` | The sandbox expired with action `kill`, or a command deadline fired | Adjust the budget or split the work |
+| `oom` | An OOM kill was observed and can be attributed to this execution | Reduce memory use or raise the limit |
+| `evicted` | The runtime stopped the sandbox or it could no longer be observed | Check infrastructure and reconcile side effects before retrying |
+| `unknown` | The outcome cannot be established, for example after an interrupted start or crash recovery | Treat as failure, not success |
 
-The classifier is ordered: the first recorded intent wins. `canceled` and
-`timeout` are intents the server writes **before** it acts, so a later intent
-never overwrites the first — if you cancelled at the same moment a deadline
-fired, you get `canceled`, because that is what you asked for.
+When cancel and timeout race, the first intent the server records takes
+precedence. A cancel request does not necessarily win over a deadline or a
+command that already finished. Inspect the final snapshot.
 
 <Warning>
-**Exit code 137 never implies `oom`.** With more than one execution slot
-configured, the server cannot attribute the kill to a specific execution, so it
-reports `unknown`. If your agent treats unknown as retryable, add an attempt
-budget; if it treats it as fatal, log it — `unknown` is a place where the
-system is telling you it does not know, and inventing an answer there is how
-agents get stuck in loops.
+**Exit code 137 alone does not imply `oom`.** Execlet checks for an increase in
+OOM-kill evidence. It does not attribute that increase to one command when
+multiple execution slots are configured or a terminal overlapped it. An
+otherwise unexplained 137 can then be `unknown` if the sandbox is still alive.
 </Warning>
 
 ## Kill reasons
@@ -55,9 +46,9 @@ agents get stuck in loops.
 
 ## HTTP errors
 
-Error bodies are `{"code": "...", "message": "..."}` and `code` is the stable
-field. Branch on it, not on the message text and not on the status alone — two
-different situations both return 409.
+API errors use `{"code": "...", "message": "..."}`. Branch on `code`:
+different errors can share an HTTP status. The retry column applies only to
+operations safe to repeat.
 
 | Status | `code` | Retryable |
 | --- | --- | --- |
@@ -68,24 +59,26 @@ different situations both return 409.
 | 409 | `busy` | no — wait for a slot to free, then retry |
 | 409 | `idempotency_conflict` | no — the key means something else now |
 | 413 | `payload_too_large` | no |
-| 429 | `rate_limited` | yes, after `Retry-After` |
+| 429 | `rate_limited` | yes, with backoff |
 | 500 | `internal` | yes |
 | 502 | `backend_error` | yes |
 | 503 | `unavailable` | yes |
 
-`429` and `503` may carry `Retry-After` in seconds. Honor it when it is a
-positive integer; a zero, an HTTP-date, or a malformed value means use your own
-backoff.
+Honor a positive `Retry-After` in seconds when present on a repeatable request;
+otherwise use backoff.
 
 ## What SDKs do automatically
 
-Go and TypeScript retry the documented repeatable requests on 429, 500, 502,
-503, and 504, with backoff capped at 2 seconds and jitter. **Starting a sandbox
-is never retried automatically** — creating a second container because a
-response was lost is not something a library should decide for you.
+The [Go](/sdk/go#retry-rules-worth-remembering), [Python](/sdk/python), and
+[TypeScript](/sdk/typescript#retries) clients retry repeatable requests after
+transport failures and HTTP 429, 500, 502, 503, and 504. They use jittered
+backoff capped at two seconds unless `Retry-After` applies. SSE reconnects
+have a bounded retry budget and ignore that header.
 
-Stream reconnects use the same backoff and do not consume a `Retry-After` from
-the response, because a stream has to reconnect faster than a request deadline.
+**Sandbox creation is not retried automatically.** A missing response is not
+proof that no container was created. Execution starts reuse an
+[idempotency key](/concepts/execution#idempotent-starts) across retries, while the
+server retains that execution record.
 
 <Note>
 The Python client's zero value for `max_retries` means "no retries", not
@@ -94,14 +87,12 @@ The Python client's zero value for `max_retries` means "no retries", not
 
 ## A decision table for agents
 
-The shortest thing that behaves sensibly:
-
 ```text
 exited 0            → success
 exited non-zero     → failed, surface stderr
 timeout             → decide: bigger budget, or smaller task
-canceled            → you asked; do not retry
+canceled            → do not retry automatically
 oom                 → lower memory per step, or raise the limit
-evicted             → infrastructure; recreate and retry once
-unknown             → failure; log the inputs; retry at most once
+evicted             → check infrastructure before recreating the sandbox
+unknown             → inspect by execution ID; reconcile side effects before retrying
 ```

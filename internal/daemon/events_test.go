@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ruhuang2001/tiny-sandbox/internal/daemon"
+	"github.com/ruhuang2001/execlet/internal/daemon"
 )
 
 func collect(t *testing.T, st *daemon.Stream) []daemon.Event {

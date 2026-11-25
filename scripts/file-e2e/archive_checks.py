@@ -7,7 +7,7 @@ import resource
 import signal
 import subprocess
 import tarfile
-from tiny_sandbox import CreateSandboxRequest
+from execlet import CreateSandboxRequest
 from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -62,13 +62,13 @@ def check_archives(client, sid, out):
     assert client.read_file(sid,'/archives/python/tree/data')==content
     assert client.exec(sid,['sh','-c','cmp /archives/python/tree/link /archives/python/tree/data']).exit_code==0
     assert client.exec(sid,['sh','-c','test "$(stat -c %i /archives/python/tree/data)" = "$(stat -c %i /archives/python/tree/hard)"']).exit_code==0
-    for sdk,command in [('go',[str(out/'go-files'),sid,'archive',str(out/'archive-fixture.tar')]),('typescript',['node','scripts/file-e2e/typescript.mjs',sid,'archive',str(out/'archive-fixture.tar')]),('cli',[str(out/'sandboxctl'),'files','archive','upload',sid,'/archives/cli',str(out/'archive-fixture.tar')])]:
+    for sdk,command in [('go',[str(out/'go-files'),sid,'archive',str(out/'archive-fixture.tar')]),('typescript',['node','scripts/file-e2e/typescript.mjs',sid,'archive',str(out/'archive-fixture.tar')]),('cli',[str(out/'execletctl'),'files','archive','upload',sid,'/archives/cli',str(out/'archive-fixture.tar')])]:
         result=subprocess.run(command,capture_output=True,text=True,timeout=40)
         (out/(sdk+'-archive.stdout')).write_text(result.stdout)
         (out/(sdk+'-archive.stderr')).write_text(result.stderr)
         assert result.returncode==0,(sdk,result.stderr)
         assert client.read_file(sid,'/archives/'+sdk+'/tree/data')==content
-    result=subprocess.run([str(out/'sandboxctl'),'files','archive','download',sid,'/archives/cli/tree',str(out/'cli-download.tar')],capture_output=True,text=True,timeout=40)
+    result=subprocess.run([str(out/'execletctl'),'files','archive','download',sid,'/archives/cli/tree',str(out/'cli-download.tar')],capture_output=True,text=True,timeout=40)
     assert result.returncode==0,result.stderr
     with tarfile.open(out/'cli-download.tar') as archive: assert archive.extractfile('tree/data').read()==content
     protected=out/'preserved-on-save-error.tar'
@@ -76,7 +76,7 @@ def check_archives(client, sid, out):
     def limit_file_size():
         signal.signal(signal.SIGXFSZ,signal.SIG_IGN)
         resource.setrlimit(resource.RLIMIT_FSIZE,(1024,1024))
-    failed=subprocess.run([str(out/'sandboxctl'),'files','archive','download',sid,'/archives/cli/tree',str(protected)],capture_output=True,text=True,timeout=40,preexec_fn=limit_file_size)
+    failed=subprocess.run([str(out/'execletctl'),'files','archive','download',sid,'/archives/cli/tree',str(protected)],capture_output=True,text=True,timeout=40,preexec_fn=limit_file_size)
     (out/'cli-save-failure.stderr').write_text(failed.stderr)
     assert failed.returncode!=0 and protected.read_bytes()==b'existing backup'
     assert list(out.glob('.sandbox-archive-*'))==[]
@@ -110,24 +110,24 @@ def check_archives(client, sid, out):
     try:
         fifo.unlink(missing_ok=True)
         os.mkfifo(fifo)
-        rejected=subprocess.run([str(out/'sandboxctl'),'files','archive','upload',sid,'/archives/cli',str(fifo)],capture_output=True,text=True,timeout=5)
+        rejected=subprocess.run([str(out/'execletctl'),'files','archive','upload',sid,'/archives/cli',str(fifo)],capture_output=True,text=True,timeout=5)
         assert rejected.returncode!=0 and 'regular file' in rejected.stderr
     finally:
         fifo.unlink(missing_ok=True)
-    failed_destination=subprocess.run([str(out/'sandboxctl'),'files','archive','download',sid,'/archives/source/tree',str(out/'missing-directory'/'archive.tar')],capture_output=True,text=True,timeout=5)
+    failed_destination=subprocess.run([str(out/'execletctl'),'files','archive','download',sid,'/archives/source/tree',str(out/'missing-directory'/'archive.tar')],capture_output=True,text=True,timeout=5)
     assert failed_destination.returncode!=0 and 'no such file' in failed_destination.stderr.lower() and client.get_sandbox(sid).state=='paused'
     call(tar_bytes([safe,hostile[0]]))
     assert client.get_sandbox(sid).state=='paused'
     assert client.read_archive(sid,'/archives/source/tree')
     assert client.get_sandbox(sid).state=='running'
-    result=subprocess.run([str(out/'sandboxctl'),'files','archive','download',sid,'/large',str(out/'should-not-exist.tar')],capture_output=True,text=True,timeout=40)
+    result=subprocess.run([str(out/'execletctl'),'files','archive','download',sid,'/large',str(out/'should-not-exist.tar')],capture_output=True,text=True,timeout=40)
     assert result.returncode!=0 and not (out/'should-not-exist.tar').exists()
     check_nonroot(client,out,fixture)
     (out/'archive-results.json').write_text(json.dumps({'status':'passed','invalid_or_limited_uploads':sum(r['status']>=400 for r in records),'upload_http_cases':len(records),'sdks':['go','python','typescript'],'cli':['upload','download']},indent=2))
 
 
 def check_nonroot(client, out, fixture):
-    image='tiny-sandbox-files-nonroot:'+str(os.getpid())
+    image='execlet-files-nonroot:'+str(os.getpid())
     build=subprocess.run(['docker','build','-t',image,'-'],input='FROM alpine:3.21\nUSER 65534:65534\n',capture_output=True,text=True,timeout=90)
     (out/'nonroot-build.log').write_text(build.stdout+build.stderr)
     assert build.returncode==0,build.stderr

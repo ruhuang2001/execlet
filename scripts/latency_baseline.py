@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'sandbox-python' / 'src'))
-from tiny_sandbox import CancellationToken, Client, CreateSandboxRequest
+from execlet import CancellationToken, Client, CreateSandboxRequest
 
 
 def measure(domain, key, spec, samples):

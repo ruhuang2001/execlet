@@ -16,11 +16,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ruhuang2001/tiny-sandbox/internal/daemon"
-	"github.com/ruhuang2001/tiny-sandbox/internal/dockerapi"
+	"github.com/ruhuang2001/execlet/internal/daemon"
+	"github.com/ruhuang2001/execlet/internal/dockerapi"
 )
 
-const PidDir = "/run/tiny-sandbox"
+const PidDir = "/run/execlet"
 
 var initCommand = []string{"sleep", "infinity"}
 
@@ -115,7 +115,7 @@ func (b *Backend) Create(ctx context.Context, spec daemon.ContainerSpec) (string
 		createErr := fmt.Errorf("dockerbackend: create %s: %w", spec.Image, err)
 		status, ok := errors.AsType[*dockerapi.StatusError](err)
 		sandboxID, owner := spec.Labels[daemon.SandboxIDLabelKey], spec.Labels[daemon.OwnerLabelKey]
-		if (!ok || status.Status >= http.StatusInternalServerError) && sandboxID != "" && owner != "" && spec.Name == "tiny-sandbox-"+sandboxID {
+		if (!ok || status.Status >= http.StatusInternalServerError) && sandboxID != "" && owner != "" && spec.Name == "execlet-"+sandboxID {
 			return pendingCreatePrefix + sandboxID + ":" + owner, createErr
 		}
 		return "", createErr
@@ -162,7 +162,7 @@ func (b *Backend) Create(ctx context.Context, spec daemon.ContainerSpec) (string
 const pendingCreatePrefix = "pending-create:"
 
 func (b *Backend) inspectSandbox(ctx context.Context, sandboxID, owner string) (dockerapi.ContainerInspect, error) {
-	name := "tiny-sandbox-" + sandboxID
+	name := "execlet-" + sandboxID
 	c, err := b.api.ContainerInspect(ctx, name)
 	if err != nil {
 		return c, err
@@ -178,7 +178,7 @@ func (b *Backend) inspectSandbox(ctx context.Context, sandboxID, owner string) (
 
 func (b *Backend) reclaimStoppedContainer(ctx context.Context, spec daemon.ContainerSpec) error {
 	owner, sandboxID := spec.Labels[daemon.OwnerLabelKey], spec.Labels[daemon.SandboxIDLabelKey]
-	if owner == "" || sandboxID == "" || spec.Name != "tiny-sandbox-"+sandboxID {
+	if owner == "" || sandboxID == "" || spec.Name != "execlet-"+sandboxID {
 		return errors.New("missing sandbox identity")
 	}
 	c, err := b.inspectSandbox(ctx, sandboxID, owner)
@@ -270,6 +270,20 @@ func (b *Backend) RemoveOwned(ctx context.Context, labelKey, owner string) (int,
 	return removed, errors.Join(errs...)
 }
 
+func (b *Backend) CheckLegacyOwner(ctx context.Context, owner string) error {
+	const legacy = "tiny-sandbox.owner"
+	list, err := b.api.ContainerList(ctx, true, map[string][]string{"label": {legacy + "=" + owner}})
+	if err != nil {
+		return fmt.Errorf("find pre-rename containers: %w", err)
+	}
+	for _, c := range list {
+		if c.Labels[legacy] == owner {
+			return fmt.Errorf("pre-rename containers remain for owner %q; drain them with the previous daemon before upgrading", owner)
+		}
+	}
+	return nil
+}
+
 func (b *Backend) Owned(ctx context.Context, owner string) ([]string, error) {
 	list, err := b.api.ContainerList(ctx, true, map[string][]string{"label": {daemon.OwnerLabelKey + "=" + owner}})
 	if err != nil {
@@ -319,7 +333,7 @@ func (b *Backend) Exec(ctx context.Context, containerID string, spec daemon.Exec
 		return b.execGuest(ctx, g, spec)
 	}
 	if (g != nil && g.protected) || (g == nil && b.guestMode == "auto") {
-		pidPath = "/tmp/.tiny-sandbox-" + strings.TrimPrefix(pidPath, PidDir+"/")
+		pidPath = "/tmp/.execlet-" + strings.TrimPrefix(pidPath, PidDir+"/")
 	}
 	stdinDir, err := b.stageStdin(ctx, containerID, spec.Stdin)
 	if err != nil {
@@ -582,11 +596,11 @@ if [ "$2" -eq 0 ]; then shift 3; exec "$@"; fi
 if [ "$3" = 1 ]; then
  shift 3
  if [ -x /bin/busybox ] && { [ /bin/nice -ef /bin/busybox ] || [ /usr/bin/nice -ef /bin/busybox ] || /bin/busybox nice -n 0 /bin/sh -c 'exit 0' 2>/dev/null; }; then
-  set -- busybox "${tiny_sandbox_entry+tiny_sandbox_entry=$tiny_sandbox_entry}" "$@"
+  set -- busybox "${execlet_entry+execlet_entry=$execlet_entry}" "$@"
  elif [ -x /usr/bin/nice ]; then
-  set -- /usr/bin/nice "${tiny_sandbox_entry+tiny_sandbox_entry=$tiny_sandbox_entry}" "$@"
+  set -- /usr/bin/nice "${execlet_entry+execlet_entry=$execlet_entry}" "$@"
  elif [ -x /bin/nice ]; then
-  set -- /bin/nice "${tiny_sandbox_entry+tiny_sandbox_entry=$tiny_sandbox_entry}" "$@"
+  set -- /bin/nice "${execlet_entry+execlet_entry=$execlet_entry}" "$@"
  else
   shift
   while [ "$1" != command ]; do
@@ -599,15 +613,15 @@ if [ "$3" = 1 ]; then
   shift
   exec "$@"
  fi
- for tiny_sandbox_entry do
-  case "$tiny_sandbox_entry" in
+ for execlet_entry do
+  case "$execlet_entry" in
    busybox) shift "$(($3+4))"; set -- /bin/busybox nice -n 0 "$@" ;;
-   /bin/nice|/usr/bin/nice) shift "$(($3+4))"; set -- "$tiny_sandbox_entry" -n 0 -- "$@" ;;
+   /bin/nice|/usr/bin/nice) shift "$(($3+4))"; set -- "$execlet_entry" -n 0 -- "$@" ;;
    command) break ;;
-   *=*) set -- "$tiny_sandbox_entry" "$@" ;;
+   *=*) set -- "$execlet_entry" "$@" ;;
   esac
  done
- unset tiny_sandbox_entry
+ unset execlet_entry
 else
  shift 3
 fi

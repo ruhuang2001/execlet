@@ -168,7 +168,7 @@ def pause_and_eviction():
     call("POST", "/v1/sandboxes/" + sb + "/resume")
     time.sleep(.3)
     assert all(len(get(sb, ex)["stdout"]) > len(old) for ex, old in zip((a, b), before))
-    subprocess.run(["docker", "kill", "tiny-sandbox-" + sb], check=True, capture_output=True)
+    subprocess.run(["docker", "kill", "execlet-" + sb], check=True, capture_output=True)
     finish(sb, a, "evicted")
     finish(sb, b, "evicted")
     return {"sandbox": sb}
@@ -180,7 +180,7 @@ def retention_idle_unknown():
     for _ in range(310):
         assert finish(sb, start(sb, ["true"]))["exit_code"] == 0
     assert get(sb, active)["state"] == "running"
-    probe = finish(sb, start(sb, ["sh", "-c", "find /run/tiny-sandbox -type f | wc -l"]))
+    probe = finish(sb, start(sb, ["sh", "-c", "find /run/execlet -type f | wc -l"]))
     assert probe["exit_code"] == 0 and int(probe["stdout"].strip()) <= 3, probe
     records = call("GET", path(sb))["executions"]
     assert len(records) <= 200, len(records)
@@ -224,7 +224,7 @@ def concurrent_stdin():
     cancel(sb, a)
     assert get(sb, b)["state"] == "running"
     cancel(sb, b)
-    probe = finish(sb, start(sb, ["sh", "-c", "find /tmp -maxdepth 1 -name 'tiny-sandbox-stdin.*'; find /run/tiny-sandbox -type f | wc -l"]))
+    probe = finish(sb, start(sb, ["sh", "-c", "find /tmp -maxdepth 1 -name 'execlet-stdin.*'; find /run/execlet -type f | wc -l"]))
     assert probe["exit_code"] == 0 and probe["stdout"].strip() == "1", probe
     return {"first": a["id"], "second": b["id"], "remaining_pid_files": 1, "stdin_directories": 0}
 
@@ -238,7 +238,7 @@ def paused_missing_cancel():
         assert time.monotonic() < deadline, "commands did not start before pause"
         time.sleep(.02)
     call("POST", "/v1/sandboxes/" + sb + "/pause")
-    subprocess.run(["docker", "rm", "-f", "tiny-sandbox-" + sb], check=True, capture_output=True)
+    subprocess.run(["docker", "rm", "-f", "execlet-" + sb], check=True, capture_output=True)
     try:
         call("POST", path(sb, a["id"]) + "/cancel")
     except AssertionError as error:
@@ -256,7 +256,7 @@ def lifetime_and_fallback():
     evidence = []
     for reason in ["canceled", "timeout"]:
         sb = create()
-        a = start(sb, ["sh", "-c", "rm -f /run/tiny-sandbox/*; echo ready; sleep 60"],
+        a = start(sb, ["sh", "-c", "rm -f /run/execlet/*; echo ready; sleep 60"],
                   **({"timeout_seconds": 1} if reason == "timeout" else {}))
         deadline = time.monotonic() + 5
         while "ready" not in get(sb, a)["stdout"]:

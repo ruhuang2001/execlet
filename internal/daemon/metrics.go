@@ -62,7 +62,7 @@ func (h *Handler) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 		}
 		fmt.Fprintf(&out, "%s_bucket{%s,le=\"+Inf\"} %d\n%s_sum{%s} %g\n%s_count{%s} %d\n", name, labels, row.count, name, labels, row.sum, name, labels, row.count)
 	}
-	fmt.Fprintf(&out, "# HELP tiny_sandbox_cleanup_failures_total Failed container removal attempts.\n# TYPE tiny_sandbox_cleanup_failures_total counter\ntiny_sandbox_cleanup_failures_total %d\n", m.cleanupFailures)
+	fmt.Fprintf(&out, "# HELP execlet_cleanup_failures_total Failed container removal attempts.\n# TYPE execlet_cleanup_failures_total counter\nexeclet_cleanup_failures_total %d\n", m.cleanupFailures)
 	m.mu.Unlock()
 	h.store.retryMu.Lock()
 	live := 0
@@ -73,7 +73,7 @@ func (h *Handler) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 	}
 	pending := len(h.store.retryIDs)
 	h.store.retryMu.Unlock()
-	fmt.Fprintf(&out, "# HELP tiny_sandbox_live Live sandbox records, excluding pending removals.\n# TYPE tiny_sandbox_live gauge\ntiny_sandbox_live %d\n# HELP tiny_sandbox_cleanup_pending Containers awaiting confirmed removal.\n# TYPE tiny_sandbox_cleanup_pending gauge\ntiny_sandbox_cleanup_pending %d\n", live, pending)
+	fmt.Fprintf(&out, "# HELP execlet_live Live sandbox records, excluding pending removals.\n# TYPE execlet_live gauge\nexeclet_live %d\n# HELP execlet_cleanup_pending Containers awaiting confirmed removal.\n# TYPE execlet_cleanup_pending gauge\nexeclet_cleanup_pending %d\n", live, pending)
 	if policy, ok := h.store.backend.(*PolicyBackend); ok {
 		usage := policy.Usage()
 		policy.mu.Lock()
@@ -82,11 +82,11 @@ func (h *Handler) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 			ready += len(ids)
 		}
 		policy.mu.Unlock()
-		fmt.Fprintf(&out, "# HELP tiny_sandbox_prewarm_ready Unassigned prewarmed containers.\n# TYPE tiny_sandbox_prewarm_ready gauge\ntiny_sandbox_prewarm_ready %d\n", ready)
-		for _, name := range []string{"tiny_sandbox_reserved_memory_bytes", "tiny_sandbox_reserved_nano_cpus", "tiny_sandbox_reserved_pids"} {
+		fmt.Fprintf(&out, "# HELP execlet_prewarm_ready Unassigned prewarmed containers.\n# TYPE execlet_prewarm_ready gauge\nexeclet_prewarm_ready %d\n", ready)
+		for _, name := range []string{"execlet_reserved_memory_bytes", "execlet_reserved_nano_cpus", "execlet_reserved_pids"} {
 			fmt.Fprintf(&out, "# HELP %s Reserved deployment budget, including unconfirmed cleanup.\n# TYPE %s gauge\n", name, name)
 		}
-		fmt.Fprintf(&out, "tiny_sandbox_reserved_memory_bytes %d\ntiny_sandbox_reserved_nano_cpus %d\ntiny_sandbox_reserved_pids %d\n", usage.MemoryMB<<20, usage.NanoCPUs, usage.Pids)
+		fmt.Fprintf(&out, "execlet_reserved_memory_bytes %d\nexeclet_reserved_nano_cpus %d\nexeclet_reserved_pids %d\n", usage.MemoryMB<<20, usage.NanoCPUs, usage.Pids)
 	}
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	_, _ = fmt.Fprint(w, out.String())

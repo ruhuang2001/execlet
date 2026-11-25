@@ -16,10 +16,10 @@ import (
 	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	sandbox "github.com/ruhuang2001/tiny-sandbox/sandbox-go"
+	sandbox "github.com/ruhuang2001/execlet/sandbox-go"
 )
 
-const guestWorkspace = "/tmp/tiny-sandbox-workspace"
+const guestWorkspace = "/tmp/execlet-workspace"
 
 type sandboxTools struct {
 	client           *sandbox.Client
@@ -60,7 +60,7 @@ func (in *invocation) mcpServer(args []string) int {
 		return 2
 	}
 	if flags.NArg() != 0 || *dir == "" || len(tools.images) == 0 || tools.ttl <= 0 || int64(tools.ttl) > int64((1<<63-1)/time.Second) {
-		_, _ = fmt.Fprintln(in.stderr, "usage: sandboxctl mcp --workspace DIR --image IMAGE [--allow-network MODE] [--sandbox-ttl SECONDS]")
+		_, _ = fmt.Fprintln(in.stderr, "usage: execletctl mcp --workspace DIR --image IMAGE [--allow-network MODE] [--sandbox-ttl SECONDS]")
 		return 2
 	}
 	root, err := os.OpenRoot(*dir)
@@ -73,7 +73,7 @@ func (in *invocation) mcpServer(args []string) int {
 	if err != nil {
 		return in.fail(err)
 	}
-	tools.cache = filepath.Join(home, ".cache", "tiny-sandbox", "mcp")
+	tools.cache = filepath.Join(home, ".cache", "execlet", "mcp")
 	tools.client, err = in.client()
 	if err != nil {
 		return in.fail(err)
@@ -82,7 +82,7 @@ func (in *invocation) mcpServer(args []string) int {
 	if err != nil {
 		return in.fail(err)
 	}
-	server := mcp.NewServer(&mcp.Implementation{Name: "sandboxctl", Version: version}, nil)
+	server := mcp.NewServer(&mcp.Implementation{Name: "execletctl", Version: version}, nil)
 	tools.register(server)
 	ctx, stop := contextWithSignals()
 	defer stop()
@@ -186,7 +186,7 @@ func respond(out toolOutput, err error) (*mcp.CallToolResult, any, error) {
 	if err != nil {
 		code, message := "internal_error", err.Error()
 		if isConnectionRefused(err) {
-			code, message = "daemon_unreachable", "run sandboxctl doctor: "+message
+			code, message = "daemon_unreachable", "run execletctl doctor: "+message
 		} else if sdk, ok := errors.AsType[*sandbox.Error](err); ok {
 			code = cmp.Or(sdk.Code, code)
 		}

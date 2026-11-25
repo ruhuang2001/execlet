@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
-"""Keep the Mintlify OpenAPI copy byte-comparable with api/openapi.yaml.
+"""Sync the Mintlify OpenAPI copy with api/openapi.yaml.
 
-The published site needs the specification inside its docs directory, but the
-normative file lives in api/. This copies it, rewriting only the description
-lines that point at repository paths a docs reader cannot open, and fails in
-check mode when the copy has drifted.
+Omit the maintainers' note about the repository prose contract. Check mode
+fails if the copy is stale.
 """
 
 import argparse
@@ -15,23 +13,14 @@ ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "api" / "openapi.yaml"
 TARGET = ROOT / "mintlify" / "openapi.yaml"
 
-REWRITES = (
-    ("Normative HTTP contract for the tiny-sandbox reference server.",
-     "Normative HTTP contract for the execlet reference server."),
-    ("docs/api.md is the prose source of this contract; when the two disagree,\n"
-     "    fix one of them in the same change.",
-     "This page is generated from the specification the server validates its "
-     "router against."),
+SOURCE_NOTE = (
+    "    docs/api.md is the prose source of this contract; when the two disagree,\n"
+    "    fix one of them in the same change.\n"
 )
 
 
 def render() -> str:
-    text = SOURCE.read_text(encoding="utf-8")
-    for old, new in REWRITES:
-        if old not in text:
-            raise SystemExit(f"sync-docs-openapi: source no longer contains {old!r}")
-        text = text.replace(old, new)
-    return text
+    return SOURCE.read_text(encoding="utf-8").replace(SOURCE_NOTE, "", 1)
 
 
 def main() -> int:

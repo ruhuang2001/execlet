@@ -581,7 +581,7 @@ cleanup with the same owner label is the fallback.
 ## Server behavior
 
 - Listens on `127.0.0.1:8080` by default (`-addr` flag). Refuses to start on a non-loopback address unless `SANDBOX_API_KEY` is set.
-- Each container is labeled `tiny-sandbox.owner=<owner>`, where `<owner>` is the `-owner` flag and defaults to the listen address. Without `-state-dir`, startup removes containers carrying its own label; incomplete cleanup refuses admission.
+- Each container is labeled `execlet.owner=<owner>`, where `<owner>` is the `-owner` flag and defaults to the listen address. Without `-state-dir`, startup removes containers carrying its own label; incomplete cleanup refuses admission.
 - An ordinary stop (SIGINT, SIGTERM) ends open event streams, waits for in-flight requests up to 10 seconds, then attempts container removal within a separate ten-second sweep budget. Removal is best effort; runtime failures can leave containers for owner-label cleanup on a later startup.
 - State is in memory by default. Pin `-owner` when the listen address can change. Opt-in `-state-dir` journals intents and completed results, adopts eligible idle containers, and removes interrupted work as `unknown` without replay. Graceful durable shutdown preserves idle containers, not live commands. Lost live output is truncated; nonzero lost cursors return 409.
 - Opt-in `-policy` enforces aggregate reservations and image/network allowlists before creation and verifies kernel limits. Reservations survive unconfirmed removal. Journal failures close readiness and create/start admission. See [operations](operations.md) for configuration, defaults, storage trust and recovery/network limitations.
@@ -592,7 +592,7 @@ cleanup with the same owner label is the fallback.
 - [Sandbox store](../internal/daemon/store.go): lifecycle, deadlines, and best-effort removal.
 - [Execution engine](../internal/daemon/engine.go): idempotency, cancellation, and file access.
 - [Reaper](../internal/daemon/reaper.go): timeout and eviction checks.
-- [Server entry point](../cmd/sandboxd/main.go): startup cleanup and HTTP shutdown.
+- [Server entry point](../cmd/execletd/main.go): startup cleanup and HTTP shutdown.
 
 ### `GET /v1/sandboxes/{sandbox_id}/files/stat?path=...`
 

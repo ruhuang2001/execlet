@@ -7,7 +7,7 @@ import threading
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "sandbox-python/src"))
-from tiny_sandbox import Client, CreateSandboxRequest
+from execlet import Client, CreateSandboxRequest
 
 
 def run(args):
@@ -49,7 +49,7 @@ def run(args):
                     return
                 except OSError:
                     time.sleep(0.04)
-            raise TimeoutError("sandboxd")
+            raise TimeoutError("execletd")
 
         try:
             launch()
@@ -134,7 +134,7 @@ console.log(JSON.stringify({output:data,stat:stat.type}));
                 threading.Thread(target=old.serve_forever, daemon=True).start()
                 legacy = "http://127.0.0.1:" + str(old.server_address[1])
                 try:
-                    from tiny_sandbox.e2b import Sandbox as E2B
+                    from execlet.e2b import Sandbox as E2B
 
                     adapter = E2B.connect("old", endpoint=legacy)
                     info = adapter.files.write("/tmp/a", b"ok")
@@ -177,7 +177,7 @@ console.log(JSON.stringify({output:data,stat:stat.type}));
                     "ps",
                     "-aq",
                     "--filter",
-                    "label=tiny-sandbox.owner=" + owner,
+                    "label=execlet.owner=" + owner,
                 ],
                 text=True,
             ).split()
@@ -188,5 +188,5 @@ console.log(JSON.stringify({output:data,stat:stat.type}));
 if __name__ == "__main__":
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--out", type=Path, default=Path("artifacts/terminal-sdks"))
-    p.add_argument("--server", type=Path, default=Path("bin/sandboxd"))
+    p.add_argument("--server", type=Path, default=Path("bin/execletd"))
     run(p.parse_args())

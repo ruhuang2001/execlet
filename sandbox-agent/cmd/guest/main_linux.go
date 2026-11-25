@@ -14,7 +14,7 @@ import (
 	"runtime"
 	"syscall"
 
-	"github.com/ruhuang2001/tiny-sandbox/internal/guestprotocol"
+	"github.com/ruhuang2001/execlet/internal/guestprotocol"
 )
 
 func main() {
@@ -80,14 +80,14 @@ func run(args []string) error {
 			return errors.New("missing workload command")
 		}
 		if err := os.Chdir(args[1]); err != nil {
-			fmt.Fprintln(os.Stderr, "tiny-sandbox: cwd:", err)
+			fmt.Fprintln(os.Stderr, "execlet: cwd:", err)
 			os.Exit(126)
 		}
 		file, err := exec.LookPath(args[2])
 		if err == nil {
 			err = syscall.Exec(file, args[2:], os.Environ())
 		}
-		fmt.Fprintln(os.Stderr, "tiny-sandbox: exec:", err)
+		fmt.Fprintln(os.Stderr, "execlet: exec:", err)
 		os.Exit(127)
 	}
 	return errors.New("unknown guest subcommand")

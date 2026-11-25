@@ -18,7 +18,7 @@ const provider = process.env.CONTRACT_PROVIDER;
 let sdk: SDK;
 try {
   const name = provider === 'e2b' ? 'e2b'
-    : (process.env.CONTRACT_TS_MODULE || process.env.CONTRACT_MODULE || '@tiny-sandbox/sdk/e2b');
+    : (process.env.CONTRACT_TS_MODULE || process.env.CONTRACT_MODULE || '@execlet/sdk/e2b');
   sdk = await import(name) as SDK;
   const require = createRequire(import.meta.url);
   const version = provider === 'e2b' ? JSON.parse(readFileSync(require.resolve('e2b/package.json'), 'utf8')).version : null;
@@ -26,7 +26,7 @@ try {
   emit({ready: true, version, module: name, runtime: process.version, pid:process.pid});
 } catch (error) {
   const e = error as NodeJS.ErrnoException;
-  const missing = e.code === 'ERR_MODULE_NOT_FOUND' && /Cannot find package '(e2b|@tiny-sandbox\/sdk)'/.test(e.message);
+  const missing = e.code === 'ERR_MODULE_NOT_FOUND' && /Cannot find package '(e2b|@execlet\/sdk)'/.test(e.message);
   emit({ready: false, status: missing ? 'not_run' : 'failed', reason: e.message});
   process.exit(2);
 }

@@ -36,7 +36,7 @@ make typescript
 | Python SDK | `PYTHON=python3.15 bash scripts/e2e-python.sh artifacts/python-e2e` | Installed wheel and real Docker fault scenarios |
 | TypeScript SDK | `bash scripts/e2e-typescript.sh artifacts/typescript-e2e` | Types, browser bundle, installed tarball and Docker scenarios |
 | E2B adapter subset | `PYTHON=python3.15 bash scripts/e2b-compatibility/installed.sh artifacts/e2b-installed "$SANDBOX_E2B_IMAGE" --profile background` | Installed wheel/tarball without E2B runtime, 40 cases per language, reference comparison and cleanup |
-| Deployment operations | `python3 scripts/e2e-operations.py --server bin/sandboxd --image "$SANDBOX_E2B_IMAGE" --out artifacts/operations` | Atomic budgets, network controls, restart/storage/runtime faults, metrics and latency samples |
+| Deployment operations | `python3 scripts/e2e-operations.py --server bin/execletd --image "$SANDBOX_E2B_IMAGE" --out artifacts/operations` | Atomic budgets, network controls, restart/storage/runtime faults, metrics and latency samples |
 
 `PYTHON=python3.15` is an example; use an installed Python 3.10+ interpreter.
 The Python runner builds and installs a wheel in an isolated virtual environment.
@@ -53,6 +53,7 @@ Other runners choose their own ports and owner labels. Their cleanup targets
 only their own containers. Do not use global Docker cleanup while other work runs.
 The file runner prepares its pinned image before scenarios, retaining pull and
 inspect diagnostics; setup retries do not retry scenario requests.
+
 The E2B subset has its own [setup and acceptance requirements](scripts/e2b-compatibility/README.md),
 including a compatible image digest, Python 3.11+ and Node 22.19+. Its source-derived
 reference does not require an E2B Cloud account or key.
@@ -63,13 +64,13 @@ reference does not require an E2B Cloud account or key.
 - **Release archives and latency:** Set `ARCHIVE` to the full package for your OS and architecture. These checks exercise the binaries in the archive, not those in `bin/`.
 
   ```sh
-  go build -o bin/mcp-client ./cmd/sandboxctl/testdata/mcp-client
+  go build -o bin/mcp-client ./cmd/execletctl/testdata/mcp-client
   python3 scripts/e2e-mcp-workflow.py "$ARCHIVE" bin/mcp-client --out artifacts/mcp-python.json
   python3 scripts/e2e-mcp-workflow.py "$ARCHIVE" bin/mcp-client --go --out artifacts/mcp-go.json
   ```
 
   Each run creates a fresh sandbox and measures initial, unchanged and single-file syncs. `timing_us` separates host selection/hash/staging (`scan`), guest updates and manifest commit (`apply`), archive HTTP writes within `apply` (`archive_upload`), and time inside the sync handler (`total`). Image build time is excluded. The first Go run starts with an empty build cache. CI runs one sample per workload and does not gate on latency.
-- **Real Agent (optional):** With an active local Amp login, run `make build`, `docker build -t tiny-sandbox-mcp:local examples/mcp`, and `python3 scripts/e2e-amp.py --out artifacts/amp`. This uses a private Amp run and records the repair conversation, network mode and cleanup evidence.
+- **Real Agent (optional):** With an active local Amp login, run `make build`, `docker build -t execlet-mcp:local examples/mcp`, and `python3 scripts/e2e-amp.py --out artifacts/amp`. This uses a private Amp run and records the repair conversation, network mode and cleanup evidence.
 
 ### Code comments
 
@@ -81,9 +82,9 @@ Run `make comment-lint` to check changes against the merge base with `origin/mai
 PYTHON=python3.15 E2E_COVERAGE=1 bash scripts/e2e.sh artifacts/e2e
 mkdir -p artifacts/cov-unit artifacts/operations-coverage artifacts/combined-e2e-coverage
 go test -race -covermode=atomic -coverpkg=./... ./... -args -test.gocoverdir="$PWD/artifacts/cov-unit"
-go build -cover -covermode=atomic -coverpkg=./... -o bin/sandboxd-coverage ./cmd/sandboxd
+go build -cover -covermode=atomic -coverpkg=./... -o bin/execletd-coverage ./cmd/execletd
 GOCOVERDIR="$PWD/artifacts/operations-coverage" python3 scripts/e2e-operations.py \
-  --server bin/sandboxd-coverage --image "$SANDBOX_E2B_IMAGE" --out artifacts/operations
+  --server bin/execletd-coverage --image "$SANDBOX_E2B_IMAGE" --out artifacts/operations
 go tool covdata merge -i=artifacts/e2e/coverage,artifacts/operations-coverage -o=artifacts/combined-e2e-coverage
 bash scripts/coverage.sh artifacts/cov-unit artifacts/combined-e2e-coverage 70
 ~~~

@@ -11,7 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	sandbox "github.com/ruhuang2001/tiny-sandbox/sandbox-go"
+	sandbox "github.com/ruhuang2001/execlet/sandbox-go"
 )
 
 type runFlags struct {
@@ -80,47 +80,47 @@ func (in *invocation) runCommand(args []string) int {
 	fs.Visit(func(f *flag.Flag) { rf.given[f.Name] = true })
 
 	if rf.set("memory") && rf.memoryMB < 0 {
-		_, _ = fmt.Fprintln(in.stderr, "sandboxctl: --memory must not be negative")
+		_, _ = fmt.Fprintln(in.stderr, "execletctl: --memory must not be negative")
 		return 2
 	}
 	if rf.set("timeout") && rf.timeout < 0 {
-		_, _ = fmt.Fprintln(in.stderr, "sandboxctl: --timeout must not be negative; use 0 to disable")
+		_, _ = fmt.Fprintln(in.stderr, "execletctl: --timeout must not be negative; use 0 to disable")
 		return 2
 	}
 	if rf.set("idle-timeout") && rf.idleTimeout < 0 {
-		_, _ = fmt.Fprintln(in.stderr, "sandboxctl: --idle-timeout must not be negative; use 0 to disable")
+		_, _ = fmt.Fprintln(in.stderr, "execletctl: --idle-timeout must not be negative; use 0 to disable")
 		return 2
 	}
 	if rf.set("exec-timeout") && rf.execTimeout < 0 {
-		_, _ = fmt.Fprintln(in.stderr, "sandboxctl: --exec-timeout must not be negative; use 0 to disable")
+		_, _ = fmt.Fprintln(in.stderr, "execletctl: --exec-timeout must not be negative; use 0 to disable")
 		return 2
 	}
 	if rf.set("max-concurrent-executions") && (rf.maxConcurrentExecutions < 1 || rf.maxConcurrentExecutions > 8) {
-		_, _ = fmt.Fprintln(in.stderr, "sandboxctl: --max-concurrent-executions must be between 1 and 8")
+		_, _ = fmt.Fprintln(in.stderr, "execletctl: --max-concurrent-executions must be between 1 and 8")
 		return 2
 	}
 	if rf.set("pids-limit") && rf.pidsLimit <= 0 {
-		_, _ = fmt.Fprintln(in.stderr, "sandboxctl: --pids-limit must be positive")
+		_, _ = fmt.Fprintln(in.stderr, "execletctl: --pids-limit must be positive")
 		return 2
 	}
 	if rf.set("nano-cpus") && rf.nanoCPUs < 0 {
-		_, _ = fmt.Fprintln(in.stderr, "sandboxctl: --nano-cpus must not be negative; use 0 for no limit")
+		_, _ = fmt.Fprintln(in.stderr, "execletctl: --nano-cpus must not be negative; use 0 for no limit")
 		return 2
 	}
 	if rf.network != "" && rf.network != sandbox.NetworkBridge && rf.network != sandbox.NetworkNone && rf.network != sandbox.NetworkFiltered {
-		_, _ = fmt.Fprintf(in.stderr, "sandboxctl: --network must be %q, %q or filtered\n",
+		_, _ = fmt.Fprintf(in.stderr, "execletctl: --network must be %q, %q or filtered\n",
 			sandbox.NetworkBridge, sandbox.NetworkNone)
 		return 2
 	}
 
 	if len(command) == 0 {
-		_, _ = fmt.Fprintln(in.stderr, "sandboxctl: run needs a command, e.g. sandboxctl run -- ls -l")
+		_, _ = fmt.Fprintln(in.stderr, "execletctl: run needs a command, e.g. execletctl run -- ls -l")
 		return 2
 	}
 
 	if command[0] == "code" {
 		if len(command) != 2 {
-			_, _ = fmt.Fprintln(in.stderr, "sandboxctl: code takes exactly one argument: the Python program")
+			_, _ = fmt.Fprintln(in.stderr, "execletctl: code takes exactly one argument: the Python program")
 			return 2
 		}
 		command = []string{"python3", "-c", command[1]}
@@ -148,7 +148,7 @@ func (in *invocation) runCommand(args []string) int {
 			return in.fail(err)
 		}
 		if len(data) > 1<<20 || !utf8.Valid(data) {
-			_, _ = fmt.Fprintln(in.stderr, "sandboxctl: stdin must be valid UTF-8 and at most 1 MiB")
+			_, _ = fmt.Fprintln(in.stderr, "execletctl: stdin must be valid UTF-8 and at most 1 MiB")
 			return 2
 		}
 		input = string(data)
@@ -170,7 +170,7 @@ func (in *invocation) runCommand(args []string) int {
 		}
 		created = true
 		sandboxID = sb.ID
-		_, _ = fmt.Fprintf(in.stderr, "sandbox: %s (created; remove with: sandboxctl kill %s)\n", sb.ID, sb.ID)
+		_, _ = fmt.Fprintf(in.stderr, "sandbox: %s (created; remove with: execletctl kill %s)\n", sb.ID, sb.ID)
 	} else {
 		_, _ = fmt.Fprintf(in.stderr, "sandbox: %s\n", sandboxID)
 	}
@@ -228,7 +228,7 @@ func (in *invocation) cleanupSandbox(client *sandbox.Client, sandboxID string) {
 		err = fmt.Errorf("server returned sandbox %q in state %q", sb.ID, sb.State)
 	}
 	if err != nil {
-		_, _ = fmt.Fprintf(in.stderr, "sandboxctl: cleanup unconfirmed for %s: %s\n", sandboxID, messageOf(err))
+		_, _ = fmt.Fprintf(in.stderr, "execletctl: cleanup unconfirmed for %s: %s\n", sandboxID, messageOf(err))
 	}
 }
 

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ruhuang2001/tiny-sandbox/internal/daemon"
-	"github.com/ruhuang2001/tiny-sandbox/internal/filearchive"
+	"github.com/ruhuang2001/execlet/internal/daemon"
+	"github.com/ruhuang2001/execlet/internal/filearchive"
 )
 
 func (b *Backend) ReadArchive(_ context.Context, id, p string) ([]byte, error) {

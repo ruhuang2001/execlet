@@ -3,87 +3,111 @@ title: "Go SDK"
 description: "Package sandbox: typed lifecycle, execution, and file methods with context-first signatures."
 ---
 
+## Use the local SDK
+
+The SDK is package `sandbox` in the main module. Set `EXECLET_SRC` to the
+absolute path of the [checkout](/installation#use-the-sdks-from-a-checkout)
+that built your daemon. From a new directory for this example:
+
 ```sh
-go get github.com/ruhuang2001/tiny-sandbox/sandbox-go@latest
+go mod init example.com/execlet-demo
+go mod edit -require=github.com/ruhuang2001/execlet@v0.0.0
+go mod edit -replace="github.com/ruhuang2001/execlet=$EXECLET_SRC"
 ```
 
-The package is `sandbox`, and it is part of the main module:
-
-```go
-import sandbox "github.com/ruhuang2001/tiny-sandbox/sandbox-go"
-```
-
-## Connect
-
-```go
-client, err := sandbox.NewClient(sandbox.Config{
-    Domain: os.Getenv("SANDBOX_DOMAIN"),
-    APIKey: os.Getenv("SANDBOX_API_KEY"),
-})
-if err != nil {
-    log.Fatal(err)
-}
-```
-
-A nil `HTTPClient` selects a client **without a global timeout**, so event
-streams can stay open. Set one only if you also set a per-request deadline.
-
-`MaxRetries`: `0` selects three retries after the initial attempt, a positive
-value sets the limit, and a negative value disables retries entirely.
+The replacement is local; `v0.0.0` is a placeholder, not a published tag.
 
 ## Run a command and stream it
 
+Start the daemon as shown in the [quickstart](/quickstart#start-the-daemon).
+Save this program as `main.go`:
+
 ```go
-sb, err := client.CreateSandbox(ctx, sandbox.CreateSandboxRequest{
-    Image:         "python:3.12-alpine",
-    TimeoutSeconds: ptr(120),
-})
-if err != nil { return err }
-defer client.KillSandbox(ctx, sb.ID)
+package main
 
-exe, err := client.StartExecution(ctx, sb.ID, sandbox.ExecuteRequest{
-    Command: []string{"python3", "-c", "print(2 ** 10)"},
-})
-if err != nil { return err }
+import (
+    "context"
+    "errors"
+    "fmt"
+    "log"
+    "time"
 
-final, err := client.StreamExecution(ctx, sb.ID, exe.ID, func(e sandbox.Event) error {
-    switch e.Type {
-    case sandbox.EventStdout:
-        fmt.Print(e.Data)
-    case sandbox.EventTruncated:
-        log.Printf("output truncated after %d bytes", e.LimitBytes)
+    "github.com/ruhuang2001/execlet/sandbox-go"
+)
+
+func main() {
+    if err := run(context.Background()); err != nil {
+        log.Fatal(err)
     }
-    return nil
-})
+}
+
+func run(ctx context.Context) (result error) {
+    client, err := sandbox.NewClient(sandbox.Config{})
+    if err != nil {
+        return err
+    }
+    sb, err := client.CreateSandbox(ctx, sandbox.CreateSandboxRequest{
+        Image:          new("python:3.12-alpine"),
+        Network:        new(sandbox.NetworkNone),
+        TimeoutSeconds: new(120),
+    })
+    if err != nil {
+        return err
+    }
+    defer func() {
+        cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+        defer cancel()
+        _, err := client.KillSandbox(cleanup, sb.ID)
+        result = errors.Join(result, err)
+    }()
+
+    _, err = client.ExecStream(ctx, sb.ID, []string{"python3", "-c", "print(2 ** 10)"}, func(event sandbox.Event) error {
+        if event.Type == sandbox.EventStdout {
+            _, err := fmt.Print(event.Data)
+            return err
+        }
+        return nil
+    })
+    return err
+}
 ```
 
-`StreamExecution` reconnects on its own using `Last-Event-ID` and returns the
-final execution. It returns an error if the callback returns one, and it does
-**not** cancel the remote execution in that case — deciding whether to cancel is
-yours.
+```sh
+go mod tidy
+go run .
+```
 
-A returned `*Execution` is a snapshot with `State`, `ExitCode`,
-`TerminationReason`, and the retained `Stdout`/`Stderr`.
+It prints `1024`. Empty `Domain` and `APIKey` fall back to `SANDBOX_DOMAIN`
+and `SANDBOX_API_KEY`. Without a configured domain the client uses
+`http://localhost:8080`. A nil `HTTPClient` selects a client with no global
+timeout; use contexts for deadlines instead of cutting off all event streams.
+
+`Exec` and `ExecStream` start work and return an error for a failed command.
+For a custom request, call `StartExecution` with an `ExecuteRequest`, then
+`StreamExecution` with the returned ID. `StreamExecution` reconnects using
+`Last-Event-ID` and returns the final snapshot even for a failed command.
+Its `ExitCode` and `TerminationReason` are pointers; check for nil before
+dereferencing. A callback error closes observation only. Canceling the
+context asks the SDK to cancel remotely; check for `ErrCancelUnconfirmed`
+before assuming the command stopped.
 
 ## Errors
 
 ```go
-var apiErr *sandbox.Error
-if errors.As(err, &apiErr) {
-    switch {
-    case apiErr.Code == sandbox.CodeBusy:
-        log.Print("slots are full; wait for one to free")
-    case apiErr.Retryable():
-        log.Print("transient; the client may retry")
+switch {
+case errors.Is(err, sandbox.ErrBusy):
+    log.Print("execution slots are full")
+case errors.Is(err, sandbox.ErrTimeout):
+    log.Print("the command deadline expired")
+default:
+    if sdkErr, ok := errors.AsType[*sandbox.Error](err); ok {
+        log.Printf("%s (retryable: %t)", sdkErr.Code, sdkErr.Retryable())
     }
 }
 ```
 
-`CodeBusy` means wait for a slot to free rather than retrying immediately.
-`Retryable()` covers `429`, `500`, `502`, `503`, and a transport failure that
-happened before a complete response.
-
-Sentinel values match with `errors.Is`, so branch on codes rather than strings.
+`ErrBusy` means wait for a slot to free. `Retryable()` classifies the error;
+it does not make the operation safe to replay.
 
 ## Concurrency and resources
 
@@ -95,7 +119,7 @@ Optional request fields are pointers, so unset and explicit zero stay distinct.
 | `MemoryMB` | 512 | ≥ 16 |
 | `PidsLimit` | 1024 tasks | ≥ 64 |
 | `NanoCPUs` | `0` (unlimited) | `1e9` = one CPU |
-| `Network` | `sandbox.NetworkBridge` | `NetworkBridge`, `NetworkNone` |
+| `Network` | `sandbox.NetworkBridge` without a policy | `NetworkBridge`, `NetworkNone`, `NetworkFiltered` (requires policy) |
 
 These are fixed at creation and returned on `Sandbox`.
 
@@ -106,28 +130,32 @@ These are fixed at creation and returned on `Sandbox`.
 | `Env` | ≤ 64 entries; additive to the image's; not inherited by later executions |
 | `Cwd` | absolute, ≤ 4096 bytes; empty for the image's working directory |
 | `Stdin` | UTF-8, ≤ 1 MiB, one-shot |
-| `TimeoutMS` | managed remote deadline; exclusive with nonempty `Stdin` |
+| `TimeoutSeconds` | native remote deadline; unset or `0` means no command deadline |
+| `TimeoutMS` | managed remote deadline; mutually exclusive with `TimeoutSeconds` and with nonempty `Stdin` |
 
-Nonempty `Env`, `Cwd`, or `Stdin` triggers a capability preflight. A server that
-does not advertise support returns `incompatible_server` **before** anything is
-created — an old server silently ignoring a field is worse than an error.
+The SDK checks capabilities before sending requests that use additive features
+such as `Runtime`, nonempty `Env`, `Cwd` or `Stdin`, and `TimeoutMS`. Missing
+support gives `incompatible_server` before the affected operation is sent.
 
 ## Files
 
 `ReadFile`, `WriteFile`, `StatFile`, and `ListFiles` cover ordinary access.
+Use `WriteFileInfo` to get metadata from a successful file write.
 `ReadArchive` and `WriteArchive` transfer validated tar archives when you need
 many files or want to preserve symlinks, modes, and timestamps. Archive uploads
 make **one attempt**: extraction is not safely repeatable.
 
 ## Retry rules worth remembering
 
+- `MaxRetries: 0` selects three retries after the initial attempt; a positive
+  value sets the limit, and a negative value disables retries.
 - Retry candidates: transport errors before a complete response, truncated
   bodies, and 429/500/502/503/504.
 - Backoff: `min(2s, 200ms * 2^attempt)`, sampled uniformly from half the cap to
   the cap.
 - A positive integer `Retry-After` overrides the delay on ordinary requests.
   SSE reconnects ignore it.
-- **Sandbox creation is never retried automatically.** Neither is starting an
-  execution unless you supply an `IdempotencyKey`.
+- **Sandbox creation is never retried automatically.** `StartExecution` uses
+  the supplied `IdempotencyKey` or generates one and keeps it across retries.
 - Stream reconnects consume the same retry budget; received output does not
   reset it.

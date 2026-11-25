@@ -14,8 +14,8 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/ruhuang2001/tiny-sandbox/internal/filearchive"
-	"github.com/ruhuang2001/tiny-sandbox/internal/guestprotocol"
+	"github.com/ruhuang2001/execlet/internal/filearchive"
+	"github.com/ruhuang2001/execlet/internal/guestprotocol"
 	"golang.org/x/sys/unix"
 )
 

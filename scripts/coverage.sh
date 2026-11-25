@@ -4,8 +4,8 @@ set -euo pipefail
 UNIT_DIR=${1:?usage: coverage.sh <unit-dir> <e2e-dir> [gate]}
 E2E_DIR=${2:?usage: coverage.sh <unit-dir> <e2e-dir> [gate]}
 GATE=${3:-70}
-MERGED=${MERGED_DIR:-/tmp/tiny-sandbox-coverage-merged}
-PROFILE=${PROFILE:-/tmp/tiny-sandbox-coverage.txt}
+MERGED=${MERGED_DIR:-/tmp/execlet-coverage-merged}
+PROFILE=${PROFILE:-/tmp/execlet-coverage.txt}
 
 rm -rf "$MERGED"
 mkdir -p "$MERGED"

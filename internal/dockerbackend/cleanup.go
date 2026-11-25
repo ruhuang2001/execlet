@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ruhuang2001/tiny-sandbox/internal/daemon"
-	"github.com/ruhuang2001/tiny-sandbox/internal/dockerapi"
+	"github.com/ruhuang2001/execlet/internal/daemon"
+	"github.com/ruhuang2001/execlet/internal/dockerapi"
 )
 
 type execFiles struct {
@@ -35,7 +35,7 @@ func (f *execFiles) remove(ctx context.Context, b *Backend) error {
 	if f.pidPath != "" {
 		name, ok := strings.CutPrefix(f.pidPath, PidDir+"/")
 		if !ok {
-			name, ok = strings.CutPrefix(f.pidPath, "/tmp/.tiny-sandbox-")
+			name, ok = strings.CutPrefix(f.pidPath, "/tmp/.execlet-")
 		}
 		if !ok || name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\\x00") {
 			return nil

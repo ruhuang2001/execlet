@@ -10,8 +10,8 @@ import (
 
 const Version = 1
 const MaxFrame = 1 << 20
-const Socket = "/run/tiny-sandbox/agent.sock"
-const Binary = "/.tiny-sandbox/guest"
+const Socket = "/run/execlet/agent.sock"
+const Binary = "/.execlet/guest"
 
 type Identity struct {
 	UID    uint32

@@ -1,4 +1,4 @@
-"""Source-compatible E2B 2.64.0 subset over sandboxd, without E2B dependencies.
+"""Source-compatible E2B 2.64.0 subset over execletd, without E2B dependencies.
 
 See examples/e2b/README.md for the supported subset and image prerequisites.
 Native Client cancellation still cancels remote work; local observation failure
@@ -438,7 +438,7 @@ class CommandHandle:
 
     @property
     def execution_id(self) -> str:
-        """tiny-sandbox extension for diagnostics and native recovery."""
+        """execlet extension for diagnostics and native recovery."""
         return self.__identity.execution_id
 
     @property

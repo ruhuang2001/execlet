@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	agenttool "github.com/ruhuang2001/tiny-sandbox/examples/agent-tool"
-	"github.com/ruhuang2001/tiny-sandbox/internal/daemon"
-	"github.com/ruhuang2001/tiny-sandbox/internal/daemon/membackend"
-	sandbox "github.com/ruhuang2001/tiny-sandbox/sandbox-go"
+	agenttool "github.com/ruhuang2001/execlet/examples/agent-tool"
+	"github.com/ruhuang2001/execlet/internal/daemon"
+	"github.com/ruhuang2001/execlet/internal/daemon/membackend"
+	sandbox "github.com/ruhuang2001/execlet/sandbox-go"
 )
 
 type harness struct {

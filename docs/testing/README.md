@@ -1,6 +1,6 @@
 # Acceptance failure models
 
-Each suite below states which wrong implementation it must catch. Assertions live in the suite. Use this page to find a suite and the failure it exposes. Unless a row says otherwise, every suite runs against a private `sandboxd` with real Docker, checks cleanup by its own owner label, and writes evidence under `artifacts/`.
+Each suite below states which wrong implementation it must catch. Assertions live in the suite. Use this page to find a suite and the failure it exposes. Unless a row says otherwise, every suite runs against a private `execletd` with real Docker, checks cleanup by its own owner label, and writes evidence under `artifacts/`.
 
 | Area | Wrong implementation the suite must expose | Entry point |
 | --- | --- | --- |

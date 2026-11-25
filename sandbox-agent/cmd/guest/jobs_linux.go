@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/creack/pty"
-	"github.com/ruhuang2001/tiny-sandbox/internal/guestprotocol"
+	"github.com/ruhuang2001/execlet/internal/guestprotocol"
 	"golang.org/x/sys/unix"
 )
 

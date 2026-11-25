@@ -20,7 +20,7 @@ key = 'secret-authorization-' + uuid.uuid4().hex
 secret = 'payload-must-not-be-logged-' + uuid.uuid4().hex
 report = []
 (out / 'responses.jsonl').write_text('')
-sources = [*Path('internal').rglob('*.go'), *Path('cmd/sandboxd').rglob('*.go'), Path('scripts/e2e-observability.py')]
+sources = [*Path('internal').rglob('*.go'), *Path('cmd/execletd').rglob('*.go'), Path('scripts/e2e-observability.py')]
 (out / 'source-sha256.json').write_text(json.dumps({str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources}, indent=2) + '\n')
 (out / 'command.txt').write_text('bash scripts/e2e-observability.sh ' + str(out) + '\n')
 mode = 'healthy'
@@ -131,7 +131,7 @@ def is_uuid(value):
 
 server = None
 proxy = None
-log = (out / 'sandboxd.jsonl').open('w')
+log = (out / 'execletd.jsonl').open('w')
 try:
     with tempfile.TemporaryDirectory(prefix='ts-observe-') as temp:
         proxy = Proxy(str(Path(temp) / 'docker.sock'), Forward)
@@ -139,7 +139,7 @@ try:
         with socket.socket() as listener:
             listener.bind(('127.0.0.1', 0))
             port = listener.getsockname()[1]
-        server = subprocess.Popen([str(out / 'sandboxd'), '-addr', f'127.0.0.1:{port}',
+        server = subprocess.Popen([str(out / 'execletd'), '-addr', f'127.0.0.1:{port}',
                                    '-docker', proxy.server_address, '-owner', owner],
                                   env={**os.environ, 'SANDBOX_API_KEY': key}, stdout=log, stderr=log)
         for _ in range(100):
@@ -148,10 +148,10 @@ try:
                 break
             except OSError:
                 if server.poll() is not None:
-                    raise RuntimeError('sandboxd exited during startup')
+                    raise RuntimeError('execletd exited during startup')
                 time.sleep(.05)
         else:
-            raise RuntimeError('sandboxd did not become reachable within startup budget')
+            raise RuntimeError('execletd did not become reachable within startup budget')
         check('public liveness', response['status'] == 200)
         check('generated request id', is_uuid(response['request_id']))
         response = request('/readyz')
@@ -215,7 +215,7 @@ try:
                           headers=[('X-Request-ID', 'eviction-correlation')],
                           payload={'command': ['sleep', '30']})
         evicted_execution = json.loads(running['body'])['id']
-        owned = subprocess.check_output(['docker', 'ps', '-aq', '--filter', 'label=tiny-sandbox.owner=' + owner], text=True).split()
+        owned = subprocess.check_output(['docker', 'ps', '-aq', '--filter', 'label=execlet.owner=' + owner], text=True).split()
         check('only owned eviction target', len(owned) == 1)
         mode = 'delay-inspect'
         subprocess.run(['docker', 'rm', '-f', *owned], check=True, capture_output=True)
@@ -227,7 +227,7 @@ try:
                 break
             time.sleep(.05)
         check('eviction completes while runner blocked', terminal['state'] == 'completed' and terminal['termination_reason'] == 'evicted', terminal)
-        before_release = [json.loads(line) for line in (out / 'sandboxd.jsonl').read_text().splitlines()]
+        before_release = [json.loads(line) for line in (out / 'execletd.jsonl').read_text().splitlines()]
         check('eviction completion logged immediately', sum(entry['msg'] == 'execution completed' and entry.get('execution_id') == evicted_execution for entry in before_release) == 1)
         mode = 'healthy'
         release_inspect.set()
@@ -241,8 +241,8 @@ try:
         server.terminate()
         server.wait(timeout=20)
         log.flush()
-        logs = [json.loads(line) for line in (out / 'sandboxd.jsonl').read_text().splitlines()]
-        check('logs contain no private data', secret not in (out / 'sandboxd.jsonl').read_text() and key not in (out / 'sandboxd.jsonl').read_text())
+        logs = [json.loads(line) for line in (out / 'execletd.jsonl').read_text().splitlines()]
+        check('logs contain no private data', secret not in (out / 'execletd.jsonl').read_text() and key not in (out / 'execletd.jsonl').read_text())
         access = [entry for entry in logs if entry['msg'] == 'http request']
         check('structured access fields', all({'request_id', 'method', 'route', 'status', 'duration_ms', 'bytes'} <= entry.keys() for entry in access))
         lifecycle = [entry for entry in logs if entry['msg'] in ('execution started', 'execution completed')]
@@ -267,10 +267,10 @@ finally:
         proxy.server_close()
     log.close()
     (out / 'proxy-requests.json').write_text(json.dumps(proxy_requests, indent=2) + '\n')
-    remaining = subprocess.check_output(['docker', 'ps', '-aq', '--filter', 'label=tiny-sandbox.owner=' + owner], text=True).split()
+    remaining = subprocess.check_output(['docker', 'ps', '-aq', '--filter', 'label=execlet.owner=' + owner], text=True).split()
     if remaining:
         subprocess.run(['docker', 'rm', '-f', *remaining], check=True, capture_output=True)
-    after = subprocess.check_output(['docker', 'ps', '-aq', '--filter', 'label=tiny-sandbox.owner=' + owner], text=True).split()
+    after = subprocess.check_output(['docker', 'ps', '-aq', '--filter', 'label=execlet.owner=' + owner], text=True).split()
     (out / 'cleanup.json').write_text(json.dumps({'owner': owner, 'remaining_before_fallback': remaining, 'remaining': after}, indent=2) + '\n')
     check('no owned container leaks', not remaining and not after)
 print(f'{len(report)} checks passed; evidence: {out}')

@@ -168,7 +168,7 @@ func (b *PolicyBackend) maintainPrewarm(ctx context.Context, owner string, retry
 					return
 				}
 				sandboxID := newID("sbx_")
-				spec := ContainerSpec{Image: key.image, MemoryMB: key.memoryMB, PidsLimit: key.pidsLimit, NanoCPUs: key.nanoCPUs, Network: key.network, Runtime: key.runtime, Name: "tiny-sandbox-" + sandboxID, Labels: map[string]string{OwnerLabelKey: owner, SandboxIDLabelKey: sandboxID}}
+				spec := ContainerSpec{Image: key.image, MemoryMB: key.memoryMB, PidsLimit: key.pidsLimit, NanoCPUs: key.nanoCPUs, Network: key.network, Runtime: key.runtime, Name: "execlet-" + sandboxID, Labels: map[string]string{OwnerLabelKey: owner, SandboxIDLabelKey: sandboxID}}
 				create, cancel := context.WithTimeout(ctx, 2*time.Minute)
 				id, err := b.createFresh(create, spec)
 				cancel()

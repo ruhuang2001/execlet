@@ -85,13 +85,13 @@ def supervise(path, token, config):
                 try:
                     os.chdir(config['cwd'])
                 except OSError as exc:
-                    os.write(2, ('tiny-sandbox: cwd: ' + str(exc) + '\n').encode())
+                    os.write(2, ('execlet: cwd: ' + str(exc) + '\n').encode())
                     os._exit(126)
             env = dict(os.environ)
             env.update(config.get('env', {}))
             os.execvpe(config['command'][0], config['command'], env)
         except BaseException as exc:
-            os.write(2, ('tiny-sandbox: exec: ' + str(exc) + '\n').encode())
+            os.write(2, ('execlet: exec: ' + str(exc) + '\n').encode())
             os._exit(127)
     os.close(writer)
     if os.read(reader, 1) != b'1':

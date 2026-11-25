@@ -11,7 +11,7 @@ Docker Unix socket. Windows is not supported, and no Windows binaries are
 published. WSL2 is not a tested or supported environment.
 
 The installer downloads published binaries, while documentation on `main`
-describes current source. Check `./sandboxctl version` and `./sandboxctl help`
+describes current source. Check `./execletctl version` and `./execletctl help`
 for the installed build and use the matching release-tag documentation. To try
 unreleased features, [build from source](#build-from-source).
 
@@ -20,11 +20,15 @@ unreleased features, [build from source](#build-from-source).
 Download and install the latest release:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ruhuang2001/tiny-sandbox/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/ruhuang2001/execlet/main/scripts/install.sh | sh
 ```
 
-The installer selects your platform and puts only `sandboxd` and `sandboxctl` in
-`$HOME/tiny-sandbox-quickstart`. No sudo is needed. It does not install examples.
+The installer selects your platform and puts only `execletd` and `execletctl` in
+`$HOME/execlet-quickstart`. No sudo is needed. It does not install examples.
+For a historical release, skip the install step in the tagged quickstart. In
+both terminals use the directory printed by this installer, not the old
+`tiny-sandbox-quickstart` directory. Use `./execletctl` even when the installed
+CLI prints a cleanup hint with the old `sandboxctl` name.
 To try the offline pytest demo, follow the [MCP guide](../examples/mcp/README.md#try-the-packaged-pytest-demo).
 
 ## 2. Start the server (terminal A)
@@ -32,11 +36,11 @@ To try the offline pytest demo, follow the [MCP guide](../examples/mcp/README.md
 Start Docker, then run:
 
 ```sh
-cd "$HOME/tiny-sandbox-quickstart"
+cd "$HOME/execlet-quickstart"
 docker info
 export DOCKER_HOST="${DOCKER_HOST:-$(docker context inspect --format '{{.Endpoints.docker.Host}}')}"
 case "$DOCKER_HOST" in
-  unix://*) ./sandboxd ;;
+  unix://*) ./execletd ;;
   *) echo "A local Docker Unix socket is required; current endpoint: $DOCKER_HOST" ;;
 esac
 ```
@@ -46,17 +50,17 @@ Keep this terminal open. The server listens on `127.0.0.1:8080`.
 The command uses your existing `DOCKER_HOST`, or discovers the endpoint from
 your Docker context. It does not hardcode a user-specific socket path. If it
 cannot connect, check `docker info`. You can also specify the Unix socket path
-explicitly with `./sandboxd -docker /path/to/docker.sock`.
+explicitly with `./execletd -docker /path/to/docker.sock`.
 
 ## 3. Run Python (terminal B)
 
 Open another terminal and run:
 
 ```sh
-cd "$HOME/tiny-sandbox-quickstart"
+cd "$HOME/execlet-quickstart"
 export SANDBOX_DOMAIN=http://127.0.0.1:8080
-./sandboxctl doctor
-./sandboxctl run --rm -- code 'print(2 ** 10)'
+./execletctl doctor
+./execletctl run --rm -- code 'print(2 ** 10)'
 ```
 
 `doctor` should finish with `Ready`. The Python command prints `1024`, with
@@ -66,7 +70,7 @@ Missing container images are pulled on first use, which needs registry access.
 Try changing the Python expression and running it again:
 
 ```sh
-./sandboxctl run --rm -- code 'print(sum([19, 29, 49]))'
+./execletctl run --rm -- code 'print(sum([19, 29, 49]))'
 ```
 
 Expected stdout: `97`. Each run creates a fresh sandbox.
@@ -81,7 +85,7 @@ This program prints `1`, `2`, and `3` about one second apart. `flush=True`
 makes Python flush each line so you can see the output arrive:
 
 ```sh
-./sandboxctl run --rm -- code 'import time
+./execletctl run --rm -- code 'import time
 for step in range(1, 4):
     print(step, flush=True)
     time.sleep(1)'
@@ -92,7 +96,7 @@ for step in range(1, 4):
 Give a ten-second program a two-second execution deadline:
 
 ```sh
-./sandboxctl run --rm --exec-timeout 2 -- code 'import time; time.sleep(10)'
+./execletctl run --rm --exec-timeout 2 -- code 'import time; time.sleep(10)'
 echo "Exit code: $?"
 ```
 
@@ -101,8 +105,8 @@ the execution deadline stopped the program.
 
 ## Finish and troubleshoot
 
-The examples request cleanup with `--rm`. Use `./sandboxctl list` and
-`./sandboxctl kill SANDBOX_ID` for any sandbox still running or paused. A
+The examples request cleanup with `--rm`. Use `./execletctl list` and
+`./execletctl kill SANDBOX_ID` for any sandbox still running or paused. A
 `killed` record does not prove Docker removal succeeded, and repeating `kill`
 does not retry it. The reaper retries failed removal; startup cleanup with the
 same owner label is the fallback. Check Docker directly when cleanup must be
@@ -110,7 +114,7 @@ confirmed. Stop the server with Ctrl+C in its terminal.
 
 - If `docker info` fails, start Docker and check access to its daemon.
 - If `doctor` fails, follow its printed hint and check `SANDBOX_DOMAIN`.
-- If port 8080 is occupied, start `./sandboxd -addr 127.0.0.1:8081` and set
+- If port 8080 is occupied, start `./execletd -addr 127.0.0.1:8081` and set
   `SANDBOX_DOMAIN=http://127.0.0.1:8081` in the client terminal. The container
   owner label follows `-addr` unless you pass `-owner`; pin it when the address
   changes between runs.
@@ -121,19 +125,19 @@ confirmed. Stop the server with Ctrl+C in its terminal.
 Requires Go 1.27+, Make, and a reachable Docker daemon.
 
 ```sh
-git clone https://github.com/ruhuang2001/tiny-sandbox.git
-cd tiny-sandbox
+git clone https://github.com/ruhuang2001/execlet.git
+cd execlet
 make build
 export DOCKER_HOST="${DOCKER_HOST:-$(docker context inspect --format '{{.Endpoints.docker.Host}}')}"
 cd bin
 case "$DOCKER_HOST" in
-  unix://*) ./sandboxd ;;
+  unix://*) ./execletd ;;
   *) echo "A local Docker Unix socket is required; current endpoint: $DOCKER_HOST" >&2 ;;
 esac
 ```
 
 `make build` embeds both Linux guest agents. A direct `go install` of
-`sandboxd` from a clean module download builds the legacy fallback instead.
+`execletd` from a clean module download builds the legacy fallback instead.
 Use `make build` or a release that includes the guest agents for guest commands,
 interactive terminals, and filtered networking.
 

@@ -12,7 +12,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/ruhuang2001/tiny-sandbox/internal/daemon"
+	"github.com/ruhuang2001/execlet/internal/daemon"
 )
 
 type Program func(ctx context.Context, args []string) (stdout, stderr string, exitCode int)

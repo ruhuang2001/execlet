@@ -1,10 +1,12 @@
-# tiny-sandbox
+# execlet
 
-Run code for AI agents in local Docker containers. Use `sandboxctl` from a
+Run code for AI agents in local Docker containers. Use `execletctl` from a
 terminal, integrate with the Go, Python, or TypeScript SDK, or call the HTTP API.
 
-**Isolation:** Docker container isolation only. Do not use tiny-sandbox as a
-security boundary for untrusted multi-tenant workloads.
+**Isolation:** Execlet uses Docker's default runtime unless a deployment policy
+selects another. On a supported Linux host, use `runtime: "runsc"` with the
+same API for gVisor isolation. Review the [runtime guarantees](docs/operations.md#runtime-verification).
+Do not use a shared daemon as a security boundary between hostile tenants.
 
 ## Quick start
 
@@ -13,24 +15,24 @@ release and run the daemon in your first terminal. No Go, local Python, or
 model API key is needed.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/ruhuang2001/tiny-sandbox/main/scripts/install.sh | sh
-cd "$HOME/tiny-sandbox-quickstart"
+curl -fsSL https://raw.githubusercontent.com/ruhuang2001/execlet/main/scripts/install.sh | sh
+cd "$HOME/execlet-quickstart"
 export DOCKER_HOST="${DOCKER_HOST:-$(docker context inspect --format '{{.Endpoints.docker.Host}}')}"
-./sandboxd
+./execletd
 ```
 
 In a second terminal, run Python in a fresh sandbox and request cleanup:
 
 ```sh
-cd "$HOME/tiny-sandbox-quickstart"
-SANDBOX_DOMAIN=http://127.0.0.1:8080 ./sandboxctl run --rm -- code 'print(2 ** 10)'
+cd "$HOME/execlet-quickstart"
+SANDBOX_DOMAIN=http://127.0.0.1:8080 ./execletctl run --rm -- code 'print(2 ** 10)'
 ```
 
 Expected stdout: `1024`. The first run may need to pull a container image.
 Stop the daemon with Ctrl+C when done. See the [full quick start](docs/quickstart.md)
 for Docker socket troubleshooting, streaming output, and a timeout example.
 
-The installer installs only `sandboxd` and `sandboxctl` from the [latest release](https://github.com/ruhuang2001/tiny-sandbox/releases/latest).
+The installer installs only `execletd` and `execletctl` from the [latest release](https://github.com/ruhuang2001/execlet/releases/latest).
 For the offline pytest demo, [unpack an archive that includes it or build from source](examples/mcp/README.md#try-the-packaged-pytest-demo).
 Use the docs at the release tag for the released contract; the links below describe the current checkout.
 
@@ -40,8 +42,8 @@ Use the docs at the release tag for the released contract; the links below descr
 - Run commands with deadlines, cancellation, and bounded concurrent execution.
   Stream stdout and stderr and reconnect using the last event ID.
 - Read and write files, list directories, and transfer validated tar archives.
-- Open or reconnect to an interactive terminal with `sandboxctl shell`.
-- Sync a workspace into an offline sandbox from an MCP client with `sandboxctl mcp`.
+- Open or reconnect to an interactive terminal with `execletctl shell`.
+- Sync a workspace into an offline sandbox from an MCP client with `execletctl mcp`.
 
 ## Documentation
 

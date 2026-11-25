@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
-import { Client, SandboxError as NativeError } from '@tiny-sandbox/sdk';
+import { Client, SandboxError as NativeError } from '@execlet/sdk';
 import { Sandbox, AdapterError, AuthenticationError, InvalidArgumentError,
-  TimeoutError, NotFoundError, SandboxNotFoundError, CommandExitError } from '@tiny-sandbox/sdk/e2b';
+  TimeoutError, NotFoundError, SandboxNotFoundError, CommandExitError } from '@execlet/sdk/e2b';
 
 const sid = 'sandbox-one', eid = 'execution-one', pid = 42;
 const base = '/v1/sandboxes/' + sid, exec = base + '/executions/' + eid;

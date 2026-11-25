@@ -15,9 +15,9 @@ cleanup() {
  if [ "$code" -eq 0 ] && [ "$COMPLETED" -ne 1 ]; then code=1; fi
  trap - EXIT
  if [ -n "$SERVER_PID" ]; then kill "$SERVER_PID" 2>/dev/null || true; wait "$SERVER_PID" 2>/dev/null || true; fi
- docker ps -aq --filter "label=tiny-sandbox.owner=$OWNER" >"$OUT/containers-before-cleanup.txt"
+ docker ps -aq --filter "label=execlet.owner=$OWNER" >"$OUT/containers-before-cleanup.txt"
  while IFS= read -r id; do [ -z "$id" ] || docker rm -f "$id" >>"$OUT/cleanup.log" 2>&1 || true; done <"$OUT/containers-before-cleanup.txt"
- docker ps -aq --filter "label=tiny-sandbox.owner=$OWNER" >"$OUT/containers-after-cleanup.txt"
+ docker ps -aq --filter "label=execlet.owner=$OWNER" >"$OUT/containers-after-cleanup.txt"
  [ ! -s "$OUT/containers-after-cleanup.txt" ] || code=1
  printf '{"owner":"%s","exit_code":%s,"remaining":%s}\n' "$OWNER" "$code" "$(wc -l <"$OUT/containers-after-cleanup.txt" | tr -d ' ')" >"$OUT/cleanup.json"
  if [ "$code" -eq 0 ]; then
@@ -41,16 +41,16 @@ if [ "${E2E_COVERAGE:-0}" = "1" ]; then
  BUILD_FLAGS+=(-cover -covermode=atomic -coverpkg=./...)
 fi
 {
- go build "${BUILD_FLAGS[@]}" -o "$OUT/sandboxd" ./cmd/sandboxd &&
- go build "${BUILD_FLAGS[@]}" -o "$OUT/sandboxctl" ./cmd/sandboxctl &&
+ go build "${BUILD_FLAGS[@]}" -o "$OUT/execletd" ./cmd/execletd &&
+ go build "${BUILD_FLAGS[@]}" -o "$OUT/execletctl" ./cmd/execletctl &&
  go build "${BUILD_FLAGS[@]}" -o "$OUT/go-files" ./scripts/file-e2e &&
  go build "${BUILD_FLAGS[@]}" -o "$OUT/memory-files" ./scripts/file-e2e/memory
 } >"$OUT/build.log" 2>&1 || { cat "$OUT/build.log" >&2; exit 1; }
-for binary in sandboxd sandboxctl go-files memory-files; do
+for binary in execletd execletctl go-files memory-files; do
  if [ ! -x "$OUT/$binary" ]; then echo "missing executable $OUT/$binary" >&2; exit 1; fi
 done
 (cd sandbox-ts && npm ci && npm run build && npm run check) >"$OUT/typescript-build.log" 2>&1
-"$OUT/sandboxd" -addr "127.0.0.1:$PORT" -owner "$OWNER" >"$OUT/sandboxd.log" 2>&1 &
+"$OUT/execletd" -addr "127.0.0.1:$PORT" -owner "$OWNER" >"$OUT/execletd.log" 2>&1 &
 SERVER_PID=$!
 READY=0
 for _ in $(seq 1 100); do
@@ -58,7 +58,7 @@ for _ in $(seq 1 100); do
  kill -0 "$SERVER_PID" 2>/dev/null || break
  sleep 0.1
 done
-if [ "$READY" -ne 1 ]; then cat "$OUT/sandboxd.log" >&2; exit 1; fi
+if [ "$READY" -ne 1 ]; then cat "$OUT/execletd.log" >&2; exit 1; fi
 "${PYTHON:-python3}" scripts/file-e2e/run.py 2>&1 | tee "$OUT/runner.log"
 "$OUT/memory-files" "$OUT" >"$OUT/memory-results.json" 2>"$OUT/memory-server.log"
 git rev-parse HEAD >"$OUT/source-revision.txt"

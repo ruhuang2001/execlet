@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ruhuang2001/tiny-sandbox/api"
-	"github.com/ruhuang2001/tiny-sandbox/internal/daemon"
-	"github.com/ruhuang2001/tiny-sandbox/internal/daemon/membackend"
-	sandbox "github.com/ruhuang2001/tiny-sandbox/sandbox-go"
+	"github.com/ruhuang2001/execlet/api"
+	"github.com/ruhuang2001/execlet/internal/daemon"
+	"github.com/ruhuang2001/execlet/internal/daemon/membackend"
+	sandbox "github.com/ruhuang2001/execlet/sandbox-go"
 	"gopkg.in/yaml.v3"
 )
 

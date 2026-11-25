@@ -1,4 +1,4 @@
-"""HTTP faults in front of real sandboxd, retaining request and SSE evidence."""
+"""HTTP faults in front of real execletd, retaining request and SSE evidence."""
 from __future__ import annotations
 
 import dataclasses

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Installed-wheel E2E with real sandboxd + Docker, and HTTP transport faults."""
+"""Installed-wheel E2E with real execletd + Docker, and HTTP transport faults."""
 from __future__ import annotations
 
 import argparse
@@ -18,7 +18,7 @@ import time
 import traceback
 from pathlib import Path
 
-from tiny_sandbox import CancellationToken, Client, CreateSandboxRequest, Error, ExecuteRequest
+from execlet import CancellationToken, Client, CreateSandboxRequest, Error, ExecuteRequest
 from proxy import Fault, FaultProxy
 
 
@@ -50,7 +50,7 @@ class Suite:
         self.key = "python-e2e-local-only"
         self.report = {"schema_version": 1, "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                        "python": sys.version, "platform": platform.platform(),
-                       "distribution": importlib.metadata.version("tiny-sandbox"),
+                       "distribution": importlib.metadata.version("execlet"),
                        "command": "PYTHON=python3 bash scripts/e2e-python.sh artifacts/python-e2e", "checks": self.results}
 
     def start(self):
@@ -59,7 +59,7 @@ class Suite:
             port = probe.getsockname()[1]
         self.owner = f"127.0.0.1:{port}"
         self.domain = f"http://{self.owner}"
-        self.log = (self.artifacts / "sandboxd.log").open("w")
+        self.log = (self.artifacts / "execletd.log").open("w")
         self.process = subprocess.Popen([str(self.server), "-addr", self.owner], stdout=self.log, stderr=subprocess.STDOUT,
                                         env=dict(os.environ, SANDBOX_API_KEY=self.key))
         for _ in range(100):
@@ -75,7 +75,7 @@ class Suite:
             finally:
                 connection.close()
         else:
-            raise RuntimeError("sandboxd failed to start; inspect sandboxd.log")
+            raise RuntimeError("execletd failed to start; inspect execletd.log")
         self.proxy = FaultProxy(port, self.artifacts / "proxy.ndjson")
         self.client = Client(domain=self.proxy.domain, api_key=self.key, max_retries=2)
         self.direct = Client(domain=self.domain, api_key=self.key, max_retries=2)
@@ -87,10 +87,10 @@ class Suite:
                                  for p in files if p.is_file() and "__pycache__" not in str(p)}
         self.report["git_head"] = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
         self.report["git_status"] = subprocess.check_output(["git", "status", "--short"], cwd=root, text=True).splitlines()
-        distribution = importlib.metadata.distribution("tiny-sandbox")
+        distribution = importlib.metadata.distribution("execlet")
         self.report["installed_sha256"] = {
             str(file): hashlib.sha256(Path(distribution.locate_file(file)).read_bytes()).hexdigest()
-            for file in distribution.files or [] if str(file).startswith("tiny_sandbox/") and file.suffix != ".pyc"
+            for file in distribution.files or [] if str(file).startswith("execlet/") and file.suffix != ".pyc"
         }
         self.report["wheel_sha256"] = {str(path): hashlib.sha256(path.read_bytes()).hexdigest()
                                          for path in (self.artifacts / "wheels").glob("*.whl")}
@@ -268,11 +268,12 @@ class Suite:
         return evidence
 
     def distribution(self, name):
-        distribution = importlib.metadata.distribution("tiny-sandbox")
+        distribution = importlib.metadata.distribution("execlet")
         files = [str(file) for file in distribution.files or []]
-        require("tiny_sandbox/py.typed" in files, "installed wheel omitted py.typed")
+        require("execlet/py.typed" in files, "installed wheel omitted py.typed")
+        require(not any(file.startswith("tiny_sandbox/") for file in files), "installed wheel owns legacy package files")
         require(distribution.requires is None or not distribution.requires, "standard-library SDK has runtime dependencies")
-        installed = Path(distribution.locate_file("tiny_sandbox/__init__.py")).resolve()
+        installed = Path(distribution.locate_file("execlet/__init__.py")).resolve()
         require("site-packages" in installed.parts, f"SDK imported from source instead of installed wheel: {installed}")
         return {"version": distribution.version, "installed_module": str(installed), "py_typed": True}
 
@@ -642,7 +643,7 @@ class Suite:
         with self.sandbox() as sb:
             execution = self.direct.start_execution(sb.id, ExecuteRequest(command=["sh", "-c", "echo before-eviction; sleep 30"]))
             time.sleep(.2)
-            subprocess.run(["docker", "kill", f"tiny-sandbox-{sb.id}"], check=True, capture_output=True)
+            subprocess.run(["docker", "kill", f"execlet-{sb.id}"], check=True, capture_output=True)
             result = self.client.stream_execution(sb.id, execution.id)
             require(result.termination_reason == "evicted", f"external kill reason {result.termination_reason}")
             require("before-eviction" in result.stdout, "eviction lost retained output")
@@ -678,10 +679,10 @@ class Suite:
         if self.log:
             self.log.close()
         if self.owner:
-            before = subprocess.check_output(["docker", "ps", "-aq", "--filter", f"label=tiny-sandbox.owner={self.owner}"], text=True).split()
+            before = subprocess.check_output(["docker", "ps", "-aq", "--filter", f"label=execlet.owner={self.owner}"], text=True).split()
             if before:
                 subprocess.run(["docker", "rm", "-f", *before], check=True, capture_output=True)
-            after = subprocess.check_output(["docker", "ps", "-aq", "--filter", f"label=tiny-sandbox.owner={self.owner}"], text=True).split()
+            after = subprocess.check_output(["docker", "ps", "-aq", "--filter", f"label=execlet.owner={self.owner}"], text=True).split()
             self.report["cleanup"] = {"owner": self.owner, "leaked_before_fallback": before, "remaining_after_cleanup": after, "errors": errors}
             if before or after or errors:
                 self.results.append({"name": "cleanup-no-leaks", "status": "failed", "evidence": self.report["cleanup"]})

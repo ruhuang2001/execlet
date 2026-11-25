@@ -10,7 +10,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/ruhuang2001/tiny-sandbox/internal/wirejson"
+	"github.com/ruhuang2001/execlet/internal/wirejson"
 )
 
 func (c *Client) PullImage(ctx context.Context, image string) error {

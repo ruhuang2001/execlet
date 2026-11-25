@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -14,7 +15,7 @@ import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-IMAGE = "tiny-sandbox-mcp:local"
+IMAGE = "execlet-mcp:local"
 COMMAND = [
     "env",
     "PYTHONPATH=sandbox-python/src",
@@ -29,15 +30,26 @@ COMMAND = [
 ]
 
 
+def copy_fixture(work):
+    subprocess.run(["git", "clone", "--quiet", "--local", "--no-checkout", ROOT, work], check=True)
+    paths = subprocess.check_output(["git", "ls-files", "-coz", "--exclude-standard", "--", "sandbox-python"], cwd=ROOT)
+    for raw in set(filter(None, paths.split(b"\0"))):
+        path = Path(os.fsdecode(raw))
+        src = ROOT / path
+        if src.is_symlink() or src.is_file():
+            dest = work / path
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dest, follow_symlinks=False)
+
+
 def run(out, tmp):
     def command(*args, **kw):
         return subprocess.check_output(args, text=True, **kw).strip()
 
     out.mkdir(parents=True, exist_ok=True)
     work = tmp / "checkout"
-    command("git", "clone", "--quiet", "--local", "--no-checkout", str(ROOT), str(work))
-    command("git", "-C", str(work), "checkout", "HEAD", "--", "sandbox-python")
-    source = work / "sandbox-python/src/tiny_sandbox/e2b.py"
+    copy_fixture(work)
+    source = work / "sandbox-python/src/execlet/e2b.py"
     correct = source.read_text()
     broken = correct.replace("round(value * 1000)", "round(value * 100)", 1)
     assert broken != correct
@@ -55,12 +67,12 @@ def run(out, tmp):
         json.dumps(
             {
                 "amp.mcpServers": {
-                    "tiny-sandbox": {
+                    "execlet": {
                         "command": sys.executable,
                         "args": [
                             str(ROOT / "scripts/amp-e2e/record_mcp.py"),
                             str(transcript),
-                            str(ROOT / "bin/sandboxctl"),
+                            str(ROOT / "bin/execletctl"),
                             "mcp",
                             "--workspace",
                             str(work),
@@ -74,24 +86,24 @@ def run(out, tmp):
                         },
                     }
                 },
-                "amp.tools.enable": ["mcp__tiny_sandbox__*", "apply_patch"],
+                "amp.tools.enable": ["mcp__execlet__*", "apply_patch"],
             }
         )
     )
     prompt = (
-        "Use the configured tiny-sandbox MCP tools to repair an intentionally broken Python unit in this temporary "
+        "Use the configured execlet MCP tools to repair an intentionally broken Python unit in this temporary "
         "checkout. Create a sandbox with default network and sync_workspace. Run exactly this argv with the run_command "
         "MCP tool and observe the pytest failure: "
         + json.dumps(COMMAND)
         + ". In the HOST checkout edit only "
-        "sandbox-python/src/tiny_sandbox/e2b.py: change round(value * 100) back to round(value * 1000). "
+        "sandbox-python/src/execlet/e2b.py: change round(value * 100) back to round(value * 1000). "
         "Use your host editing tool for that edit. Sync the checkout incrementally with reset=false; only one changed file should upload. Run the same pytest argv using the "
         "MCP server again, verify it passes and destroy_sandbox. Do not run tests on the host or use Docker directly. "
         "Make no commits. Stop after reporting the failed and passed exit codes and cleanup."
     )
     with (out / "daemon.log").open("w") as log:
         daemon = subprocess.Popen(
-            [ROOT / "bin/sandboxd", "-owner", owner, "-addr", address],
+            [ROOT / "bin/execletd", "-owner", owner, "-addr", address],
             stdout=log,
             stderr=log,
             env={**os.environ, "SANDBOX_API_KEY": ""},
@@ -119,7 +131,7 @@ def run(out, tmp):
             ]
             tools = command(*cli, "tools", "list", cwd=work)
             (out / "tools.txt").write_text(
-                "\n".join(x for x in tools.splitlines() if "mcp__tiny_sandbox__" in x)
+                "\n".join(x for x in tools.splitlines() if "mcp__execlet__" in x)
                 + "\n"
             )
             with (
@@ -186,7 +198,7 @@ def run(out, tmp):
                 created["network"] == "none"
                 and len(syncs) >= 2
                 and syncs[0]["uploaded"] > 1
-                and syncs[-1]["uploaded"] >= 1
+                and syncs[-1]["uploaded"] == 1
             ), rows
             assert runs[0]["exit_code"] == 1 and "1 failed" in runs[0]["stdout"], runs[
                 0
@@ -209,7 +221,7 @@ def run(out, tmp):
             )
             assert rows[-1]["tool"] == "destroy_sandbox", rows[-1]
             remaining = command(
-                "docker", "ps", "-aq", "--filter", "label=tiny-sandbox.owner=" + owner
+                "docker", "ps", "-aq", "--filter", "label=execlet.owner=" + owner
             ).split()
             assert not remaining, remaining
             report = dict(
@@ -217,8 +229,8 @@ def run(out, tmp):
                 image=image,
                 sandbox=created,
                 docker_network_mode=network,
-                repository="tiny-sandbox/sandbox-python",
-                commit=command("git", "-C", str(work), "rev-parse", "HEAD"),
+                repository="execlet/sandbox-python",
+                base_commit=command("git", "-C", str(work), "rev-parse", "HEAD"),
                 test=COMMAND[-1],
                 exit_codes=[runs[0]["exit_code"], runs[-1]["exit_code"]],
                 host_before_sha256=hashlib.sha256(broken.encode()).hexdigest(),

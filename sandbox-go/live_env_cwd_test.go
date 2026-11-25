@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	sandbox "github.com/ruhuang2001/tiny-sandbox/sandbox-go"
+	sandbox "github.com/ruhuang2001/execlet/sandbox-go"
 )
 
 func liveExec(t *testing.T, c *sandbox.Client, sandboxID string, req sandbox.ExecuteRequest) (*sandbox.Execution, error) {

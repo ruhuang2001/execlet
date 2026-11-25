@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/ruhuang2001/tiny-sandbox/internal/wirejson"
+	"github.com/ruhuang2001/execlet/internal/wirejson"
 )
 
 type ImageInfo struct {

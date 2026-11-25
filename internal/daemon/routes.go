@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/ruhuang2001/tiny-sandbox/internal/wirejson"
+	"github.com/ruhuang2001/execlet/internal/wirejson"
 )
 
 type Operation struct {

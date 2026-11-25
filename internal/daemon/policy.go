@@ -5,7 +5,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"github.com/ruhuang2001/tiny-sandbox/internal/egress"
+	"github.com/ruhuang2001/execlet/internal/egress"
 	"math"
 	"os"
 	"slices"

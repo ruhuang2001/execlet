@@ -15,11 +15,11 @@ from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import patch
 
-from tiny_sandbox import (
+from execlet import (
     CancellationToken, Capabilities, Client, CommandAttachment, Error, ExecuteRequest,
     Execution, ExecutionKillResult, Sandbox as NativeSandbox,
 )
-from tiny_sandbox.e2b import (
+from execlet.e2b import (
     AdapterError, AuthenticationException, CommandExitException, CommandHandle,
     CommandResult, InvalidArgumentException, NotFoundException, Sandbox,
     SandboxNotFoundException, TimeoutException,
@@ -678,7 +678,7 @@ class BackgroundCommandsTests(unittest.TestCase):
         self.assertEqual(self.http.requests("GET", "/v1/capabilities"), [])
 
     def test_native_new_fields_fail_before_mutation_on_old_server(self):
-        from tiny_sandbox import CreateSandboxRequest
+        from execlet import CreateSandboxRequest
         self.http.put("GET", "/v1/capabilities", Reply({}, 404))
         operations = [
             lambda: self.native.create_sandbox(CreateSandboxRequest(env={"TOKEN": "private"})),

@@ -15,7 +15,7 @@ import urllib.request
 import uuid
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-IMAGE = "tiny-sandbox-mcp:local"
+IMAGE = "execlet-mcp:local"
 
 
 def shell(*args, **kwargs):
@@ -44,9 +44,9 @@ def compact(value):
 
 def run(tmp, evidence, record):
     for binary, pkg in (
-        ("sandboxd", "./cmd/sandboxd"),
-        ("sandboxctl", "./cmd/sandboxctl"),
-        ("client", "./cmd/sandboxctl/testdata/mcp-client"),
+        ("execletd", "./cmd/execletd"),
+        ("execletctl", "./cmd/execletctl"),
+        ("client", "./cmd/execletctl/testdata/mcp-client"),
     ):
         shell("go", "build", "-o", tmp / binary, pkg)
     shell("docker", "build", "-t", IMAGE, "examples/mcp")
@@ -57,13 +57,23 @@ def run(tmp, evidence, record):
     owner = "mcp-e2e-" + str(uuid.uuid4())
     work = tmp / "workspace"
     shell("git", "clone", "--quiet", "--local", "--no-checkout", str(ROOT), str(work))
-    shell("git", "-C", str(work), "checkout", "HEAD", "--", "sandbox-python")
+    paths = shell(
+        "git", "ls-files", "-coz", "--exclude-standard", "--", "sandbox-python", capture_output=True
+    ).stdout.split(b"\0")
+    for raw in sorted(set(filter(None, paths))):
+        path = pathlib.Path(os.fsdecode(raw))
+        src = ROOT / path
+        if src.is_file() or src.is_symlink():
+            dest = work / path
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dest, follow_symlinks=False)
+    shell("git", "-C", str(work), "add", "--", "sandbox-python")
     revision = shell(
         "git", "-C", str(work), "rev-parse", "HEAD", capture_output=True, text=True
     ).stdout.strip()
     record["repository"] = {
-        "commit": revision,
-        "project": "tiny-sandbox/sandbox-python",
+        "base_commit": revision,
+        "project": "execlet/sandbox-python",
     }
     (work / ".gitignore").write_text("*.ignored\n**/private.bin\n")
     for name in ("private.bin", "ignored/nested/private.bin", "ignored/private.bin"):
@@ -77,10 +87,10 @@ def run(tmp, evidence, record):
     shell("git", "-C", str(work), "add", "-f", "tracked.ignored")
     (work / "ignored/.gitignore").write_text("nested-only\n")
     (work / "ignored/nested-only").write_text("excluded")
-    (work / "outside-link").symlink_to(tmp / "sandboxctl")
+    (work / "outside-link").symlink_to(tmp / "execletctl")
     pkg = work / "sandbox-python"
     (pkg / "remove me").write_text("old")
-    source = pkg / "src/tiny_sandbox/e2b.py"
+    source = pkg / "src/execlet/e2b.py"
     correct = source.read_text()
     regression = correct.replace("round(value * 1000)", "round(value * 100)", 1)
     assert regression != correct
@@ -91,7 +101,7 @@ def run(tmp, evidence, record):
     with contextlib.ExitStack() as stack:
         log = stack.enter_context((evidence / "daemon.log").open("w"))
         daemon = subprocess.Popen(
-            [tmp / "sandboxd", "-addr", addr, "-owner", owner],
+            [tmp / "execletd", "-addr", addr, "-owner", owner],
             env=env,
             stdout=log,
             stderr=log,
@@ -104,15 +114,15 @@ def run(tmp, evidence, record):
                     break
             except OSError:
                 if daemon.poll() is not None:
-                    raise RuntimeError("sandboxd exited; see daemon.log")
+                    raise RuntimeError("execletd exited; see daemon.log")
                 time.sleep(0.1)
         else:
-            raise RuntimeError("sandboxd did not start")
+            raise RuntimeError("execletd did not start")
 
-        doctor = shell(tmp / "sandboxctl", "doctor", "mcp", "--workspace", work,
+        doctor = shell(tmp / "execletctl", "doctor", "mcp", "--workspace", work,
                        env=env, capture_output=True, text=True)
-        config = json.loads(doctor.stdout)["mcpServers"]["tiny-sandbox"]
-        assert pathlib.Path(config["command"]).samefile(tmp / "sandboxctl")
+        config = json.loads(doctor.stdout)["mcpServers"]["execlet"]
+        assert pathlib.Path(config["command"]).samefile(tmp / "execletctl")
         assert config["args"] == ["mcp", "--workspace", str(work), "--image", IMAGE]
         assert config["env"] == {"SANDBOX_DOMAIN": domain}
         assert not get(domain + "/v1/sandboxes")["sandboxes"]
@@ -121,7 +131,7 @@ def run(tmp, evidence, record):
             proc = subprocess.Popen(
                 [
                     tmp / "client",
-                    tmp / "sandboxctl",
+                    tmp / "execletctl",
                     "mcp",
                     "--workspace",
                     workspace,
@@ -146,7 +156,7 @@ def run(tmp, evidence, record):
 
         for missing_args in (["--image", IMAGE], ["--workspace", str(work)]):
             invalid = subprocess.run(
-                [tmp / "sandboxctl", "mcp", *missing_args],
+                [tmp / "execletctl", "mcp", *missing_args],
                 capture_output=True,
                 timeout=10,
             )
@@ -263,7 +273,7 @@ def run(tmp, evidence, record):
         assert unblock_upload["exit_code"] == 0, unblock_upload
         retried = tool("sync_workspace")
         assert retried["uploaded"] == 2, retried
-        child = tool("read_file", path="/tmp/tiny-sandbox-workspace/transition/child")
+        child = tool("read_file", path="/tmp/execlet-workspace/transition/child")
         assert child["content"] == "new child", child
         preserved = tool("run_command", command=["test", "-f", "transition/guest-only"])
         assert preserved["exit_code"] == 0, preserved
@@ -296,7 +306,7 @@ def run(tmp, evidence, record):
         assert unblock_upload["exit_code"] == 0, unblock_upload
         retried = tool("sync_workspace")
         assert retried["uploaded"] == 2 and retried["deleted"] == 1, retried
-        second = tool("read_file", path="/tmp/tiny-sandbox-workspace/" + blocker.name)
+        second = tool("read_file", path="/tmp/execlet-workspace/" + blocker.name)
         assert second["content"] == "second batch", second
         assert tool("sync_workspace")["uploaded"] == 0
         reverse.unlink()
@@ -304,7 +314,7 @@ def run(tmp, evidence, record):
         assert tool("sync_workspace")["deleted"] == 2
 
         (pkg / "remove me").unlink()
-        blocked = "/tmp/tiny-sandbox-workspace.failed"
+        blocked = "/tmp/execlet-workspace.failed"
         block_swap = tool(
             "run_command",
             command=["sh", "-ec", 'mkdir "$1"; touch "$1/file"; chmod 500 "$1"', "sh", blocked],
@@ -333,7 +343,7 @@ def run(tmp, evidence, record):
         assert gone["exit_code"] == 0, gone
         assert tool("write_file", path="/tmp/note", content="hello")["type"] == "file"
         assert tool("read_file", path="/tmp/note")["content"] == "hello"
-        manifest = cache_home / ".cache/tiny-sandbox/mcp" / (sb + ".json")
+        manifest = cache_home / ".cache/execlet/mcp" / (sb + ".json")
         assert tool("run_command", command=["touch", "guest-only"])["exit_code"] == 0
         manifest.write_text("{interrupted")
         assert tool("sync_workspace", reset=True)["uploaded"] == initial["uploaded"] - 1
@@ -500,11 +510,11 @@ def run(tmp, evidence, record):
             "ps",
             "-aq",
             "--filter",
-            "label=tiny-sandbox.owner=" + owner,
+            "label=execlet.owner=" + owner,
             capture_output=True,
             text=True,
         ).stdout.splitlines()
-        manifest = cache_home / ".cache/tiny-sandbox/mcp" / (sb + ".json")
+        manifest = cache_home / ".cache/execlet/mcp" / (sb + ".json")
         record["cleanup"] = {
             "active_ids": [row["id"] for row in records if row["state"] != "killed"],
             "records": [(row["id"], row["state"]) for row in records],
@@ -660,12 +670,12 @@ def run(tmp, evidence, record):
         }
         for name, payload in inputs.items():
             msg = call(name, error=True, sandbox_id=offline_id, **payload)
-            assert "daemon_unreachable" in msg and "sandboxctl doctor" in msg, (
+            assert "daemon_unreachable" in msg and "execletctl doctor" in msg, (
                 name,
                 msg,
             )
         msg = call("create_sandbox", error=True)
-        assert "daemon_unreachable" in msg and "sandboxctl doctor" in msg
+        assert "daemon_unreachable" in msg and "execletctl doctor" in msg
         (manifest.parent / (offline_id + ".owner")).unlink(missing_ok=True)
         policy = tmp / "bridge-only.json"
         policy.write_text(
@@ -681,7 +691,7 @@ def run(tmp, evidence, record):
             )
         )
         replacement = subprocess.Popen(
-            [tmp / "sandboxd", "-addr", addr, "-owner", owner, "-policy", policy],
+            [tmp / "execletd", "-addr", addr, "-owner", owner, "-policy", policy],
             env=env,
             stdout=log,
             stderr=log,

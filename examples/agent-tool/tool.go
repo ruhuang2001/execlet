@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ruhuang2001/tiny-sandbox/internal/wirejson"
-	sandbox "github.com/ruhuang2001/tiny-sandbox/sandbox-go"
+	"github.com/ruhuang2001/execlet/internal/wirejson"
+	sandbox "github.com/ruhuang2001/execlet/sandbox-go"
 )
 
 const ToolName = "run_python"

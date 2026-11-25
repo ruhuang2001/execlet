@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const egressSocket = "/run/tiny-sandbox/egress.sock"
+const egressSocket = "/run/execlet/egress.sock"
 
 func startProxyListener() error {
 	local, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp4", "127.0.0.1:8888")

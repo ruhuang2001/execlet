@@ -8,7 +8,7 @@ whole daemon, not one tenant.
 
 ## Administrator policy
 
-`sandboxd -policy /absolute/path/policy.json` enables strict aggregate admission.
+`execletd -policy /absolute/path/policy.json` enables strict aggregate admission.
 The aggregate budgets and image and network allowlists are required. Unknown fields, nonpositive budgets and unsupported
 network modes prevent startup. For example, replace the image placeholder
 with an installed, approved image digest:
@@ -36,9 +36,10 @@ sandbox admission limits also apply.
 The allowlist compares exact image strings. Prefer immutable digests: allowing
 a mutable tag does not pin its content. Before admitting a container, the
 backend checks Docker HostConfig and reads actual cgroup-v2 memory, swap, CPU
-and PID limits inside the guest. Unsupported controllers, unreadable probes
-or mismatched settings fail closed and trigger removal. Images must supply
-`sh`, `cat`, `ls` and readable cgroup-v2 files for these probes.
+and PID limits. The source is inside the guest with `runc` and on the local
+host with `runsc`. Missing or mismatched limits fail closed and trigger
+removal. Images must supply `sh`, `cat`, `ls` and, for `runc`, readable
+cgroup-v2 files.
 
 The default 64-slot admission limit includes every creation in progress, live
 sandbox and container awaiting confirmed cleanup. This limit applies with or
@@ -60,15 +61,15 @@ Use an atomic rename when editing the policy.
 
 An administrator with local Docker access can save a configured sandbox and
 publish its digest to the same policy. Run the tool against the Docker context
-used by sandboxd and pass the daemon's ownership label.
+used by execletd and pass the daemon's ownership label.
 
 ```sh
-python3 scripts/template-admin.py save --policy /etc/tiny-sandbox/policy.json \
-  --owner sandboxd-prod --sandbox "$SANDBOX_ID" --name python-test
+python3 scripts/template-admin.py save --policy /etc/execlet/policy.json \
+  --owner execletd-prod --sandbox "$SANDBOX_ID" --name python-test
 
-sandboxctl run --image template:python-test --rm -- python3 -m pytest
+execletctl run --image template:python-test --rm -- python3 -m pytest
 
-python3 scripts/template-admin.py delete --policy /etc/tiny-sandbox/policy.json \
+python3 scripts/template-admin.py delete --policy /etc/execlet/policy.json \
   --name python-test
 ```
 
@@ -87,7 +88,7 @@ aborts publication.
  Finish dependency installation before saving to
 capture an application-consistent project. Contents under `/tmp`, `/var/tmp`,
 `/run`, `/dev`, `/proc`, `/sys`, and each mounted volume are excluded.
-The tool also omits `/.tiny-sandbox`, `/.dockerenv` and Docker-managed
+The tool also omits `/.execlet`, `/.dockerenv` and Docker-managed
 `/etc/hosts`, `/etc/hostname` and `/etc/resolv.conf`. Other files, including
 project-local settings and credentials written to disk, are part of the
 snapshot. A retained hard link to an excluded path fails publication.
@@ -102,7 +103,7 @@ image allowlist entry references the digest, it also removes this tool's
 Docker tag. Docker retains layers needed by existing containers. Registry
 images and independently managed tags stay under administrator control.
 
-Run `python3 scripts/e2e-templates.py --server bin/sandboxd` to exercise
+Run `python3 scripts/e2e-templates.py --server bin/execletd` to exercise
 the save, restart, isolation and delete flow and write the acceptance report
 to `artifacts/templates/report.json`.
 
@@ -123,7 +124,7 @@ to `artifacts/templates/report.json`.
   variables only have the guest loopback interface. Filtered sandboxes require
   a running guest agent and are retired during daemon restart.
 
-The relay accepts up to 64 active tunnels per sandbox and starts a relay for each incoming connection. Set `egress.tunnel_idle_seconds` to control the inactivity timeout (default 120 seconds). A transfer with continuing traffic can exceed that duration. Inspect sandboxd's `egress request denied` logs for the requested host and reason. DNS proxies using fake-IP mode can return addresses in `198.18.0.0/15`, which the policy rejects. Configure real-address DNS resolution for approved domains on the sandboxd host.
+The relay accepts up to 64 active tunnels per sandbox and starts a relay for each incoming connection. Set `egress.tunnel_idle_seconds` to control the inactivity timeout (default 120 seconds). A transfer with continuing traffic can exceed that duration. Inspect execletd's `egress request denied` logs for the requested host and reason. DNS proxies using fake-IP mode can return addresses in `198.18.0.0/15`, which the policy rejects. Configure real-address DNS resolution for approved domains on the execletd host.
 
 For a deployment that uses the package index, add these policy fields to the
 resource budgets and image allowlist above.
@@ -138,7 +139,7 @@ resource budgets and image allowlist above.
 The optional `egress.credential` object binds one GET request to a fixed
 HTTPS URL and a list of authorized image identities. Set `url`, `images`
 and `token_env` in that object. Supply the bearer token in the named
-environment variable of sandboxd. A workload in an authorized filtered
+environment variable of execletd. A workload in an authorized filtered
 sandbox can call `GET http://127.0.0.1:8888/credential`. The host identifies
 the sandbox from its Docker exec channel, sends a newly constructed request,
 and returns up to 1 MiB from a successful response. The broker exposes
@@ -224,8 +225,8 @@ compatible image already installed, using a fresh short output path:
 
 ```sh
 make build
-IMAGE=$(docker image inspect tiny-sandbox-e2b:local --format '{{.Id}}')
-python3 scripts/e2e-operations.py --server bin/sandboxd --image "$IMAGE" \
+IMAGE=$(docker image inspect execlet-e2b:local --format '{{.Id}}')
+python3 scripts/e2e-operations.py --server bin/execletd --image "$IMAGE" \
   --out artifacts/operations --samples 5
 ```
 
@@ -250,7 +251,7 @@ uses a Docker fault proxy. For short-command measurements use the separate
 `short-latency.json` workload, which runs in normal CI or on its own:
 
 ```sh
-python3 scripts/e2e-operations.py --server bin/sandboxd --image "$IMAGE" \
+python3 scripts/e2e-operations.py --server bin/execletd --image "$IMAGE" \
   --benchmark-only --samples 60 --out artifacts/latency-60
 ```
 
@@ -294,13 +295,13 @@ A deployment policy can reserve fresh running containers for repeated requests. 
 
 Replace the example digest with the installed image ID or repository digest. Include `runc` in `allowed_runtimes` when setting the runtime explicitly. Omitting resource, network or runtime fields applies the same defaults as sandbox creation. Restart the daemon to load a new pool configuration. With no `prewarm` entries the daemon creates containers on demand.
 
-The daemon counts each standby container against every deployment budget from the beginning of provisioning. It validates resource limits before making an instance available. An incoming request claims a matching image digest, memory size, CPU limit, PID limit, network and runtime under one lock. A miss takes the usual creation path subject to available quota. The pool assigns the sandbox ID, Docker name and ownership labels at provisioning. Admission claims that identity atomically. The sandbox lifetime starts at handoff. Each instance goes to one user and is discarded on deletion. The background worker replenishes the configured target while capacity is available. Failed provisioning records a warning and backs off per profile from 2 to 60 seconds. The `tiny_sandbox_prewarm_ready` metric counts instances available for handoff.
+The daemon counts each standby container against every deployment budget from the beginning of provisioning. It validates resource limits before making an instance available. An incoming request claims a matching image digest, memory size, CPU limit, PID limit, network and runtime under one lock. A miss takes the usual creation path subject to available quota. The pool assigns the sandbox ID, Docker name and ownership labels at provisioning. Admission claims that identity atomically. The sandbox lifetime starts at handoff. Each instance goes to one user and is discarded on deletion. The background worker replenishes the configured target while capacity is available. Failed provisioning records a warning and backs off per profile from 2 to 60 seconds. The `execlet_prewarm_ready` metric counts instances available for handoff.
 
 On a journaled restart the daemon reconciles each delivered sandbox against its durable record. It removes unclaimed owner-labelled containers, then starts filling the pool. Graceful shutdown also removes idle pool containers. Changing a named template switches new requests to its current digest. On its next reconciliation, the pool removes excess standby containers for the old digest and fills the new target. Deleting an alias leaves its pool target dormant, including across restarts. Registering that name again reactivates it.
 
 Run `python3 scripts/e2e-prewarm.py --samples 10` with Docker available to measure the interval from a create request to its first completed command. A private loopback registry serves a unique single-layer image for cold pulls. The script compares cold pulls, a local image, template resolution and confirmed pool hits on one engine. The output includes all samples, P50, P95, saturation and recovery results in `artifacts/prewarm-e2e/acceptance.json`.
 
-### Runtime verification
+## Runtime verification
 
 Clients specifying a runtime first require the `sandbox.runtime.v1` capability so older servers that ignore unknown fields cannot silently select their default.
 
@@ -308,4 +309,16 @@ Set `allowed_runtimes` in the deployment policy to the Docker runtime names the 
 
 Docker inspection selects the filesystem transfer path at creation and journal recovery, including when the Docker Engine chooses its default runtime.
 
-Runsc exposes a virtualized cgroup hierarchy to the guest. Policy verification therefore requires sandboxd to run on the Linux Docker host with access to its process table and cgroup tree. Admission fails if the matching scope or a limit cannot be checked. Runsc's private overlay and `/tmp` can diverge from Docker's archive view of the container. The backend uses a guest transfer helper for live filesystem operations.
+Runsc exposes a virtualized cgroup hierarchy to the guest. Policy verification therefore requires execletd to run on the Linux Docker host with access to its process table and cgroup tree. Admission fails if the matching scope or a limit cannot be checked. Runsc's private overlay and `/tmp` can diverge from Docker's archive view of the container. The backend uses a guest transfer helper for live filesystem operations.
+
+On a dedicated Linux host with cgroup v2 and both Docker runtimes registered,
+run `make build runtime-image`, then:
+
+```sh
+sudo env "PATH=$PATH" python3 scripts/e2e-runtime.py
+sudo env "PATH=$PATH" python3 scripts/e2e-templates.py --runtime runsc --out artifacts/runsc-template
+```
+
+Review the runtime and template reports under `artifacts/`. These
+checks exercise an actual workload and storage, not resistance to sandbox
+escape or a guarantee of identical behavior on every host.

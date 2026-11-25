@@ -46,8 +46,8 @@ func WithMaxRetainedOutputBytes(n int) Option {
 	return func(s *Sandboxes) { s.maxRetainedOutput = n }
 }
 
-const OwnerLabelKey = "tiny-sandbox.owner"
-const SandboxIDLabelKey = "tiny-sandbox.id"
+const OwnerLabelKey = "execlet.owner"
+const SandboxIDLabelKey = "execlet.id"
 
 const (
 	ambiguousWindow     = 2 * time.Second
@@ -178,7 +178,7 @@ func (s *Sandboxes) Create(ctx context.Context, req CreateRequest) (result Sandb
 		if retErr != nil {
 			outcome = string(CodeOf(retErr))
 		}
-		s.metrics.observe("tiny_sandbox_create_seconds{outcome="+fmt.Sprintf("%q", outcome)+"}", start)
+		s.metrics.observe("execlet_create_seconds{outcome="+fmt.Sprintf("%q", outcome)+"}", start)
 	}()
 	if err := s.durableReady(); err != nil {
 		return Sandbox{}, err
@@ -227,7 +227,7 @@ func (s *Sandboxes) Create(ctx context.Context, req CreateRequest) (result Sandb
 	if id == "" {
 		id = newID("sbx_")
 	}
-	spec.Name = "tiny-sandbox-" + id
+	spec.Name = "execlet-" + id
 	spec.Labels = map[string]string{OwnerLabelKey: s.owner, SandboxIDLabelKey: id}
 	returnStandby := func() {
 		if containerID != "" && pool != nil {

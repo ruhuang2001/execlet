@@ -36,7 +36,7 @@ def main():
 
     with (OUT / "daemon.log").open("w") as log:
         proc = subprocess.Popen(
-            [ROOT / "bin/sandboxd", "-owner", owner, "-addr", address],
+            [ROOT / "bin/execletd", "-owner", owner, "-addr", address],
             stdout=log,
             stderr=log,
         )
@@ -52,7 +52,7 @@ def main():
             )
             assert sb["agent_mode"] == "guest" and not sb["protected"]
             sid = sb["id"]
-            shell = [ROOT / "bin/sandboxctl", "--domain", domain, "shell", sid]
+            shell = [ROOT / "bin/execletctl", "--domain", domain, "shell", sid]
 
             def session(args, data):
                 child = subprocess.run(
@@ -84,7 +84,7 @@ def main():
                 tpath + "/input",
                 b"sleep 3519 & echo $! > /tmp/terminal-child\n",
             )
-            container = "tiny-sandbox-" + sid
+            container = "execlet-" + sid
             for _ in range(50):
                 if (
                     subprocess.run(

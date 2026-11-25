@@ -42,7 +42,7 @@ def main():
         def start():
             daemon = subprocess.Popen(
                 [
-                    ROOT / "bin/sandboxd",
+                    ROOT / "bin/execletd",
                     "-addr",
                     addr,
                     "-owner",
@@ -63,7 +63,7 @@ def main():
                     time.sleep(0.05)
             daemon.terminate()
             daemon.wait()
-            raise TimeoutError("sandboxd startup")
+            raise TimeoutError("execletd startup")
 
         def stop(daemon):
             daemon.terminate()
@@ -203,7 +203,7 @@ def main():
                     "ps",
                     "-aq",
                     "--filter",
-                    "label=tiny-sandbox.owner=" + owner,
+                    "label=execlet.owner=" + owner,
                 ],
                 text=True,
             ).split()

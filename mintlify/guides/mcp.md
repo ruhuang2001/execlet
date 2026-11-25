@@ -3,47 +3,51 @@ title: "Run repository tests from an MCP client"
 description: "Sync a workspace into an offline sandbox and let an agent run pytest or go test against it."
 ---
 
-`execletctl mcp` serves sandbox tools over stdin/stdout, so any MCP client
-(Cursor, Claude Desktop, an editor agent) can sync a workspace into an offline
-sandbox, run commands, and read results — without network access from the
-sandbox and without your project files ever leaving the host.
+`execletctl mcp` serves sandbox tools over stdin/stdout. An MCP client can
+sync a workspace, run tests in an offline sandbox, and read the results. The
+workspace is sent to the configured daemon; keep it local if the files must
+stay on your host. Tool results go back to your MCP client, which may send them
+to a model.
+
+## Prepare the pytest demo
+
+Build and start the daemon from the [quickstart](/quickstart#start-the-daemon).
+From the checkout root, build the test image and check the example workspace:
 
 ```sh
 docker build -t execlet-mcp:local examples/mcp
-execletctl doctor mcp --workspace examples/mcp/demo --collect
+./bin/execletctl doctor mcp --workspace examples/mcp/demo --collect
 ```
 
-`doctor mcp` proves the loop works **before** you wire it into a client. On
-success it prints only the client configuration JSON, with absolute paths:
-
-```json
-{ "mcpServers": { "execlet": { "command": "...execletctl", "args": ["mcp", "..."] } } }
-```
-
-Merge that into `.cursor/mcp.json`. A failed check exits nonzero, prints a
-diagnostic to stderr, and prints **nothing** to stdout — so you can pipe the
-output directly into a config file.
+On success, `doctor mcp` prints only MCP client configuration JSON, including
+absolute paths and `SANDBOX_DOMAIN`. Merge its `execlet` entry into your client's
+configuration (for example, `.cursor/mcp.json`). If authentication is enabled,
+provide `SANDBOX_API_KEY` in the client's environment; the generated JSON does
+not copy it. A failed check exits nonzero and prints diagnostics to stderr,
+not a partial configuration to stdout.
 
 <Warning>
-`--collect` syncs the workspace and imports test modules, which **executes
-project code** on the host side of the check. Use it only for a project you
-trust.
+`--collect` uploads the workspace and imports test modules **inside the
+temporary sandbox**. This executes project code. Use it only for a project you
+trust. Without `--collect`, the daemon only probes pytest in the image.
 </Warning>
 
 ## What the agent can do
 
-The server exposes eight tools. The useful ones:
+Use these tools to run a test and inspect the result:
 
 | Tool | Effect |
 | --- | --- |
 | `create_sandbox` | Start an offline sandbox from an allowed image |
 | `sync_workspace` | Upload the host workspace; large trees upload in bounded batches |
-| `run` | Execute in the sandbox, defaulting to the synced workspace directory |
-| `destroy_sandbox` | Release it |
+| `run_command` | Start an argv command and return its execution ID and available result; defaults to the synced workspace |
+| `get_execution` / `cancel_execution` | Inspect retained output and status, or request cancellation |
+| `read_file` / `write_file` | Read or write a UTF-8 file inside the sandbox |
+| `destroy_sandbox` | Remove the sandbox and discard its local sync manifest |
 
-A tool call renews the sandbox's lifetime, which defaults to **1,800 seconds**.
-Set `--sandbox-ttl` to change it. Without a client attached, the daemon reclaims
-the sandbox when the lifetime expires.
+Calls that address a sandbox renew its lifetime (except destruction). The
+default is **1,800 seconds**. Set `--sandbox-ttl` to change it. Without calls to
+renew it, the sandbox expires even if the client is still connected.
 
 ## The demo: a failing test, then a fix
 
@@ -58,7 +62,7 @@ exercise rather than a smoke test. The agent request that works:
 Two things to watch for in the transcript:
 
 1. The second `sync_workspace` uploads **only the changed file**, not the tree.
-2. `run` defaults to the synced directory after the first sync, so the agent
+2. `run_command` defaults to the synced directory after the first sync, so the agent
    does not need to `cd`.
 
 ## How sync actually behaves
@@ -72,6 +76,12 @@ Two things to watch for in the transcript:
 | Per-file limit | 16 MiB |
 | Reconnect | Use the existing sandbox ID with the same workspace, daemon, credentials, and allowed images and networks |
 
+Reconnect also needs the CLI's local ownership receipt. `sandboxctl` kept it
+under `~/.cache/tiny-sandbox/mcp`; `execletctl` uses `~/.cache/execlet/mcp`
+and a different ownership scope. Copying the cache or reusing the ID does not
+migrate a session. Save needed files and destroy old sandboxes with the old CLI,
+then regenerate your client entry with `doctor mcp` and create new sessions.
+
 ## Your own project
 
 Point `--workspace` at it, install locked dependencies when you build the image,
@@ -80,12 +90,17 @@ offline, so it cannot install anything you forgot.
 
 ```sh
 docker build -t my-tests:local -f my.Dockerfile .
-execletctl mcp --workspace . --image my-tests:local
+"$EXECLET_SRC/bin/execletctl" doctor mcp --workspace . --image my-tests:local
 ```
+
+Run this in your project root with `EXECLET_SRC` pointing at the
+[built checkout](/installation#use-the-sdks-from-a-checkout). The printed
+configuration starts `execletctl mcp` with the requested workspace and image.
 
 For a Go project, `--profile go --check-deps` lists package and test
 dependencies using the image's own toolchain and module cache with
-`GOPROXY=off`. It does not run tests, so it is safe to run on a cold checkout.
+`GOPROXY=off`; it does not run the tests. A missing offline dependency fails
+the check rather than producing client config.
 
 <Note>
 The MCP server creates **offline** sandboxes by default and allows only the

@@ -28,7 +28,7 @@ def own(sandbox):
 
 try:
     provider = os.environ["CONTRACT_PROVIDER"]
-    module = "e2b" if provider == "e2b" else os.environ.get("CONTRACT_MODULE", "tiny_sandbox.e2b")
+    module = "e2b" if provider == "e2b" else os.environ.get("CONTRACT_MODULE", "execlet.e2b")
     sdk = importlib.import_module(module)
     if provider == "e2b":
         version = importlib.metadata.version("e2b")
@@ -36,7 +36,7 @@ try:
             raise RuntimeError("reference SDK version mismatch")
     else:
         try:
-            version = importlib.metadata.version("tiny-sandbox")
+            version = importlib.metadata.version("execlet")
         except importlib.metadata.PackageNotFoundError:
             version = getattr(sdk, "__version__", None)
     Sandbox = sdk.Sandbox
@@ -44,7 +44,7 @@ try:
     connect_options = {k: v for k, v in options.items() if k not in {"image", "template"}}
     emit({"ready": True, "version": version, "module": sdk.__name__, "runtime": sys.version, "pid": os.getpid()})
 except ModuleNotFoundError as e:
-    expected = {"e2b", "tiny_sandbox", "tiny_sandbox.e2b", os.environ.get("CONTRACT_MODULE", "")}
+    expected = {"e2b", "execlet", "execlet.e2b", os.environ.get("CONTRACT_MODULE", "")}
     emit({"ready": False, "status": "not_run" if e.name in expected else "failed", "reason": str(e)})
     sys.exit(2)
 except Exception as e:

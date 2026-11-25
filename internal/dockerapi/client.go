@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ruhuang2001/tiny-sandbox/internal/wirejson"
+	"github.com/ruhuang2001/execlet/internal/wirejson"
 )
 
 const maxErrorBody = 64 << 10

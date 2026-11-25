@@ -14,18 +14,25 @@ def docker(*args):
 
 if provider == 'tiny':
     assert re.fullmatch(r'e2b-contract-[a-f0-9]{32}', owner), 'refuse an unscoped owner'
-    ids = docker('ps', '-aq', '--filter', 'label=tiny-sandbox.owner=' + owner).split()
+    prefixes = {'execlet': 'execlet.owner'}
+    if operation in ('cleanup', 'sweep') and os.environ.get('CONTRACT_OLD_SERVER'):
+        prefixes['tiny-sandbox'] = 'tiny-sandbox.owner'
+
+    def owned_ids(label):
+        return docker('ps', '-aq', '--filter', f'label={label}={owner}').split()
+
     matches = []
-    for cid in ids:
-        try:
-            obj = json.loads(docker('inspect', cid))[0]
-        except subprocess.CalledProcessError as exc:
-            if any(message in (exc.stderr or '').lower() for message in ('no such object', 'no such container')):
-                continue
-            raise
-        assert obj['Config']['Labels'].get('tiny-sandbox.owner') == owner
-        if operation in ('sweep', 'count') or obj['Name'] == '/tiny-sandbox-' + sid:
-            matches.append(obj)
+    for prefix, label in prefixes.items():
+        for cid in owned_ids(label):
+            try:
+                obj = json.loads(docker('inspect', cid))[0]
+            except subprocess.CalledProcessError as exc:
+                if any(message in (exc.stderr or '').lower() for message in ('no such object', 'no such container')):
+                    continue
+                raise
+            assert obj['Config']['Labels'].get(label) == owner
+            if operation in ('sweep', 'count') or obj['Name'] == f'/{prefix}-{sid}':
+                matches.append(obj)
     if operation == 'count':
         answer = {'count':len(matches)}
     elif operation == 'process':
@@ -52,8 +59,8 @@ if provider == 'tiny':
     elif operation in ('cleanup','sweep'):
         for obj in matches:
             docker('rm','-f',obj['Id'])
-        remaining = docker('ps','-aq','--filter','label=tiny-sandbox.owner=' + owner).split()
-        assert not set(remaining) & {o['Id'][:12] for o in matches}
+        remaining = {cid for label in prefixes.values() for cid in owned_ids(label)}
+        assert not remaining & {o['Id'][:12] for o in matches}
         answer = {'confirmed':True, 'removed':len(matches)}
     else:
         answer = {'alive':any(o['State']['Running'] for o in matches), 'exists':bool(matches)}

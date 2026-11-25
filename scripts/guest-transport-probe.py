@@ -151,7 +151,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--server", type=Path, default=Path("bin/sandboxd"))
+    parser.add_argument("--server", type=Path, default=Path("bin/execletd"))
     parser.add_argument("--out", type=Path, default=Path("artifacts/guest-transport"))
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
@@ -241,9 +241,9 @@ def main():
                         == "symlink"
                     )
                     if fault == "missing_arch":
-                        cid = "tiny-sandbox-" + sb["id"]
+                        cid = "execlet-" + sb["id"]
                         actual = docker(
-                            "exec", cid, "sha256sum", "/.tiny-sandbox/guest"
+                            "exec", cid, "sha256sum", "/.execlet/guest"
                         ).split()[0]
                         from hashlib import sha256
                         import platform
@@ -318,7 +318,7 @@ def main():
                 server.wait(timeout=30)
                 proxy.shutdown()
                 assert not docker(
-                    "ps", "-aq", "--filter", "label=tiny-sandbox.owner=" + owner
+                    "ps", "-aq", "--filter", "label=execlet.owner=" + owner
                 )
             record("cleanup", True)
 

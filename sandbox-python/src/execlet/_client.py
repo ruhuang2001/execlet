@@ -16,7 +16,7 @@ from ._transport import _backoff, _sleep, _status_error
 
 
 class Client(SandboxAPI):
-    """Client for sandboxd. See docs/sdk-python.md for the public contract."""
+    """Client for execletd. See docs/sdk-python.md for the public contract."""
 
     def stream_terminal(
         self,

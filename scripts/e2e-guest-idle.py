@@ -158,7 +158,7 @@ def run(args):
                             "ps",
                             "-aq",
                             "--filter",
-                            "label=tiny-sandbox.owner=" + owner,
+                            "label=execlet.owner=" + owner,
                         ]
                     ).strip()
 

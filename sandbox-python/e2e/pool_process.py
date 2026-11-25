@@ -7,7 +7,7 @@ import signal
 import sys
 import traceback
 
-from tiny_sandbox import Client, Error
+from execlet import Client, Error
 
 
 def high_fd():

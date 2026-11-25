@@ -1,7 +1,7 @@
-# tiny-sandbox Python SDK
+# execlet Python SDK
 
-Synchronous, standard-library-only client for tiny-sandbox. Requires Python
-3.10 or newer and a running `sandboxd` with Docker. Use client and server
+Synchronous, standard-library-only client for execlet. Requires Python
+3.10 or newer and a running `execletd` with Docker. Use client and server
 builds from compatible revisions.
 
 Install from the repository root:
@@ -10,8 +10,18 @@ Install from the repository root:
 python3 -m pip install ./sandbox-python
 ```
 
+To distribute a wheel from this checkout, build into a fresh directory and check
+its contents before installing or sharing it. The build reads `src/execlet`
+directly; it does not reuse a previous setuptools `build/lib` directory.
+
+```sh
+out=$(mktemp -d)
+python3 -m pip wheel --no-deps --wheel-dir "$out" ./sandbox-python
+python3 scripts/check-sdk-wheel.py "$out"/*.whl
+```
+
 ```python
-from tiny_sandbox import Client, CreateSandboxRequest
+from execlet import Client, CreateSandboxRequest
 
 with Client() as client:
     with client.sandbox(CreateSandboxRequest(image="alpine:3.20")) as sandbox:
@@ -59,7 +69,7 @@ or kill. A missing capability fails before the command request is sent.
 
 ## Optional E2B facade
 
-`from tiny_sandbox.e2b import Sandbox, CommandHandle, CommandExitException` exposes the
+`from execlet.e2b import Sandbox, CommandHandle, CommandExitException` exposes the
 E2B 2.64.0 basic Sandbox subset: lifecycle, Bash commands with callbacks and
 compatible errors, text/binary files and complete bounded directory listings.
 It has no E2B dependency or cloud-key requirement. Set `SANDBOX_E2B_IMAGE` to
@@ -80,7 +90,7 @@ as the command, with no shared cache or fallback. Mixed-version server pools
 and downgrade during a session are unsupported.
 
 ```python
-from tiny_sandbox.e2b import Sandbox
+from execlet.e2b import Sandbox
 
 sandbox = Sandbox.create(timeout=300)
 handle = sandbox.commands.run(
@@ -110,7 +120,7 @@ connected.kill()
   confirmed guest PID, even on fast exit. Omitted/false background returns
   `CommandResult`. Literal overloads and a dynamic-boolean union are typed.
 - `handle.pid`, `handle.sandbox_id`, and `handle.execution_id` are read-only.
-  `execution_id` is a tiny-sandbox diagnostic/native-recovery extension.
+  `execution_id` is a execlet diagnostic/native-recovery extension.
   PID reuse may select a newer command on a fresh lookup, but an existing
   handle always observes or kills its original execution.
 - `handle.wait(on_stdout=..., on_stderr=...)` is the synchronous output

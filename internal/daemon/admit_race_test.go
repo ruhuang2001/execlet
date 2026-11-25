@@ -5,7 +5,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/ruhuang2001/tiny-sandbox/internal/daemon"
+	"github.com/ruhuang2001/execlet/internal/daemon"
 )
 
 func TestFailedCreateReleasesItsSlotOnce(t *testing.T) {

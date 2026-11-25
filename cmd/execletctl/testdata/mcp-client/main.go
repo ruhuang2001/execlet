@@ -22,7 +22,7 @@ func run() error {
 	ctx := context.Background()
 	cmd := exec.Command(os.Args[1], os.Args[2:]...)
 	cmd.Stderr = os.Stderr
-	client := mcp.NewClient(&mcp.Implementation{Name: "sandboxctl-e2e", Version: "1"}, nil)
+	client := mcp.NewClient(&mcp.Implementation{Name: "execletctl-e2e", Version: "1"}, nil)
 	session, err := client.Connect(ctx, &mcp.CommandTransport{Command: cmd}, nil)
 	if err != nil {
 		return err

@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/ruhuang2001/tiny-sandbox/internal/filearchive"
+	"github.com/ruhuang2001/execlet/internal/filearchive"
 )
 
 func (s *Sandboxes) ReadArchive(ctx context.Context, id, p string) ([]byte, error) {

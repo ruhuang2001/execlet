@@ -6,14 +6,14 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/ruhuang2001/tiny-sandbox/internal/dockerapi"
+	"github.com/ruhuang2001/execlet/internal/dockerapi"
 )
 
 func (b *Backend) stageStdin(ctx context.Context, containerID, input string) (string, error) {
 	if input == "" {
 		return "", nil
 	}
-	dir := "/tmp/tiny-sandbox-stdin." + rand.Text()
+	dir := "/tmp/execlet-stdin." + rand.Text()
 	_, err := b.captureControl(ctx, containerID, []string{"/bin/sh", "-c",
 		`test -x /bin/mkdir && test -x /bin/rm && test -x /bin/rmdir || exit 125; umask 077; /bin/mkdir -m 700 -- "$1"`, "stdin-stage", dir})
 	if err != nil {
@@ -32,7 +32,7 @@ func (b *Backend) stageStdin(ctx context.Context, containerID, input string) (st
 }
 
 func validStdinDir(dir string) bool {
-	suffix, ok := strings.CutPrefix(dir, "/tmp/tiny-sandbox-stdin.")
+	suffix, ok := strings.CutPrefix(dir, "/tmp/execlet-stdin.")
 	if !ok || len(suffix) < 26 || len(suffix) > 128 {
 		return false
 	}

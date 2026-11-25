@@ -1,88 +1,63 @@
 ---
-title: "Isolation"
-description: "What the container hardening actually buys, and how to run under gVisor."
+title: "Isolation and Docker runtimes"
+description: "Choose a Docker runtime and verify the limits it enforces."
 ---
 
-execlet applies hardening and resource limits that stop common sandbox escapes
-from becoming host problems. It does not claim a hostile-tenant boundary.
+Execlet uses Docker with resource limits and container hardening. Use it within
+one trust domain. Neither the default Docker runtime nor gVisor turns a shared
+Execlet daemon into a security boundary between mutually hostile tenants.
 
-Read this page before telling anyone something is "isolated".
-
-## The fixed settings
-
-Each one exists because of a specific failure that reached past the sandbox.
+## Container settings
 
 | Setting | Why it is there |
 | --- | --- |
-| **Pids limit, default 1024** | A fork bomb costs task slots, not memory. Memory limits alone do not stop it; without a pid limit it runs until the host PID table is empty and every other sandbox stalls |
-| **`sleep infinity` never calls `wait`** → init as PID 1 | A pids limit plus an init that never reaps is a slow leak: every orphaned child stays a zombie holding a slot, so a sandbox that forked once eventually cannot fork at all. Docker's init reaps them |
-| **`NET_RAW` and `MKNOD` dropped** | No raw packet crafting, no device nodes |
-| **`no-new-privileges`** | A setuid binary in the image cannot raise privileges inside the container |
+| `pids_limit` (default 1024) | Caps tasks in the Docker cgroup; the meaning differs under gVisor |
+| Docker init as PID 1 | Adopts orphans and reaps them when they exit |
+| `NET_RAW` and `MKNOD` dropped | Removes raw sockets and device creation from the default capabilities |
+| `no-new-privileges` | Prevents gaining privileges through `exec`, for example via a setuid binary |
 
-The rest of Docker's default capability set is kept because `apk`, `pip`, and
-`apt` were verified to install under it. The e2e suite forks a thousand
-children and then runs a fresh multi-process command, which fails if the slots
-were not released.
-
-## CPU is unlimited unless you say otherwise
-
-Defaulting CPU to a limit would make legitimate work mysteriously slow, so it is
-a create-time option (`nano_cpus`), matching Docker's own default. The
-consequence is real: without one, a busy loop competes with the daemon and with
-every other sandbox on the host. In a shared deployment, set it in the policy.
-
-## Network
-
-| Mode | Guarantee |
-| --- | --- |
-| `none` | Loopback only |
-| `filtered` | Loopback + HTTPS proxy to allowlisted domains, CONNECT :443 |
-| `bridge` | Unrestricted, follows Docker routing |
-
-The mode is fixed at creation because Docker cannot change a container's network
-afterwards. Host networking is not offered. See
-[Admission policy](/operations/policy#networks).
+With no policy, CPU is unlimited unless you set `nano_cpus`, and networking
+defaults to `bridge`. Use an [admission policy](/operations/policy) to cap
+aggregate CPU, memory and tasks, and select `none` or `filtered` to restrict
+[outbound network access](/operations/policy#networks). Host networking is not
+offered through the API.
 
 ## Running under gVisor
 
-gVisor (`runsc`) is a Docker runtime, so you select it per sandbox rather than
-choosing a different backend:
+Register `runsc` with Docker on the Linux host. Make it available alongside
+`runc` by adding this field to a valid policy file:
 
 ```json
 { "allowed_runtimes": ["runc", "runsc"] }
 ```
 
-The first entry is the default. A client sets `runtime: "runsc"` on create, and
-must check the `sandbox.runtime.v1` capability first — an older server would
-ignore the unknown field and silently pick its default.
+The first entry becomes the policy default. Without `allowed_runtimes`, Execlet
+uses Docker's configured default and does not accept a per-sandbox override.
+Before sending `runtime: "runsc"` in a sandbox create request, check
+`GET /v1/capabilities` for `sandbox.runtime.v1`. This checks the API feature;
+it does not confirm that `runsc` is installed. Use `make build` so the daemon
+embeds the guest agent required for runsc filesystem access.
 
-What is verified rather than assumed:
+## What differs under runsc
 
-- **Policy verification requires the daemon to run on the Linux Docker host**, with access to its process table and cgroup tree. runsc exposes a virtualized cgroup hierarchy, so admission fails if the matching scope or a limit cannot be checked.
-- **Filesystem transfer uses a guest helper** for live operations, because runsc's private overlay and `/tmp` can diverge from Docker's archive view of the container.
-- **The backend selects the transfer path at creation**, including when Docker chooses its default runtime, and again during journal recovery.
+| Area | What to verify on your host |
+| --- | --- |
+| Admission | With a policy, `execletd` needs the Linux Docker host's `/proc` and cgroup v2 tree. It checks memory, swap, CPU and PID limits in the matching host scope. If it cannot verify them, creation fails. |
+| Task limits and reaping | Host `pids.max` caps host tasks in that scope; it is not a cap of the same size on virtual guest PIDs. Check guest reaping and task pressure separately. |
+| Pause and resume | Verify that the workload stops making progress and resumes. Do not infer that from a Docker `Paused` flag or assume the host cgroup freezer behaves identically under both runtimes. |
+| Files and archives | Live transfers use the guest helper to read the actual runsc overlay. Verify the content and metadata you rely on, including after idle-container recovery. |
+| OOM | Check `memory.events` in the matching host cgroup. A host OOM can take the sandbox down before Execlet can attribute it to a command. Treat `oom`, `evicted`, and uncertain outcomes separately; exit 137 alone is not evidence. |
 
-That suite exercises admission and limits under both runtimes:
+Use a dedicated local Linux Docker host with cgroup v2, `runc` and `runsc`
+registered. Build as the normal build user and run only the probes as root.
+From the checkout root:
 
 ```sh
-make runtime-e2e
+make build runtime-image
+sudo env "PATH=$PATH" python3 scripts/e2e-runtime.py
+sudo env "PATH=$PATH" python3 scripts/e2e-templates.py --runtime runsc --out artifacts/runsc-template
 ```
 
-## Where the guarantee stops
-
-| Claim | True? |
-| --- | --- |
-| A sandbox cannot write to your host's filesystem | Yes |
-| A sandbox cannot read another sandbox's files | Yes |
-| A fork bomb cannot stall unrelated sandboxes | Yes, with a pid limit |
-| A sandbox cannot reach private network services | Only with `none` or `filtered` |
-| A kernel exploit stays inside the sandbox | **No** under runc; part of gVisor's design goal under runsc |
-| Two mutually hostile tenants can share one daemon | **No** |
-
-<Warning>
-The acceptance suites verify policy admission, allowlist enforcement, and
-resource limits against a reachable private peer and denied metadata attempts.
-They do **not** prove resistance to a Docker or kernel escape. If your threat
-model includes that, run gVisor, keep one trust domain per host, and say so
-plainly to whoever relies on it.
-</Warning>
+Inspect `artifacts/runtime/report.json` and the reports under `artifacts/runsc-template/` for checks and cleanup. It does not establish security against a
+container escape or justify identical behavior across hosts. See
+[Self-hosting](/operations/self-hosting) for deployment boundaries.

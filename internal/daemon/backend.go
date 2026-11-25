@@ -4,7 +4,7 @@ import (
 	"context"
 	"io"
 
-	"github.com/ruhuang2001/tiny-sandbox/internal/filearchive"
+	"github.com/ruhuang2001/execlet/internal/filearchive"
 )
 
 type Signal int

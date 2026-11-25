@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	sandbox "github.com/ruhuang2001/tiny-sandbox/sandbox-go"
+	sandbox "github.com/ruhuang2001/execlet/sandbox-go"
 )
 
 type futureOutcomeTransport struct{}

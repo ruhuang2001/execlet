@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"syscall"
 
-	sandbox "github.com/ruhuang2001/tiny-sandbox/sandbox-go"
+	sandbox "github.com/ruhuang2001/execlet/sandbox-go"
 )
 
 func (in *invocation) files(args []string) int {
@@ -19,12 +19,12 @@ func (in *invocation) files(args []string) int {
 		return in.archive(args[1:])
 	}
 	if len(args) == 0 || args[0] != "list" {
-		_, _ = fmt.Fprintln(in.stderr, "usage: sandboxctl files list SANDBOX PATH [--limit N] [--cursor TOKEN]\n       sandboxctl files archive upload|download SANDBOX PATH LOCAL_TAR")
+		_, _ = fmt.Fprintln(in.stderr, "usage: execletctl files list SANDBOX PATH [--limit N] [--cursor TOKEN]\n       execletctl files archive upload|download SANDBOX PATH LOCAL_TAR")
 		return 2
 	}
 	positional, flags := splitArgs(args[1:])
 	if len(positional) != 2 {
-		_, _ = fmt.Fprintln(in.stderr, "usage: sandboxctl files list SANDBOX PATH [--limit N] [--cursor TOKEN]\n       sandboxctl files archive upload|download SANDBOX PATH LOCAL_TAR")
+		_, _ = fmt.Fprintln(in.stderr, "usage: execletctl files list SANDBOX PATH [--limit N] [--cursor TOKEN]\n       execletctl files archive upload|download SANDBOX PATH LOCAL_TAR")
 		return 2
 	}
 	fs := flag.NewFlagSet("files list", flag.ContinueOnError)
@@ -61,7 +61,7 @@ func (in *invocation) files(args []string) int {
 
 func (in *invocation) archive(args []string) int {
 	if len(args) != 4 || (args[0] != "upload" && args[0] != "download") {
-		_, _ = fmt.Fprintln(in.stderr, "usage: sandboxctl files archive upload|download SANDBOX PATH LOCAL_TAR")
+		_, _ = fmt.Fprintln(in.stderr, "usage: execletctl files archive upload|download SANDBOX PATH LOCAL_TAR")
 		return 2
 	}
 	c, err := in.client()

@@ -9,7 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	sandbox "github.com/ruhuang2001/tiny-sandbox/sandbox-go"
+	sandbox "github.com/ruhuang2001/execlet/sandbox-go"
 )
 
 func (s *sandboxTools) runTool(ctx context.Context, in runInput) (toolOutput, error) {

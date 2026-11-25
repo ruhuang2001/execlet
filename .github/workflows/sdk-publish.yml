@@ -51,10 +51,12 @@ jobs:
           import json, os, pathlib, re, tomllib
           version = os.environ['RELEASE_TAG'][1:]
           assert tuple(map(int, version.split('.'))) > (0, 0, 2), 'Do not replace the released 0.0.2 contract'
-          assert tomllib.loads(pathlib.Path('sandbox-python/pyproject.toml').read_text())['project']['version'] == version
-          assert json.loads(pathlib.Path('sandbox-ts/package.json').read_text())['version'] == version
+          python = tomllib.loads(pathlib.Path('sandbox-python/pyproject.toml').read_text())['project']
+          npm = json.loads(pathlib.Path('sandbox-ts/package.json').read_text())
           lock = json.loads(pathlib.Path('sandbox-ts/package-lock.json').read_text())
-          assert lock['version'] == lock['packages']['']['version'] == version
+          assert python['name'] == 'execlet' and python['version'] == version
+          assert npm['name'] == lock['name'] == lock['packages']['']['name'] == '@execlet/sdk'
+          assert npm['version'] == lock['version'] == lock['packages']['']['version'] == version
           assert re.search(r'^  version: (\S+)$', pathlib.Path('api/openapi.yaml').read_text(), re.M)[1] == version
           PY
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
@@ -71,15 +73,28 @@ jobs:
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
+      contents: read
       id-token: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
           name: sdk-distributions
           path: packages
+      - name: verify the exact wheel being published against the resolved source
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          wheel="packages/wheels/execlet-${RELEASE_TAG#v}-py3-none-any.whl"
+          python3 scripts/check-sdk-wheel.py "$wheel"
+          mkdir publish-wheel
+          cp "$wheel" publish-wheel/
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: packages/wheels/
+          packages-dir: publish-wheel/
 
   npm:
     if: inputs.publish && (inputs.registry == 'both' || inputs.registry == 'npm')
@@ -97,6 +112,8 @@ jobs:
         with:
           node-version: '24'
       - name: publish the tarball already installed and tested in CI
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
         run: |
           npm --version
           node --input-type=module -e '
@@ -104,4 +121,4 @@ jobs:
             const [major, minor, patch] = execFileSync("npm", ["--version"], { encoding: "utf8" }).trim().split(".").map(Number);
             if (!(major > 11 || major === 11 && (minor > 5 || minor === 5 && patch >= 1))) throw new Error("npm >=11.5.1 is required for trusted publishing");
           '
-          npm publish packages/npm/*.tgz --access public --provenance --ignore-scripts
+          npm publish "packages/npm/execlet-sdk-${RELEASE_TAG#v}.tgz" --access public --provenance --ignore-scripts

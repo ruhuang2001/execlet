@@ -105,7 +105,7 @@ with tempfile.TemporaryDirectory() as tmp:
             "python - <<'PY'\n# direct stdin\nprint('# data')\nPY\n"
             '"${PYTHON:-python3}" - "$OUT" <<\'PY\'\n# configured Python\nPY\n'
             "cat <<'PY' | python3 -\n# piped program\nPY\n"
-            '"$BIN/sandboxctl" run --image demo -- python3 -c \'\n# guest code\n\'\n'
+            '"$BIN/execletctl" run --image demo -- python3 -c \'\n# guest code\n\'\n'
             "python3 -c \"print('test') # quoted code\"\n"
             "python3 -c 'print(\"# data\")'\n"
             "python3 other.py -c '# script argument'\n"
@@ -118,11 +118,11 @@ with tempfile.TemporaryDirectory() as tmp:
             "python3 -Xdev -Wignore -c 'print(2) # attached options'\n"
             "python3 -W ignore -m trace -c '# module argument'\n"
             "python3 -X dev script.py -c '# script argument'\n"
-            "sandboxctl run -- code 'print(\"# quoted\") # shorthand'\n"
-            '"$BIN/sandboxctl" run --rm -- code "print(2) # wrapped shorthand"\n'
-            "sandboxctl run -- code 'print(\"# just data\")'\n"
-            "sandboxctl run -- code 'print(3) # invalid arity' extra\n"
-            "sandboxctl run -- printf '%s' code '# printed argument'\n"
+            "execletctl run -- code 'print(\"# quoted\") # shorthand'\n"
+            '"$BIN/execletctl" run --rm -- code "print(2) # wrapped shorthand"\n'
+            "execletctl run -- code 'print(\"# just data\")'\n"
+            "execletctl run -- code 'print(3) # invalid arity' extra\n"
+            "execletctl run -- printf '%s' code '# printed argument'\n"
             "code '# different program'\n",
             ["# separate options", "# attached options", "# shorthand", "# wrapped shorthand"]),
         "complex.py": (

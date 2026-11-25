@@ -5,7 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-path = Path("/run/tiny-sandbox/egress.sock")
+path = Path("/run/execlet/egress.sock")
 path.parent.mkdir(exist_ok=True)
 with socket.socket(socket.AF_UNIX) as listener:
     listener.bind(str(path))

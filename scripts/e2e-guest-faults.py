@@ -12,7 +12,7 @@ from pathlib import Path
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--server", type=Path, default=Path("bin/sandboxd"))
+    parser.add_argument("--server", type=Path, default=Path("bin/execletd"))
     parser.add_argument("--out", type=Path, default=Path("artifacts/guest-faults"))
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
@@ -80,9 +80,9 @@ def main():
                 break
             except OSError:
                 time.sleep(0.05)
-        sb, base = create("tiny-sandbox-guest:minimal")
+        sb, base = create("execlet-guest:minimal")
         assert sb["protected"]
-        cid = "tiny-sandbox-" + sb["id"]
+        cid = "execlet-" + sb["id"]
         pid = docker(
             "exec",
             "-u",
@@ -90,9 +90,9 @@ def main():
             cid,
             "sh",
             "-c",
-            'pgrep -f "^/.tiny-sandbox/guest daemon "',
+            'pgrep -f "^/.execlet/guest daemon "',
         )
-        check = 'id; test ! -r /run/tiny-sandbox/agent.sock && ! touch /run/tiny-sandbox/edit && ! kill -0 "$1" && test "$(id -u)" = 1000'
+        check = 'id; test ! -r /run/execlet/agent.sock && ! touch /run/execlet/edit && ! kill -0 "$1" && test "$(id -u)" = 1000'
         ex = wait(
             start(base, ["sh", "-c", check, "guest", pid]),
             lambda v: v["state"] == "completed",
@@ -114,7 +114,7 @@ def main():
             cid,
             "sh",
             "-c",
-            'pgrep -f "^/.tiny-sandbox/guest connect$"',
+            'pgrep -f "^/.execlet/guest connect$"',
         )
         relays = relay.split()
         assert relays and all(pid.isdigit() for pid in relays), relay
@@ -147,14 +147,14 @@ def main():
 
         sb, base = create("python:3.12-alpine")
         assert not sb["protected"]
-        cid = "tiny-sandbox-" + sb["id"]
+        cid = "execlet-" + sb["id"]
         ex = wait(start(base, ["id", "-u"]), lambda v: v["state"] == "completed")
         assert ex["stdout"].strip() == "0", ex
         record("root_identity", ex)
 
         ex_path = start(base, ["sleep", "120"])
         pid = docker(
-            "exec", cid, "sh", "-c", 'pgrep -f "^/.tiny-sandbox/guest daemon "'
+            "exec", cid, "sh", "-c", 'pgrep -f "^/.execlet/guest daemon "'
         )
         assert pid.isdigit(), pid
         docker(
@@ -195,7 +195,7 @@ def main():
             "--filter",
             "event=oom",
             "--filter",
-            "label=tiny-sandbox.owner=" + owner,
+            "label=execlet.owner=" + owner,
             "--format",
             "{{.Action}}",
         )
@@ -213,7 +213,7 @@ def main():
         server.terminate()
         server.wait(timeout=30)
         log.close()
-        assert not docker("ps", "-aq", "--filter", "label=tiny-sandbox.owner=" + owner)
+        assert not docker("ps", "-aq", "--filter", "label=execlet.owner=" + owner)
 
 
 if __name__ == "__main__":

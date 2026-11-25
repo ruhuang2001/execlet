@@ -11,14 +11,14 @@ import (
 	"syscall"
 	"time"
 
-	sandbox "github.com/ruhuang2001/tiny-sandbox/sandbox-go"
+	sandbox "github.com/ruhuang2001/execlet/sandbox-go"
 	"golang.org/x/term"
 )
 
 func (in *invocation) shell(args []string) int {
 	pos, flags := splitArgs(args)
 	if len(flags) != 0 || len(pos) < 1 || len(pos) > 2 {
-		_, _ = fmt.Fprintln(in.stderr, "usage: sandboxctl shell SANDBOX [TERMINAL]")
+		_, _ = fmt.Fprintln(in.stderr, "usage: execletctl shell SANDBOX [TERMINAL]")
 		return 2
 	}
 	client, err := in.client()
@@ -45,7 +45,7 @@ func (in *invocation) shell(args []string) int {
 			return in.fail(err)
 		}
 	}
-	_, _ = fmt.Fprintf(in.stderr, "terminal %s; reconnect with sandboxctl shell %s %s (Ctrl-] detaches)\n", id, sb, id)
+	_, _ = fmt.Fprintf(in.stderr, "terminal %s; reconnect with execletctl shell %s %s (Ctrl-] detaches)\n", id, sb, id)
 	if term.IsTerminal(fd) {
 		prior, err := term.MakeRaw(fd)
 		if err != nil {

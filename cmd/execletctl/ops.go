@@ -4,13 +4,13 @@ import (
 	"fmt"
 	"io"
 
-	sandbox "github.com/ruhuang2001/tiny-sandbox/sandbox-go"
+	sandbox "github.com/ruhuang2001/execlet/sandbox-go"
 )
 
 func (in *invocation) attach(args []string) int {
 	positional, flags := splitArgs(args)
 	if len(flags) > 0 || len(positional) != 2 {
-		_, _ = fmt.Fprintln(in.stderr, "usage: sandboxctl attach SANDBOX EXECUTION")
+		_, _ = fmt.Fprintln(in.stderr, "usage: execletctl attach SANDBOX EXECUTION")
 		return 2
 	}
 	client, err := in.client()
@@ -38,7 +38,7 @@ func (in *invocation) attach(args []string) int {
 func (in *invocation) logs(args []string) int {
 	positional, flags := splitArgs(args)
 	if len(flags) > 0 || len(positional) != 2 {
-		_, _ = fmt.Fprintln(in.stderr, "usage: sandboxctl logs SANDBOX EXECUTION")
+		_, _ = fmt.Fprintln(in.stderr, "usage: execletctl logs SANDBOX EXECUTION")
 		return 2
 	}
 	client, err := in.client()
@@ -56,7 +56,7 @@ func (in *invocation) logs(args []string) int {
 		return in.fail(err)
 	}
 	if ex.OutputTruncated {
-		_, _ = fmt.Fprintln(in.stderr, "sandboxctl: output truncated")
+		_, _ = fmt.Fprintln(in.stderr, "execletctl: output truncated")
 	}
 	in.printExecutionStatus(ex)
 	if err := outcomeExit(ex); err != nil {
@@ -68,7 +68,7 @@ func (in *invocation) logs(args []string) int {
 func (in *invocation) inspect(args []string) int {
 	positional, flags := splitArgs(args)
 	if len(flags) > 0 || len(positional) != 1 {
-		_, _ = fmt.Fprintln(in.stderr, "usage: sandboxctl inspect SANDBOX")
+		_, _ = fmt.Fprintln(in.stderr, "usage: execletctl inspect SANDBOX")
 		return 2
 	}
 	client, err := in.client()
@@ -107,7 +107,7 @@ func (in *invocation) inspect(args []string) int {
 
 func (in *invocation) list(args []string) int {
 	if len(args) > 0 {
-		_, _ = fmt.Fprintln(in.stderr, "usage: sandboxctl list")
+		_, _ = fmt.Fprintln(in.stderr, "usage: execletctl list")
 		return 2
 	}
 	client, err := in.client()
@@ -127,7 +127,7 @@ func (in *invocation) list(args []string) int {
 func (in *invocation) lifecycle(command string, args []string) int {
 	positional, flags := splitArgs(args)
 	if len(flags) > 0 || len(positional) != 1 {
-		_, _ = fmt.Fprintf(in.stderr, "usage: sandboxctl %s SANDBOX\n", command)
+		_, _ = fmt.Fprintf(in.stderr, "usage: execletctl %s SANDBOX\n", command)
 		return 2
 	}
 	client, err := in.client()
@@ -162,7 +162,7 @@ func (in *invocation) writeEvent(ev sandbox.Event) error {
 		_, err := io.WriteString(in.stderr, ev.Data)
 		return err
 	case sandbox.EventTruncated:
-		_, _ = fmt.Fprintf(in.stderr, "sandboxctl: output truncated at %d bytes\n", ev.LimitBytes)
+		_, _ = fmt.Fprintf(in.stderr, "execletctl: output truncated at %d bytes\n", ev.LimitBytes)
 		return nil
 	}
 	return nil

@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ruhuang2001/tiny-sandbox/internal/dockerapi"
+	"github.com/ruhuang2001/execlet/internal/dockerapi"
 )
 
 type fakeDaemon struct {

@@ -4,31 +4,42 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/ruhuang2001/execlet/internal/dockerapi"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/ruhuang2001/execlet/internal/dockerapi"
 )
 
-func (b *Backend) runscLimits(ctx context.Context, id string, c dockerapi.ContainerInspect) ([]string, error) {
-	if b.cgroupRoot == "" || len(id) != 64 || c.ID != id || c.State.Pid <= 0 {
-		return nil, errors.New("runsc policy needs local host cgroup evidence")
+func containerCgroupDir(id string, c dockerapi.ContainerInspect) (string, error) {
+	if !fullContainerID(id) || c.ID != id || c.State.Pid <= 0 {
+		return "", errors.New("cannot identify the container's host cgroup")
 	}
 	membership, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(c.State.Pid), "cgroup"))
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	var dir string
-	for line := range strings.Lines(string(membership)) {
-		path, ok := strings.CutPrefix(strings.TrimSpace(line), "0::/")
-		if ok && (filepath.Base(path) == "docker-"+id+".scope" || filepath.Base(path) == id) {
-			dir = path
-			break
+	return cgroupV2Dir(id, string(membership))
+}
+
+func cgroupV2Dir(id, membership string) (string, error) {
+	for line := range strings.Lines(membership) {
+		dir, ok := strings.CutPrefix(strings.TrimSpace(line), "0::/")
+		if ok && filepath.IsLocal(dir) && filepath.Clean(dir) == dir && (filepath.Base(dir) == "docker-"+id+".scope" || filepath.Base(dir) == id) {
+			return dir, nil
 		}
 	}
-	if dir == "" {
-		return nil, errors.New("runsc process has no matching cgroup v2 scope")
+	return "", errors.New("process has no matching cgroup v2 scope")
+}
+
+func (b *Backend) runscLimits(ctx context.Context, id string, c dockerapi.ContainerInspect) ([]string, error) {
+	if b.cgroupRoot == "" {
+		return nil, errors.New("runsc policy needs local host cgroup evidence")
+	}
+	dir, err := containerCgroupDir(id, c)
+	if err != nil {
+		return nil, err
 	}
 	scope, err := os.OpenRoot(b.cgroupRoot)
 	if err != nil {

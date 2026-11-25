@@ -337,6 +337,19 @@ Docker inspection selects the filesystem transfer path at creation and journal r
 
 Runsc exposes a virtualized cgroup hierarchy to the guest. Policy verification therefore requires execletd to run on the Linux Docker host with access to its process table and cgroup tree. Admission fails if the matching scope or a limit cannot be checked. Runsc's private overlay and `/tmp` can diverge from Docker's archive view of the container. The backend uses a guest transfer helper for live filesystem operations.
 
+- **Pause:** Verify that workload progress stops and continues after unpause.
+  Docker's `Paused` flag does not prove what the host cgroup freezer did.
+- **Archives:** Verify bytes and link metadata on the filesystem your command
+  actually sees. Downloaded archive ownership is normalized rather than a
+  portable representation of guest user IDs.
+- **Task limits:** `pids.max` limits Linux host tasks, not virtual guest PIDs.
+  With `runsc`, reaching the host limit can terminate the whole sandbox.
+  Guest orphan adoption and reaping should be tested separately from saturation.
+- **Memory:** Execlet reads `memory.events` in the matching host scope.
+  With `runsc`, the host can kill the sandbox itself or the scope can
+  disappear before Execlet reads it. A host OOM observation is not always
+  attributable to one guest command. Exit 137 alone never proves OOM.
+
 On a dedicated Linux host with cgroup v2 and both Docker runtimes registered,
 run `make build runtime-image`, then:
 

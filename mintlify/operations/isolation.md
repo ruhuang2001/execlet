@@ -62,6 +62,7 @@ sudo env "PATH=$PATH" python3 scripts/e2e-templates.py --runtime runsc --out art
 ```
 
 Inspect `artifacts/runtime/report.json` and the reports under `artifacts/volumes/`
-and `artifacts/runsc-template/` for checks and cleanup. It does not establish security against a
+and `artifacts/runsc-template/` for checks and cleanup. The suite covers admission, pause/resume, archives, PID pressure,
+orphan reaping and OOM evidence. It does not establish security against a
 container escape or justify identical behavior across hosts. See
 [Self-hosting](/operations/self-hosting) for deployment boundaries.

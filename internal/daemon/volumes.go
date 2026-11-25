@@ -94,6 +94,7 @@ type volumeRecord struct {
 }
 
 type volumeDisk interface {
+	reserve(string) error
 	create(Volume) error
 	ensure(Volume) error
 	remove(Volume) error
@@ -181,11 +182,21 @@ func (s *Sandboxes) CreateVolume(req CreateVolumeRequest) (Volume, error) {
 		v.mu.Unlock()
 		return Volume{}, errorf(CodeRateLimited, "deployment volume count limit reached")
 	}
-	entry := volumeRecord{ID: newID("vol_"), SizeBytes: req.SizeBytes, CreatedAt: s.now(), State: "creating", busy: true}
+	id := newID("vol_")
+	for v.records[id].State != "" {
+		id = newID("vol_")
+	}
+	entry := volumeRecord{ID: id, SizeBytes: req.SizeBytes, CreatedAt: s.now(), State: "creating", busy: true}
 	v.records[entry.ID] = entry
 	v.mu.Unlock()
+	if err := v.disk.reserve(id); err != nil {
+		v.mu.Lock()
+		delete(v.records, id)
+		v.mu.Unlock()
+		return Volume{}, &Error{Code: CodeUnavailable, Message: "cannot reserve volume storage", Err: err}
+	}
 	if err := v.persist(entry); err != nil {
-		return Volume{}, err
+		return Volume{}, errors.Join(err, v.disk.remove(entry.Volume))
 	}
 	if err := v.disk.create(entry.Volume); err != nil {
 		cleanup := v.remove(entry)

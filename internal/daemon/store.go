@@ -290,6 +290,7 @@ func (s *Sandboxes) Create(ctx context.Context, req CreateRequest) (result Sandb
 		s.killLocked(sb, KillRequested)
 		if len(opts.mounts) > 0 {
 			if persistErr := s.saveSandboxLocked(sb); persistErr != nil {
+				sb.state, sb.killReason = StatePending, nil
 				sb.mu.Unlock()
 				return Sandbox{}, persistErr
 			}
@@ -313,7 +314,11 @@ func (s *Sandboxes) Create(ctx context.Context, req CreateRequest) (result Sandb
 	sb.armLifetimeLocked(s.now())
 	err = s.saveSandboxLocked(sb)
 	if err != nil {
-		_ = s.terminateLocked(ctx, sb, KillEvicted)
+		if len(opts.mounts) == 0 {
+			_ = s.terminateLocked(ctx, sb, KillEvicted)
+		} else {
+			sb.state, sb.expiresAt = StatePending, nil
+		}
 		sb.mu.Unlock()
 		return Sandbox{}, err
 	}

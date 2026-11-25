@@ -25,6 +25,9 @@ uv build --wheel --out-dir "$out" ./sandbox-python
 python3 scripts/check-sdk-wheel.py "$out"/*.whl
 ```
 
+Without uv, replace only the build line with
+`python -m pip wheel --no-deps --wheel-dir "$out" ./sandbox-python` and run the same wheel check.
+
 ```python
 from execlet import Client, CreateSandboxRequest
 

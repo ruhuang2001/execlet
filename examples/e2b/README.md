@@ -31,6 +31,14 @@ npm --prefix sandbox-ts ci
 (cd sandbox-ts && npm pack)
 ```
 
+If the host doesn't have uv, replace the three Python setup lines above with:
+
+```sh
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install ./sandbox-python
+```
+
 Install `sandbox-ts/execlet-sdk-<version>.tgz` in your application. The compatibility profile
 targets Python 3.11+ and Node 22+ (the reference harness requires Node 22.19+).
 The image has Bash, Python 3, uv, coreutils and a non-root `user` with `/home/user`.

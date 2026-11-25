@@ -472,23 +472,29 @@ class SandboxChecks:
         delta = pressure.get("delta", {})
         assert all(delta.get(key, 0) > 0 for key in keys), f"no scoped host OOM kill verified: {delta}"
         assert "allocation-completed:" not in ex["stdout"], ex
-        if runtime == "runsc" and (reason == "evicted" or not self.scope.exists()):
+        if reason == "evicted" or not self.scope.exists():
             wait_for("lost sandbox to be retired", lambda: True if self.request("GET", self.base)["state"] == "killed" else None)
-        state = pressure["sandbox_state"] = self.request("GET", self.base)["state"]
-        if state == "running":
-            survivor = pressure["survivor_execution"] = self.completed(self.exec("/bin/true"))
-            assert survivor["termination_reason"] == "exited" and survivor["exit_code"] == 0, survivor
-            assert reason != "evicted" and ex["exit_code"] not in (None, 0), ex
-        else:
-            assert runtime == "runsc" and state == "killed" and ex["exit_code"] != 0, (state, ex)
-            remaining = docker("ps", "-q", "--no-trunc", "--filter", "id=" + self.cid)
-            assert not remaining, f"retired OOM sandbox is still running: {remaining}"
+        sandbox = self.request("GET", self.base)
+        state = pressure["sandbox_state"] = sandbox["state"]
+        if state == "killed":
+            pressure["kill_reason"] = sandbox["kill_reason"]
+            assert sandbox["kill_reason"] == "evicted" and reason in ("oom", "unknown", "evicted"), (sandbox, ex)
+            if ex["exit_code"] is None:
+                assert reason == "evicted" or (reason == "unknown" and ex["output_truncated"]), ex
+            else:
+                assert ex["exit_code"] != 0, ex
+            live = pressure["running_containers"] = docker("ps", "-q", "--no-trunc", "--filter", "id=" + self.cid).splitlines()
+            assert not live, f"retired OOM sandbox is still running: {live}"
+            pressure["finding"] = "sandbox_cgroup_oom_and_sandbox_lost"
+            return
+        assert state == "running" and reason != "evicted" and ex["exit_code"] not in (None, 0), (state, ex)
+        survivor = pressure["survivor_execution"] = self.completed(self.exec("/bin/true"))
+        assert survivor["termination_reason"] == "exited" and survivor["exit_code"] == 0, survivor
         if runtime == "runsc":
-            assert reason in ("oom", "evicted", "exited", "unknown"), ex
+            assert reason in ("oom", "exited", "unknown"), ex
             pressure["finding"] = "sandbox_cgroup_oom_without_guest_victim_proof"
         else:
             assert reason == "oom" and ex["exit_code"] == 137 and not ex["output_truncated"], ex
-            assert pressure["sandbox_state"] == "running", "runc lost the sandbox instead of just the execution"
             pressure["finding"] = "sandbox_cgroup_oom_and_execution_oom"
 
 

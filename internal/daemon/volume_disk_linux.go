@@ -76,14 +76,16 @@ func (d *linuxVolumeDisk) create(v Volume) error {
 	if err != nil {
 		return err
 	}
-	allocErr := unix.Fallocate(int(f.Fd()), 0, 0, v.SizeBytes)
-	if allocErr == nil {
-		allocErr = f.Sync()
+	if err = f.Truncate(v.SizeBytes); err == nil {
+		err = volumeCommand(d.mkfs, "-q", "-F", "-m", "0", "-E", "nodiscard", d.image(v.ID))
 	}
-	if err := errors.Join(allocErr, f.Close()); err != nil {
-		return err
+	if err == nil {
+		err = unix.Fallocate(int(f.Fd()), 0, 0, v.SizeBytes)
 	}
-	if err := volumeCommand(d.mkfs, "-q", "-F", "-m", "0", "-E", "nodiscard", d.image(v.ID)); err != nil {
+	if err == nil {
+		err = f.Sync()
+	}
+	if err := errors.Join(err, f.Close()); err != nil {
 		return err
 	}
 	if err := os.Mkdir(d.path(v.ID), 0o700); err != nil {

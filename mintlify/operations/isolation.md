@@ -43,9 +43,9 @@ embeds the guest agent required for runsc filesystem access.
 | Area | What to verify on your host |
 | --- | --- |
 | Admission | With a policy, `execletd` needs the Linux Docker host's `/proc` and cgroup v2 tree. It checks memory, swap, CPU and PID limits in the matching host scope. If it cannot verify them, creation fails. |
-| Task limits and reaping | `pids.max` counts host tasks, not virtual guest PIDs. Under `runsc`, reaching that limit can terminate the whole sandbox. Check guest reaping separately from task pressure. |
+| Task limits and reaping | `pids.max` caps tasks in the host cgroup, not the number of virtual guest PIDs. Under `runsc`, reaching that limit can terminate the whole sandbox. Check guest reaping separately from task pressure. |
 | Pause and resume | Verify that the workload stops making progress and resumes. Do not infer that from a Docker `Paused` flag or assume the host cgroup freezer behaves identically under both runtimes. |
-| Files and archives | Live transfers read the runsc overlay through the guest helper. Downloaded tar headers have UID and GID `0` under either runtime. Use file `stat` in the sandbox for actual ownership, including after recovery. |
+| Files and archives | Live transfers read the runsc overlay through the guest helper. Downloaded tar headers have UID and GID `0` under either runtime. To check actual guest ownership, read `uid` and `gid` from `GET /v1/sandboxes/{id}/files/stat?path=…`. |
 | OOM | An increase in `oom_kill` in the sandbox's host `memory.events` confirms an OOM kill in that scope, not which guest process died. Either runtime can lose the whole sandbox before a command reports an exit code. Distinguish `oom`, `evicted`, and `unknown`; exit 137 alone does not prove OOM. |
 
 Use a dedicated local Linux Docker host with cgroup v2, `runc` and `runsc`

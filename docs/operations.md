@@ -353,9 +353,11 @@ Runsc exposes a virtualized cgroup hierarchy to the guest. Policy verification t
   With `runsc`, reaching the host limit can terminate the whole sandbox.
   Guest orphan adoption and reaping should be tested separately from saturation.
 - **Memory:** Execlet reads `memory.events` in the matching host scope.
-  With `runsc`, the host can kill the sandbox itself or the scope can
-  disappear before Execlet reads it. A host OOM observation is not always
-  attributable to one guest command. Exit 137 alone never proves OOM.
+  Either runtime can lose the whole sandbox before a command reports an
+  exit code. The probe distinguishes a surviving sandbox that runs a new
+  command from an evicted sandbox whose container is no longer running.
+  A scoped OOM kill does not identify the guest victim; exit 137 alone is
+  not evidence of an OOM kill.
 
 On a dedicated Linux host with cgroup v2 and both Docker runtimes registered,
 run `make build runtime-image`, then:

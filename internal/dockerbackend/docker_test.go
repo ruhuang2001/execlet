@@ -148,7 +148,10 @@ func TestRealCounterAdvancesAcrossPause(t *testing.T) {
 func TestRealExternalKillIsEvicted(t *testing.T) {
 	h := newRealHarness(t)
 	sb := h.create()
-	id := h.exec(sb.ID, "sleep", "100")
+	id := h.exec(sb.ID, "sh", "-c", "echo ready; exec sleep 100")
+	h.waitFor("command to start", 10*time.Second, func() bool {
+		return h.output(sb.ID, id) == "ready\n"
+	})
 
 	list, err := h.api.ContainerList(context.Background(), true, map[string][]string{
 		"label": {daemon.OwnerLabelKey + "=" + h.owner},

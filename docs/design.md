@@ -27,7 +27,12 @@ This project answers those questions with working code and tests rather than pro
 
 ## Non-goals
 
-Process checkpoints, persistent volumes, secret injection, multi-tenancy, billing, browser automation, additional SDK languages, live-process recovery, distributed control state, and a hardened isolation guarantee are outside the current scope. [Filesystem templates and prewarming](operations.md#named-images-and-filesystem-templates) are supported; templates do not preserve process memory. See [future directions](future.md).
+Process checkpoints, secret injection, multi-tenancy, billing, a browser service,
+additional SDK languages, live-process recovery, distributed control state, and
+a hardened isolation guarantee are outside the current scope.
+[Persistent volumes](operations.md#persistent-volumes) keep selected files on
+one Linux host. [Filesystem templates and prewarming](operations.md#named-images-and-filesystem-templates)
+do not preserve process memory. See [future directions](future.md).
 
 ## Architecture
 

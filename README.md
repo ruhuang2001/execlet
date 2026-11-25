@@ -42,6 +42,8 @@ Use the docs at the release tag for the released contract; the links below descr
 - Run commands with deadlines, cancellation, and bounded concurrent execution.
   Stream stdout and stderr and reconnect using the last event ID.
 - Read and write files, list directories, and transfer validated tar archives.
+- Reuse files across sandboxes with [persistent volumes](docs/operations.md#persistent-volumes)
+  on the local Linux Docker host.
 - Open or reconnect to an interactive terminal with `execletctl shell`.
 - Sync a workspace into an offline sandbox from an MCP client with `execletctl mcp`.
 

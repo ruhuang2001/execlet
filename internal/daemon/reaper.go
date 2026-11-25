@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -131,6 +132,14 @@ func (s *Sandboxes) runRemovalPass(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
+		if sandboxID, ok := strings.CutPrefix(id, PendingVolumeCreatePrefix); ok {
+			resolved, err := s.resolvePendingRemoval(ctx, sandboxID, id)
+			if err != nil {
+				s.metrics.cleanupFailed()
+				continue
+			}
+			id = resolved
+		}
 		err := s.removeBounded(ctx, id)
 		if err == nil || errors.Is(err, ErrNotFound) {
 			s.confirmRemoval("", id)
@@ -138,6 +147,25 @@ func (s *Sandboxes) runRemovalPass(ctx context.Context) {
 			s.metrics.cleanupFailed()
 		}
 	}
+}
+
+func (s *Sandboxes) resolvePendingRemoval(ctx context.Context, sandboxID, pendingID string) (string, error) {
+	sb, err := s.lookup(sandboxID)
+	if err != nil {
+		return "", err
+	}
+	if !sb.mu.TryLock() {
+		return "", ErrVolumeCreateUnconfirmed
+	}
+	defer sb.mu.Unlock()
+	if err := s.resolveVolumeCreate(ctx, sb); err != nil {
+		return "", err
+	}
+	s.retryMu.Lock()
+	delete(s.retryIDs, pendingID)
+	s.retryIDs[sb.container] = sandboxID
+	s.retryMu.Unlock()
+	return sb.container, nil
 }
 
 func (s *Sandboxes) pendingRemovals() []string {
@@ -158,12 +186,13 @@ func (s *Sandboxes) removeBounded(ctx context.Context, containerID string) error
 
 func (s *Sandboxes) confirmRemoval(sandboxID, containerID string) {
 	s.retryMu.Lock()
-	defer s.retryMu.Unlock()
 	if sandboxID == "" {
 		sandboxID = s.retryIDs[containerID]
 	}
 	delete(s.reservationLive, sandboxID)
 	delete(s.retryIDs, containerID)
+	s.retryMu.Unlock()
+	s.volumes.release(sandboxID)
 }
 
 func (s *Sandboxes) tryStartRemovalPass() bool {
@@ -190,9 +219,11 @@ func (s *Sandboxes) queueStandbyRemoval(containerID string) {
 }
 
 func (s *Sandboxes) removeOrQueue(ctx context.Context, sandboxID, containerID string) error {
-	if err := s.removeBounded(ctx, containerID); err == nil || errors.Is(err, ErrNotFound) {
-		s.confirmRemoval(sandboxID, containerID)
-		return nil
+	if !strings.HasPrefix(containerID, PendingVolumeCreatePrefix) {
+		if err := s.removeBounded(ctx, containerID); err == nil || errors.Is(err, ErrNotFound) {
+			s.confirmRemoval(sandboxID, containerID)
+			return nil
+		}
 	}
 	s.metrics.cleanupFailed()
 	s.retryMu.Lock()
@@ -280,6 +311,11 @@ func (s *Sandboxes) sweepIndividually(ctx context.Context, order []*sandbox) {
 }
 
 func (s *Sandboxes) Run(ctx context.Context) {
+	if s.volumes != nil {
+		done := make(chan struct{})
+		go func() { defer close(done); s.retryVolumeRollbacks(ctx) }()
+		defer func() { <-done }()
+	}
 	if b, ok := s.backend.(*PolicyBackend); ok && len(b.targets) > 0 {
 		done := make(chan struct{})
 		go func() { defer close(done); b.maintainPrewarm(ctx, s.owner, s.queueStandbyRemoval) }()

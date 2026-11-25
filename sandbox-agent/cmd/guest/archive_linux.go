@@ -27,9 +27,13 @@ func transfer(args []string) error {
 	if err != nil || size < 0 || size > filearchive.MaxBytes {
 		return errors.New("invalid transfer size")
 	}
+	var member string
 	switch args[0] {
 	case "put":
-		err = extractTar(args[1], io.LimitReader(os.Stdin, int64(size)))
+		body := io.LimitReader(os.Stdin, int64(size))
+		member, err = extractTar(args[1], body)
+		_, drainErr := io.Copy(io.Discard, body)
+		err = errors.Join(err, drainErr)
 	case "get":
 		var body []byte
 		body, err = packTar(args[1])
@@ -44,22 +48,32 @@ func transfer(args []string) error {
 		return errors.New("invalid transfer operation")
 	}
 	if err != nil {
-		code := "invalid_request"
-		if errors.Is(err, os.ErrNotExist) {
-			code = "not_found"
-		}
-		if e, ok := errors.AsType[*protocol.Error](err); ok {
-			code = e.Code
-		}
-		return protocol.Write(os.Stdout, 'e', protocol.Error{Code: code, Message: err.Error()})
+		return protocol.Write(os.Stdout, 'e', transferFailure(member, err))
 	}
 	return protocol.Write(os.Stdout, 'a', 0)
 }
 
-func extractTar(dir string, src io.Reader) error {
+func transferFailure(member string, err error) protocol.Error {
+	failure := protocol.Error{Code: "invalid_request", Message: err.Error()}
+	if e, ok := errors.AsType[*protocol.Error](err); ok {
+		failure.Code = e.Code
+		return failure
+	}
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		failure.Code = "not_found"
+	case errors.Is(err, syscall.ENOSPC), errors.Is(err, syscall.EDQUOT):
+		failure.Code, failure.ArchiveMember = protocol.CodeInsufficientStorage, member
+	case errors.Is(err, syscall.EROFS):
+		failure.Code, failure.ArchiveMember = protocol.CodeReadOnlyFilesystem, member
+	}
+	return failure
+}
+
+func extractTar(dir string, src io.Reader) (string, error) {
 	root, err := os.OpenRoot(dir)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer func() { _ = root.Close() }()
 	r := tar.NewReader(src)
@@ -70,30 +84,30 @@ func extractTar(dir string, src io.Reader) error {
 			break
 		}
 		if err != nil {
-			return err
+			return "", err
 		}
 		name := filepath.Clean(h.Name)
 		if !filepath.IsLocal(name) {
-			return errors.New("nonlocal archive path")
+			return "", errors.New("nonlocal archive path")
 		}
 		if err := root.MkdirAll(filepath.Dir(name), 0755); err != nil {
-			return err
+			return name, err
 		}
 		switch h.Typeflag {
 		case tar.TypeDir:
 			if err = root.MkdirAll(name, 0700); err != nil {
-				return err
+				return name, err
 			}
 			h.Name = name
 			directories = append(directories, h)
 		case tar.TypeReg:
 			if err := replaceRegular(root, name, h, r); err != nil {
-				return err
+				return name, err
 			}
 			continue
 		case tar.TypeSymlink, tar.TypeLink:
 			if err = root.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return err
+				return name, err
 			}
 			if h.Typeflag == tar.TypeSymlink {
 				err = restoreSymlink(root, name, h)
@@ -101,23 +115,23 @@ func extractTar(dir string, src io.Reader) error {
 				err = root.Link(h.Linkname, name)
 			}
 			if err != nil {
-				return err
+				return name, err
 			}
 		default:
-			return errors.New("unsupported archive member")
+			return name, errors.New("unsupported archive member")
 		}
 	}
 	slices.SortFunc(directories, func(a, b *tar.Header) int { return strings.Compare(b.Name, a.Name) })
 	for _, h := range directories {
 		fd, err := root.OpenFile(h.Name, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
 		if err != nil {
-			return err
+			return h.Name, err
 		}
 		if err := errors.Join(setMetadata(fd, h), fd.Close()); err != nil {
-			return err
+			return h.Name, err
 		}
 	}
-	return nil
+	return "", nil
 }
 func restoreSymlink(root *os.Root, name string, h *tar.Header) error {
 	parent, err := root.OpenFile(filepath.Dir(name), unix.O_PATH|unix.O_DIRECTORY, 0)
@@ -147,7 +161,7 @@ func replaceRegular(root *os.Root, name string, h *tar.Header, r io.Reader) erro
 		return err
 	}
 	defer func() { _ = parent.Close() }()
-	temp := ".tiny-upload-" + rand.Text()
+	temp := ".execlet-upload-" + rand.Text()
 	f, err := parent.OpenFile(temp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
 		return err
@@ -156,6 +170,9 @@ func replaceRegular(root *os.Root, name string, h *tar.Header, r io.Reader) erro
 	_, writeErr := io.CopyN(f, r, h.Size)
 	if writeErr == nil {
 		writeErr = setMetadata(f, h)
+	}
+	if writeErr == nil {
+		writeErr = f.Sync()
 	}
 	if err := errors.Join(writeErr, f.Close()); err != nil {
 		return err

@@ -76,6 +76,12 @@ func TestSpecFieldsMatchRequestAndSandboxTypes(t *testing.T) {
 		{"UpdateSandboxRequest", daemon.UpdateRequest{}, false},
 		{"UpdateSandboxRequest", sandbox.UpdateSandboxRequest{}, false},
 		{"CreateSandboxRequest", sandbox.CreateSandboxRequest{}, false},
+		{"CreateVolumeRequest", daemon.CreateVolumeRequest{}, true},
+		{"CreateVolumeRequest", sandbox.CreateVolumeRequest{}, true},
+		{"Volume", daemon.Volume{}, true},
+		{"Volume", sandbox.Volume{}, true},
+		{"VolumeMount", daemon.VolumeMount{}, true},
+		{"VolumeMount", sandbox.VolumeMount{}, true},
 		{"ExecuteRequest", daemon.ExecuteRequest{}, false},
 		{"ExecuteRequest", sandbox.ExecuteRequest{}, false},
 		{"Sandbox", daemon.Sandbox{}, true},
@@ -214,6 +220,7 @@ func concretePath(path string) string {
 	return strings.NewReplacer(
 		"{sandbox_id}", "sbx_test",
 		"{execution_id}", "exe_test",
+		"{volume_id}", "vol_test",
 		"{pid}", "1",
 	).Replace(path)
 }
@@ -242,7 +249,7 @@ func TestOperationsCoversEveryDocumentedEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse embedded spec: %v", err)
 	}
-	if len(ops) != 29 {
-		t.Fatalf("parsed %d operations, want 29: %v", len(ops), ops)
+	if len(ops) != 33 {
+		t.Fatalf("parsed %d operations, want 33: %v", len(ops), ops)
 	}
 }

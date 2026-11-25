@@ -297,6 +297,10 @@ func (s *Sandboxes) Recover(ctx context.Context, j *Journal, backend RecoveryBac
 		if v.State != StatePending && v.State != StateRunning && v.State != StatePaused && v.State != StateKilled {
 			return errors.New("invalid recovered sandbox state")
 		}
+		if strings.HasPrefix(value.Container, PendingVolumeCreatePrefix) &&
+			(value.Container != PendingVolumeCreatePrefix+v.ID || len(v.Mounts) == 0 || v.State != StateKilled) {
+			return errors.New("invalid pending volume attachment record")
+		}
 		seen[v.ID], containers[value.Container] = true, true
 		ids, keys := map[string]bool{}, map[string]bool{}
 		for _, item := range executions[v.ID] {
@@ -321,6 +325,9 @@ func (s *Sandboxes) Recover(ctx context.Context, j *Journal, backend RecoveryBac
 	}
 	owned, err := backend.Owned(ctx, j.owner)
 	if err != nil {
+		return err
+	}
+	if err := s.openVolumes(j, entries); err != nil {
 		return err
 	}
 	ownedSet := map[string]bool{}
@@ -383,7 +390,12 @@ func (s *Sandboxes) Recover(ctx context.Context, j *Journal, backend RecoveryBac
 				sb.idempotency[ex.key] = ex
 			}
 		}
-		if sb.container == "" || !ownedSet[sb.container] {
+		pendingVolume := sb.container == PendingVolumeCreatePrefix+sb.id ||
+			(len(opts.mounts) != 0 && sb.state == StatePending && sb.container == "")
+		switch {
+		case pendingVolume:
+			sb.container = PendingVolumeCreatePrefix + sb.id
+		case !ownedSet[sb.container]:
 			unsafe = true
 			sb.container = ""
 		}
@@ -402,11 +414,19 @@ func (s *Sandboxes) Recover(ctx context.Context, j *Journal, backend RecoveryBac
 				_, unsafe = sb.dueTimeout(s.now())
 			}
 		}
+		spec := ContainerSpec{Runtime: opts.runtime, Image: opts.image, MemoryMB: opts.memoryMB, PidsLimit: opts.pidsLimit, NanoCPUs: opts.nanoCPUs, Network: opts.network}
+		if (!unsafe || pendingVolume) && len(opts.mounts) > 0 {
+			spec.Mounts, err = s.volumes.bind(sb.id, opts.mounts)
+			if err != nil {
+				return fmt.Errorf("recover sandbox %s volume attachments: %w", sb.id, err)
+			}
+			unsafe = unsafe || sb.agentMode != "guest"
+		}
 		if !unsafe && sb.agentMode == "guest" {
 			if restorer, ok := backend.(interface {
-				RestoreGuest(context.Context, string, bool, string) error
+				RestoreGuest(context.Context, string, bool, string, []BindMount) error
 			}); ok {
-				if err := restorer.RestoreGuest(ctx, sb.container, sb.protected, sb.opts.runtime); err != nil {
+				if err := restorer.RestoreGuest(ctx, sb.container, sb.protected, sb.opts.runtime, spec.Mounts); err != nil {
 					return err
 				}
 			}
@@ -425,7 +445,7 @@ func (s *Sandboxes) Recover(ctx context.Context, j *Journal, backend RecoveryBac
 			if adopter, ok := s.backend.(interface {
 				Adopt(context.Context, string, ContainerSpec) error
 			}); ok {
-				unsafe = sb.state == StatePaused || adopter.Adopt(ctx, sb.container, ContainerSpec{Runtime: opts.runtime, Image: opts.image, MemoryMB: opts.memoryMB, PidsLimit: opts.pidsLimit, NanoCPUs: opts.nanoCPUs, Network: opts.network}) != nil
+				unsafe = sb.state == StatePaused || adopter.Adopt(ctx, sb.container, spec) != nil
 			}
 		}
 		if unsafe {
@@ -437,10 +457,24 @@ func (s *Sandboxes) Recover(ctx context.Context, j *Journal, backend RecoveryBac
 			if err := s.saveSandboxLocked(sb); err != nil {
 				return err
 			}
-			if sb.container != "" {
-				if err := s.backend.Remove(ctx, sb.container); err != nil && !errors.Is(err, ErrNotFound) {
-					return err
+			if pendingVolume {
+				err := s.resolveVolumeCreate(ctx, sb)
+				pendingVolume = errors.Is(err, ErrVolumeCreateUnconfirmed)
+				if err != nil && !pendingVolume {
+					return fmt.Errorf("resolve sandbox %s during volume recovery: %w", sb.id, err)
 				}
+			}
+			if pendingVolume {
+				s.reservationLive[sb.id] = false
+				s.retryIDs[sb.container] = sb.id
+				s.backend.(*PolicyBackend).allocations[sb.container] = spec
+			} else {
+				if sb.container != "" {
+					if err := s.backend.Remove(ctx, sb.container); err != nil && !errors.Is(err, ErrNotFound) {
+						return err
+					}
+				}
+				s.volumes.release(sb.id)
 			}
 		} else {
 			s.reservationLive[sb.id] = true
@@ -461,6 +495,9 @@ func (s *Sandboxes) Recover(ctx context.Context, j *Journal, backend RecoveryBac
 		if err := s.backend.Remove(ctx, id); err != nil && !errors.Is(err, ErrNotFound) {
 			return err
 		}
+	}
+	if err := s.volumes.cleanIncomplete(true); err != nil {
+		return err
 	}
 	s.prune()
 	return s.durableReady()
@@ -519,7 +556,7 @@ func validStateID(id, prefix string) bool {
 
 func recoveredOptions(value storedSandbox) (sandboxOptions, error) {
 	v := value.Sandbox
-	return (CreateRequest{Runtime: v.Runtime, Image: &v.Image, MemoryMB: &v.MemoryMB, PidsLimit: &v.PidsLimit, NanoCPUs: &v.NanoCPUs, Network: &v.Network, TimeoutSeconds: &v.TimeoutSeconds, TimeoutAction: &v.TimeoutAction, IdleTimeoutSeconds: &v.IdleTimeoutSeconds, IdleTimeoutAction: &v.IdleTimeoutAction, MaxConcurrentExecutions: &v.MaxConcurrentExecutions, Env: value.Env}).resolve()
+	return (CreateRequest{Runtime: v.Runtime, Image: &v.Image, MemoryMB: &v.MemoryMB, PidsLimit: &v.PidsLimit, NanoCPUs: &v.NanoCPUs, Network: &v.Network, TimeoutSeconds: &v.TimeoutSeconds, TimeoutAction: &v.TimeoutAction, IdleTimeoutSeconds: &v.IdleTimeoutSeconds, IdleTimeoutAction: &v.IdleTimeoutAction, MaxConcurrentExecutions: &v.MaxConcurrentExecutions, Env: value.Env, Mounts: v.Mounts}).resolve()
 }
 
 func validateStoredExecution(value storedExecution) error {

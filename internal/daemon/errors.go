@@ -16,6 +16,9 @@ const (
 	CodeIdempotencyConflict Code = "idempotency_conflict"
 	CodePayloadTooLarge     Code = "payload_too_large"
 	CodeRateLimited         Code = "rate_limited"
+	CodeVolumeInUse         Code = "volume_in_use"
+	CodeVolumeReadOnly      Code = "volume_read_only"
+	CodeVolumeQuotaExceeded Code = "volume_quota_exceeded"
 	CodeInternal            Code = "internal"
 	CodeBackendError        Code = "backend_error"
 	CodeUnavailable         Code = "unavailable"
@@ -51,6 +54,8 @@ func CodeOf(err error) Code {
 var ErrNotFound = errors.New("daemon: not found")
 
 var ErrStartUnconfirmed = errors.New("daemon: execution start unconfirmed")
+
+var ErrVolumeCreateUnconfirmed = errors.New("daemon: Docker creation with volumes unconfirmed")
 
 func backendError(err error) error {
 	if e, ok := errors.AsType[*Error](err); ok {

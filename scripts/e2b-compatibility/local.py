@@ -35,6 +35,11 @@ class DockerFault:
         self.lock = threading.Lock()
         self.fail_remove = False
         self.drop_create = False
+        self.delay_create = False
+        self.disconnect_create_first = False
+        self.create_waiting = threading.Event()
+        self.release_create = threading.Event()
+        self.create_finished = threading.Event()
         self.lost_create_id = None
         self.fail_exec = False
         self.fail_identity = False
@@ -80,6 +85,8 @@ class DockerFault:
                 with outer.lock:
                     outer.requests.append(line)
                     drop_create = outer.drop_create and line.startswith('POST ') and path.endswith('/containers/create')
+                    delay_create = drop_create and outer.delay_create
+                    disconnect_first = delay_create and outer.disconnect_create_first
                     capture_start = False
                     if outer.start_fault and line.startswith('POST ') and path.endswith('/exec'):
                         command = json.loads(body).get('Cmd', [])
@@ -97,6 +104,13 @@ class DockerFault:
                     if outer.fail_exec and line.startswith('POST ') and '/containers/' in path and path.endswith('/exec'):
                         outer.failed_execs.append(line)
                         fail = True
+                if delay_create:
+                    if disconnect_first:
+                        self.request.shutdown(socket.SHUT_RDWR)
+                    outer.create_waiting.set()
+                    if not outer.release_create.wait(45):
+                        outer.create_finished.set()
+                        return
                 if fail:
                     body = b'{"message":"injected Docker operation failure"}'
                     self.request.sendall(
@@ -124,6 +138,10 @@ class DockerFault:
                             with outer.lock:
                                 outer.lost_create_id = json.loads(payload)['Id']
                                 outer.drop_create = False
+                            outer.create_finished.set()
+                            return
+                        if delay_create:
+                            outer.create_finished.set()
                             return
                         if capture_start and response.status == 201:
                             with outer.lock:
@@ -186,6 +204,7 @@ class DockerFault:
 
     def close(self):
         self.release_start.set()
+        self.release_create.set()
         self.server.shutdown()
         self.server.server_close()
         Path(self.path).unlink(missing_ok=True)

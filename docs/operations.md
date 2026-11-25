@@ -48,6 +48,32 @@ delete, holds its slot until the runtime confirms removal. A record may already 
 the reaper retries removal and `/metrics` exposes the backlog. Changing the
 budgets or runtime policy requires a restart. Recovery rechecks adopted containers.
 
+### Persistent volumes
+
+Set both `max_volumes` (1–256) and `max_volume_bytes` (16 MiB–1 TiB, whole
+MiB) in the policy. A volume-enabled daemon must run on the local Linux
+Docker host in Docker's mount namespace, with loop devices, mount privileges,
+`mount`, `mkfs.ext4`, a private `-state-dir`, and the embedded guest agent.
+The daemon allocates a fixed-size ext4 image for each volume. Count and
+per-volume size limit new allocations; filesystem metadata uses some of the
+requested space. Do not use a remote socket, rootless Docker, or the macOS
+daemon for these mounts.
+
+Attach a volume at sandbox creation. A paused sandbox keeps the attachment;
+deleting the sandbox leaves the volume available after confirmed container
+removal. Each volume has at most one attachment, with no UID/GID mapping.
+Templates exclude mounted contents. File API errors distinguish a full
+volume from a read-only one. For requests and failure handling, see the
+[volume API](api.md#post-v1volumes) and [operator guide](../mintlify/operations/volumes.md).
+
+If Docker loses the result of a sandbox create, execletd keeps the volume
+and its admission reservation through restart. An initial Docker `404`
+does not rule out a late completion. The daemon waits for the matching
+container, records its exact ID, and releases the volume after confirmed
+removal. If the request never produces a container, there is no automatic
+timeout or force-unlock API. Escalate to the host operator; do not delete
+journal records or detach the storage to clear the conflict.
+
 ### Named images and filesystem templates
 
 The optional `templates` object maps names to local Docker image IDs
@@ -316,9 +342,10 @@ run `make build runtime-image`, then:
 
 ```sh
 sudo env "PATH=$PATH" python3 scripts/e2e-runtime.py
+sudo env "PATH=$PATH" TMPDIR=/var/tmp python3 scripts/e2e-volumes.py
 sudo env "PATH=$PATH" python3 scripts/e2e-templates.py --runtime runsc --out artifacts/runsc-template
 ```
 
-Review the runtime and template reports under `artifacts/`. These
+Review the runtime, volume, and template reports under `artifacts/`. These
 checks exercise an actual workload and storage, not resistance to sandbox
 escape or a guarantee of identical behavior on every host.

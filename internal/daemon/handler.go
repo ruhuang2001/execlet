@@ -466,8 +466,10 @@ func statusFor(code Code) int {
 		return http.StatusUnauthorized
 	case CodeNotFound:
 		return http.StatusNotFound
-	case CodeInvalidState, CodeBusy, CodeIdempotencyConflict:
+	case CodeInvalidState, CodeBusy, CodeIdempotencyConflict, CodeVolumeInUse, CodeVolumeReadOnly:
 		return http.StatusConflict
+	case CodeVolumeQuotaExceeded:
+		return http.StatusInsufficientStorage
 	case CodePayloadTooLarge:
 		return http.StatusRequestEntityTooLarge
 	case CodeRateLimited:

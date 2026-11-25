@@ -49,15 +49,19 @@ embeds the guest agent required for runsc filesystem access.
 | OOM | Check `memory.events` in the matching host cgroup. A host OOM can take the sandbox down before Execlet can attribute it to a command. Treat `oom`, `evicted`, and uncertain outcomes separately; exit 137 alone is not evidence. |
 
 Use a dedicated local Linux Docker host with cgroup v2, `runc` and `runsc`
-registered. Build as the normal build user and run only the probes as root.
+registered, and loop devices and ext4 tooling available. Build the binaries
+and fixture as the normal build user. Run only the probes as root: the volume
+test creates, mounts and cleans up loop-backed ext4 filesystems on the host.
 From the checkout root:
 
 ```sh
 make build runtime-image
 sudo env "PATH=$PATH" python3 scripts/e2e-runtime.py
+sudo env "PATH=$PATH" TMPDIR=/var/tmp python3 scripts/e2e-volumes.py
 sudo env "PATH=$PATH" python3 scripts/e2e-templates.py --runtime runsc --out artifacts/runsc-template
 ```
 
-Inspect `artifacts/runtime/report.json` and the reports under `artifacts/runsc-template/` for checks and cleanup. It does not establish security against a
+Inspect `artifacts/runtime/report.json` and the reports under `artifacts/volumes/`
+and `artifacts/runsc-template/` for checks and cleanup. It does not establish security against a
 container escape or justify identical behavior across hosts. See
 [Self-hosting](/operations/self-hosting) for deployment boundaries.

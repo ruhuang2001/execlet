@@ -3,6 +3,7 @@ package daemon
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"slices"
 	"sort"
 	"time"
 )
@@ -91,24 +92,25 @@ const (
 )
 
 type Sandbox struct {
-	AgentMode               string      `json:"agent_mode"`
-	Protected               bool        `json:"protected"`
-	Runtime                 string      `json:"runtime,omitempty"`
-	MaxConcurrentExecutions int         `json:"max_concurrent_executions"`
-	ID                      string      `json:"id"`
-	State                   State       `json:"state"`
-	Image                   string      `json:"image"`
-	MemoryMB                int         `json:"memory_mb"`
-	PidsLimit               int         `json:"pids_limit"`
-	NanoCPUs                int64       `json:"nano_cpus"`
-	Network                 NetworkMode `json:"network"`
-	TimeoutSeconds          int         `json:"timeout_seconds"`
-	TimeoutAction           Action      `json:"timeout_action"`
-	IdleTimeoutSeconds      int         `json:"idle_timeout_seconds"`
-	IdleTimeoutAction       Action      `json:"idle_timeout_action"`
-	CreatedAt               time.Time   `json:"created_at"`
-	ExpiresAt               *time.Time  `json:"expires_at"`
-	KillReason              *KillReason `json:"kill_reason"`
+	Mounts                  []VolumeMount `json:"mounts,omitempty"`
+	AgentMode               string        `json:"agent_mode"`
+	Protected               bool          `json:"protected"`
+	Runtime                 string        `json:"runtime,omitempty"`
+	MaxConcurrentExecutions int           `json:"max_concurrent_executions"`
+	ID                      string        `json:"id"`
+	State                   State         `json:"state"`
+	Image                   string        `json:"image"`
+	MemoryMB                int           `json:"memory_mb"`
+	PidsLimit               int           `json:"pids_limit"`
+	NanoCPUs                int64         `json:"nano_cpus"`
+	Network                 NetworkMode   `json:"network"`
+	TimeoutSeconds          int           `json:"timeout_seconds"`
+	TimeoutAction           Action        `json:"timeout_action"`
+	IdleTimeoutSeconds      int           `json:"idle_timeout_seconds"`
+	IdleTimeoutAction       Action        `json:"idle_timeout_action"`
+	CreatedAt               time.Time     `json:"created_at"`
+	ExpiresAt               *time.Time    `json:"expires_at"`
+	KillReason              *KillReason   `json:"kill_reason"`
 }
 
 type Execution struct {
@@ -161,6 +163,7 @@ func (e Execution) Summary() ExecutionSummary {
 }
 
 type CreateRequest struct {
+	Mounts                  []VolumeMount     `json:"mounts,omitempty"`
 	Runtime                 string            `json:"runtime,omitempty"`
 	MaxConcurrentExecutions *int              `json:"max_concurrent_executions,omitempty"`
 	Image                   *string           `json:"image,omitempty"`
@@ -218,6 +221,7 @@ func mergedEnv(base, override map[string]string) []string {
 }
 
 type sandboxOptions struct {
+	mounts                  []VolumeMount
 	runtime                 string
 	maxConcurrentExecutions int
 	image                   string
@@ -233,7 +237,11 @@ type sandboxOptions struct {
 }
 
 func (r CreateRequest) resolve() (sandboxOptions, error) {
+	if err := validateVolumeMounts(r.Mounts); err != nil {
+		return sandboxOptions{}, err
+	}
 	opts := sandboxOptions{
+		mounts:                  slices.Clone(r.Mounts),
 		runtime:                 r.Runtime,
 		maxConcurrentExecutions: 1,
 		image:                   DefaultImage,

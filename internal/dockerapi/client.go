@@ -8,8 +8,10 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/ruhuang2001/execlet/internal/wirejson"
@@ -90,7 +92,21 @@ func (c *Client) Negotiate(ctx context.Context) error {
 	return nil
 }
 
+var ErrCreateNotSent = errors.New("container create was not sent")
+
 func (c *Client) ContainerCreate(ctx context.Context, name string, cfg ContainerConfig) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", errors.Join(ErrCreateNotSent, err)
+	}
+	transport := c.http.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	_, standard := transport.(*http.Transport)
+	var connected atomic.Bool
+	if standard {
+		ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{GotConn: func(httptrace.GotConnInfo) { connected.Store(true) }})
+	}
 	q := url.Values{}
 	if name != "" {
 		q.Set("name", name)
@@ -100,6 +116,9 @@ func (c *Client) ContainerCreate(ctx context.Context, name string, cfg Container
 		Warnings []string `json:"Warnings"`
 	}
 	if err := c.postJSON(ctx, "/containers/create", q, cfg, &out); err != nil {
+		if standard && !connected.Load() {
+			return "", errors.Join(ErrCreateNotSent, err)
+		}
 		return "", err
 	}
 	if out.ID == "" {

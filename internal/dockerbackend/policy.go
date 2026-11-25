@@ -23,6 +23,9 @@ func (b *Backend) VerifyLimits(ctx context.Context, id string, spec daemon.Conta
 	if spec.Runtime != "" && h.Runtime != spec.Runtime {
 		return errors.New("runtime did not confirm isolation runtime")
 	}
+	if err := b.verifyMounts(ctx, id, value.Mounts, spec.Mounts); err != nil {
+		return err
+	}
 	if h.Memory != int64(spec.MemoryMB)<<20 || h.MemorySwap != h.Memory || h.NanoCpus != spec.NanoCPUs || h.PidsLimit == nil || *h.PidsLimit != int64(spec.PidsLimit) || h.NetworkMode != networkMode(spec.Network) {
 		return errors.New("runtime did not confirm requested deployment limits")
 	}

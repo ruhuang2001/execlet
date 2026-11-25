@@ -24,8 +24,7 @@ func (s *Sandboxes) pruneKilled() {
 		if drop == 0 {
 			return
 		}
-		if sb.isKilled() {
-			s.forget(sb)
+		if sb.isKilled() && s.forget(sb) {
 			drop--
 		}
 	}

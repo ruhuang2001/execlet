@@ -101,7 +101,7 @@ same image, resource settings, network and runtime in the create request:
 How the pool behaves:
 
 - Standby containers count against the budgets **from the start of provisioning**, not from handoff.
-- A request can claim an instance matching image digest, memory, CPU, PID limit, network, and runtime.
+- A request without volume mounts can claim an instance matching image digest, memory, CPU, PID limit, network, and runtime.
 - A miss takes the ordinary creation path, subject to quota.
 - The pool assigns the sandbox ID, Docker name, and ownership labels when the container is provisioned, and admission claims that identity atomically.
 - The sandbox **lifetime starts at handoff**, not at provisioning. A standby that sits idle does not burn someone's lifetime.

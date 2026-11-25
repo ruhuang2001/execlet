@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -33,15 +34,19 @@ type guestSession struct {
 	stream    io.ReadWriteCloser
 	protected bool
 	runtime   string
+	mounts    []daemon.BindMount
 }
 
-func (b *Backend) SetGuestAgent(mode string) error {
+func (b *Backend) SetGuestAgent(mode string, required bool) error {
 	switch mode {
 	case "auto", "off":
 		if mode == "auto" {
 			if entries, _ := fs.Glob(binaries, "guestbin/guest-linux-*"); len(entries) == 0 {
 				mode = "off"
 			}
+		}
+		if required && mode == "off" {
+			return errors.New("persistent volumes require an enabled embedded guest agent; build with make build")
 		}
 		b.guestMode = mode
 		return nil
@@ -112,7 +117,7 @@ func (b *Backend) startGuest(ctx context.Context, id string, spec daemon.Contain
 	if err = b.api.ExecStartDetached(ctx, eid); err != nil {
 		return err
 	}
-	g := &guestSession{b: b, id: id, lock: make(chan struct{}, 1), runtime: spec.Runtime, protected: identity.UID != 0}
+	g := &guestSession{b: b, id: id, lock: make(chan struct{}, 1), runtime: spec.Runtime, protected: identity.UID != 0, mounts: slices.Clone(spec.Mounts)}
 	ctx, cancel := context.WithTimeout(ctx, daemon.BackendCallTimeout)
 	defer cancel()
 	for {
@@ -332,11 +337,11 @@ func (b *Backend) effectiveRuntime(ctx context.Context, id, requested string) (s
 	return container.HostConfig.Runtime, nil
 }
 
-func (b *Backend) RestoreGuest(ctx context.Context, id string, protected bool, requested string) error {
+func (b *Backend) RestoreGuest(ctx context.Context, id string, protected bool, requested string, mounts []daemon.BindMount) error {
 	rt, err := b.effectiveRuntime(ctx, id, requested)
 	if err != nil {
 		return err
 	}
-	b.guests.Store(id, &guestSession{b: b, id: id, runtime: rt, protected: protected, lock: make(chan struct{}, 1)})
+	b.guests.Store(id, &guestSession{b: b, id: id, runtime: rt, protected: protected, lock: make(chan struct{}, 1), mounts: slices.Clone(mounts)})
 	return nil
 }

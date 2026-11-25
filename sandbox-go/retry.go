@@ -53,13 +53,14 @@ func retryableStatus(status int) bool {
 }
 
 type request struct {
-	method     string
-	path       string
-	query      string
-	body       any
-	repeatable bool
-	accept     string
-	raw        []byte
+	method               string
+	path                 string
+	query                string
+	body                 any
+	repeatable           bool
+	retryUnavailableOnly bool
+	accept               string
+	raw                  []byte
 }
 
 type response struct {
@@ -84,8 +85,11 @@ func (c *Client) do(ctx context.Context, req request) (*response, error) {
 			lastErr = statusError(resp)
 		}
 
-		retryable := err != nil || retryableStatus(resp.status)
-		if !retryable || !req.repeatable || attempt >= c.maxRetries {
+		retryable := req.repeatable && (err != nil || retryableStatus(resp.status))
+		if req.retryUnavailableOnly {
+			retryable = err == nil && resp.status == http.StatusServiceUnavailable
+		}
+		if !retryable || attempt >= c.maxRetries {
 			return nil, lastErr
 		}
 		var after time.Duration

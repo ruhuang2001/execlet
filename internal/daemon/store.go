@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -48,6 +49,7 @@ func WithMaxRetainedOutputBytes(n int) Option {
 
 const OwnerLabelKey = "execlet.owner"
 const SandboxIDLabelKey = "execlet.id"
+const PendingVolumeCreatePrefix = "pending-volume-create:"
 
 const (
 	ambiguousWindow     = 2 * time.Second
@@ -61,6 +63,7 @@ type Sandboxes struct {
 	metrics        metrics
 	clock          Clock
 	journal        *Journal
+	volumes        *volumes
 	fingerprintKey [32]byte
 	sleep          SleepFunc
 
@@ -220,7 +223,7 @@ func (s *Sandboxes) Create(ctx context.Context, req CreateRequest) (result Sandb
 	spec := ContainerSpec{Image: opts.image, Runtime: opts.runtime, MemoryMB: opts.memoryMB, PidsLimit: opts.pidsLimit, NanoCPUs: opts.nanoCPUs, Network: opts.network}
 	var containerID, id string
 	var pool *PolicyBackend
-	if policy, ok := s.backend.(*PolicyBackend); ok && len(policy.targets) > 0 && policy.policy.allowsImage(spec.Image) {
+	if policy, ok := s.backend.(*PolicyBackend); ok && len(opts.mounts) == 0 && len(policy.targets) > 0 && policy.policy.allowsImage(spec.Image) {
 		pool = policy
 		containerID, id = pool.takeReady(keyOf(spec))
 	}
@@ -239,6 +242,11 @@ func (s *Sandboxes) Create(ctx context.Context, req CreateRequest) (result Sandb
 	}
 	if err := s.reserve(id); err != nil {
 		returnStandby()
+		return Sandbox{}, err
+	}
+	spec.Mounts, err = s.volumes.bind(id, opts.mounts)
+	if err != nil {
+		s.confirmRemoval(id, "")
 		return Sandbox{}, err
 	}
 
@@ -280,6 +288,12 @@ func (s *Sandboxes) Create(ctx context.Context, req CreateRequest) (result Sandb
 	sb.container = containerID
 	if err != nil || sb.state != StatePending {
 		s.killLocked(sb, KillRequested)
+		if len(opts.mounts) > 0 {
+			if persistErr := s.saveSandboxLocked(sb); persistErr != nil {
+				sb.mu.Unlock()
+				return Sandbox{}, persistErr
+			}
+		}
 		var cleanupErr error
 		if containerID != "" {
 			cleanupErr = s.removeOrQueue(context.WithoutCancel(ctx), id, containerID)
@@ -319,26 +333,34 @@ func (s *Sandboxes) reserve(id string) error {
 	return nil
 }
 
-func (s *Sandboxes) forget(sb *sandbox) {
+func (s *Sandboxes) forget(sb *sandbox) bool {
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
+	if len(sb.opts.mounts) != 0 {
+		s.retryMu.Lock()
+		_, reserved := s.reservationLive[sb.id]
+		s.retryMu.Unlock()
+		if reserved {
+			return false
+		}
+	}
 	if s.journal != nil {
 		history := sb.executions
 		sb.executions = nil
 		err := s.saveSandboxLocked(sb)
 		sb.executions = history
 		if err != nil {
-			return
+			return false
 		}
 		for _, ex := range sb.executions {
 			s.journal.remove(sb.id + "-" + ex.id + ".json")
 		}
 		if s.journal.health() != nil {
-			return
+			return false
 		}
 		s.journal.remove(sb.id + ".json")
 		if s.journal.health() != nil {
-			return
+			return false
 		}
 	}
 	sb.forgotten = true
@@ -348,9 +370,10 @@ func (s *Sandboxes) forget(sb *sandbox) {
 	for i, other := range s.order {
 		if other == sb {
 			s.order = append(s.order[:i], s.order[i+1:]...)
-			return
+			return true
 		}
 	}
+	return false
 }
 
 func (s *Sandboxes) Get(id string) (Sandbox, error) {
@@ -553,6 +576,9 @@ func (s *Sandboxes) Delete(ctx context.Context, id string) (Sandbox, error) {
 	sb.mu.Lock()
 	defer sb.mu.Unlock()
 
+	if sb.state == StatePending && len(sb.opts.mounts) > 0 {
+		return Sandbox{}, errorf(CodeInvalidState, "sandbox creation with volumes is pending")
+	}
 	if sb.state == StateKilled {
 		if sb.container != "" && s.removalPending(sb.container) {
 			return sb.snapshot(), s.unconfirmedRemoval(sb.container)
@@ -751,6 +777,7 @@ func (sb *sandbox) invalidState() error {
 func (sb *sandbox) snapshot() Sandbox {
 	return Sandbox{
 		AgentMode: cmp.Or(sb.agentMode, "legacy"), Protected: sb.protected,
+		Mounts:                  slices.Clone(sb.opts.mounts),
 		Runtime:                 sb.opts.runtime,
 		MaxConcurrentExecutions: sb.opts.maxConcurrentExecutions,
 		ID:                      sb.id,

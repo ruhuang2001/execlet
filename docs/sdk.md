@@ -237,6 +237,7 @@ The sentinels are mutually exclusive. An execution matches the sentinel for its 
 
 - Retry candidates: transport errors before a complete response, truncated response bodies, and status 429, 500, 502, 503, 504.
 - Only requests that are safe to repeat are retried: `GET`, `DELETE`, `PUT` (ordinary files, excluding archives), pause, resume, cancel, and execution starts carrying an idempotency key. `POST /v1/sandboxes` is attempted exactly once.
+- `DeleteVolume` retries only an explicit HTTP 503. On a lost response it returns a transport error without replaying. To reconcile, explicitly repeat the delete: `204` confirms cleanup; `404` means the ID is absent. `GetVolume` only sees ready volumes.
 - Backoff cap: `min(2s, 200ms * 2^attempt)`. The delay is sampled uniformly from half the cap to the cap. For ordinary requests, a positive integer `Retry-After` value in seconds overrides the delay; zero, HTTP-date values, and invalid values use the calculated backoff.
 - Retries stop as soon as the context is done.
 

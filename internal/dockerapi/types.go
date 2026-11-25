@@ -9,6 +9,7 @@ type ContainerConfig struct {
 }
 
 type HostConfig struct {
+	Mounts      []Mount           `json:"Mounts,omitempty"`
 	Runtime     string            `json:"Runtime,omitempty"`
 	Memory      int64             `json:"Memory,omitempty"`
 	MemorySwap  int64             `json:"MemorySwap,omitempty"`
@@ -19,6 +20,18 @@ type HostConfig struct {
 	NetworkMode string            `json:"NetworkMode,omitempty"`
 	Tmpfs       map[string]string `json:"Tmpfs,omitempty"`
 	Init        *bool             `json:"Init,omitempty"`
+}
+
+type Mount struct {
+	Type        string      `json:"Type"`
+	Source      string      `json:"Source"`
+	Target      string      `json:"Target"`
+	ReadOnly    bool        `json:"ReadOnly"`
+	BindOptions BindOptions `json:"BindOptions"`
+}
+
+type BindOptions struct {
+	NonRecursive bool `json:"NonRecursive"`
 }
 
 type Container struct {

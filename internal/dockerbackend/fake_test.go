@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/ruhuang2001/execlet/internal/dockerapi"
+	"github.com/ruhuang2001/execlet/internal/guestprotocol"
 )
 
 type fakeDaemon struct {
@@ -410,6 +411,10 @@ func (f *fakeDaemon) execStart(w http.ResponseWriter, _ *http.Request, execID st
 	f.mu.Unlock()
 	if ex == nil {
 		writeError(w, 404, "No such exec: "+execID)
+		return
+	}
+	if len(ex.command) == 5 && ex.command[0] == protocol.Binary && ex.command[1] == "transfer" && ex.command[2] == "put" {
+		serveTransferPut(f.t, w, ex)
 		return
 	}
 	w.Header().Set("Content-Type", "application/vnd.docker.raw-stream")

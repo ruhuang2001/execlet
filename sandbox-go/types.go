@@ -55,6 +55,8 @@ type Sandbox struct {
 	CreatedAt               Time        `json:"created_at"`
 	ExpiresAt               *Time       `json:"expires_at"`
 	KillReason              *KillReason `json:"kill_reason"`
+
+	Mounts []VolumeMount `json:"mounts,omitempty"`
 }
 
 type Execution struct {
@@ -95,6 +97,7 @@ type CreateSandboxRequest struct {
 	IdleTimeoutSeconds      *int              `json:"idle_timeout_seconds,omitempty"`
 	IdleTimeoutAction       *Action           `json:"idle_timeout_action,omitempty"`
 	Env                     map[string]string `json:"env,omitempty"`
+	Mounts                  []VolumeMount     `json:"mounts,omitempty"`
 }
 
 type UpdateSandboxRequest struct {

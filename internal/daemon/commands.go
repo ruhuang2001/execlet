@@ -32,6 +32,9 @@ func (s *Sandboxes) backgroundCommands() bool {
 
 func (h *Handler) capabilities(w http.ResponseWriter, _ *http.Request) {
 	flags := []string{"execution.env-cwd.v1", "files.archive.v1", "files.list.v1", "files.stat.v1", "execution.stdin.v1", "execution.concurrent.v1", "sandbox.runtime.v1", "execution.output-tail.v1", "sandbox.purge.v1"}
+	if h.store.volumes != nil {
+		flags = append(flags, VolumeCapability)
+	}
 	if h.store.backgroundCommands() {
 		flags = append(flags, "e2b.background.v1")
 	}

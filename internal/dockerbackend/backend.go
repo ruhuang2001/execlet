@@ -52,7 +52,7 @@ func Dial(ctx context.Context, socketPath string) (*Backend, error) {
 		return nil, err
 	}
 	b := New(api)
-	_ = b.SetGuestAgent("auto")
+	_ = b.SetGuestAgent("auto", false)
 	if runtime.GOOS == "linux" {
 		b.cgroupRoot = "/sys/fs/cgroup"
 	}
@@ -62,6 +62,9 @@ func Dial(ctx context.Context, socketPath string) (*Backend, error) {
 func (b *Backend) Ping(ctx context.Context) error { return b.api.Ping(ctx) }
 
 func (b *Backend) Create(ctx context.Context, spec daemon.ContainerSpec) (string, error) {
+	if len(spec.Mounts) > 0 && b.guestMode != "auto" {
+		return "", errors.New("persistent volumes require the guest agent")
+	}
 	limit := int64(spec.MemoryMB) << 20
 	pidsLimit := spec.PidsLimit
 	if pidsLimit <= 0 {
@@ -91,6 +94,9 @@ func (b *Backend) Create(ctx context.Context, spec daemon.ContainerSpec) (string
 			Init:        &initProcess,
 		},
 	}
+	for _, m := range spec.Mounts {
+		cfg.HostConfig.Mounts = append(cfg.HostConfig.Mounts, dockerapi.Mount{Type: "bind", Source: m.Source, Target: m.Target, ReadOnly: m.ReadOnly, BindOptions: dockerapi.BindOptions{NonRecursive: true}})
+	}
 
 	archive, deliveryErr := b.guestImage(ctx, &cfg)
 	id, err := b.api.ContainerCreate(ctx, spec.Name, cfg)
@@ -113,9 +119,15 @@ func (b *Backend) Create(ctx context.Context, spec daemon.ContainerSpec) (string
 	}
 	if err != nil {
 		createErr := fmt.Errorf("dockerbackend: create %s: %w", spec.Image, err)
+		if errors.Is(err, dockerapi.ErrCreateNotSent) {
+			return "", createErr
+		}
 		status, ok := errors.AsType[*dockerapi.StatusError](err)
 		sandboxID, owner := spec.Labels[daemon.SandboxIDLabelKey], spec.Labels[daemon.OwnerLabelKey]
 		if (!ok || status.Status >= http.StatusInternalServerError) && sandboxID != "" && owner != "" && spec.Name == "execlet-"+sandboxID {
+			if len(spec.Mounts) > 0 {
+				return daemon.PendingVolumeCreatePrefix + sandboxID, createErr
+			}
 			return pendingCreatePrefix + sandboxID + ":" + owner, createErr
 		}
 		return "", createErr
@@ -130,6 +142,9 @@ func (b *Backend) Create(ctx context.Context, spec daemon.ContainerSpec) (string
 	}
 	if err := b.api.ContainerStart(ctx, id); err != nil {
 		startErr := fmt.Errorf("dockerbackend: start container: %w", err)
+		if len(spec.Mounts) != 0 {
+			return id, startErr
+		}
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), daemon.BackendCallTimeout)
 		defer cancel()
 		if rmErr := b.Remove(cleanupCtx, id); rmErr != nil && !errors.Is(rmErr, daemon.ErrNotFound) {
@@ -148,6 +163,9 @@ func (b *Backend) Create(ctx context.Context, spec daemon.ContainerSpec) (string
 	if spec.Runtime == "runsc" && b.guest(id) == nil {
 		return id, errors.New("runsc requires the guest agent for filesystem access")
 	}
+	if len(spec.Mounts) > 0 && b.guest(id) == nil {
+		return id, errors.New("persistent volumes require the guest agent for filesystem access")
+	}
 	if spec.Network == daemon.NetworkFiltered {
 		if b.guest(id) == nil {
 			return id, errors.New("filtered network requires guest agent")
@@ -160,6 +178,14 @@ func (b *Backend) Create(ctx context.Context, spec daemon.ContainerSpec) (string
 }
 
 const pendingCreatePrefix = "pending-create:"
+
+func (b *Backend) ResolveVolumeCreate(ctx context.Context, sandboxID, owner string) (string, error) {
+	c, err := b.inspectSandbox(ctx, sandboxID, owner)
+	if dockerapi.IsNotFound(err) || errors.Is(err, daemon.ErrNotFound) {
+		return "", daemon.ErrVolumeCreateUnconfirmed
+	}
+	return c.ID, err
+}
 
 func (b *Backend) inspectSandbox(ctx context.Context, sandboxID, owner string) (dockerapi.ContainerInspect, error) {
 	name := "execlet-" + sandboxID
@@ -451,7 +477,7 @@ func (b *Backend) WriteFile(ctx context.Context, containerID, path string, data 
 		return daemon.FileEntry{}, err
 	}
 	if err := b.archivePut(ctx, containerID, "/", tarBody); err != nil {
-		return daemon.FileEntry{}, notFound(err, "%s", path)
+		return daemon.FileEntry{}, b.volumeWriteError(containerID, path, err)
 	}
 	entry, err := b.StatFile(ctx, containerID, path)
 	if err != nil {

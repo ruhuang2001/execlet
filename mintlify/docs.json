@@ -58,6 +58,7 @@
             "pages": [
               "operations/self-hosting",
               "operations/policy",
+              "operations/volumes",
               "operations/templates",
               "operations/recovery",
               "operations/metrics",

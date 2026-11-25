@@ -2,11 +2,14 @@ package dockerbackend
 
 import (
 	"context"
+	"errors"
 	"io"
+	"path"
 	"strings"
 
 	"github.com/ruhuang2001/execlet/internal/daemon"
 	"github.com/ruhuang2001/execlet/internal/filearchive"
+	"github.com/ruhuang2001/execlet/internal/guestprotocol"
 )
 
 func (b *Backend) ReadArchive(ctx context.Context, id, p string) ([]byte, error) {
@@ -54,7 +57,14 @@ func (b *Backend) WriteArchive(ctx context.Context, id, p string, archive *filea
 	if err != nil {
 		return err
 	}
-	return notFound(b.archivePut(ctx, id, p, data), "%s", p)
+	err = b.archivePut(ctx, id, p, data)
+	if failure, ok := errors.AsType[*protocol.Error](err); ok && failure.ArchiveMember != "" {
+		if !archive.HasMember(failure.ArchiveMember) {
+			return &daemon.Error{Code: daemon.CodeBackendError, Message: "guest reported an unknown archive member", Err: err}
+		}
+		p = path.Join(p, failure.ArchiveMember)
+	}
+	return b.volumeWriteError(id, p, err)
 }
 func (b *Backend) checkArchiveDestination(ctx context.Context, id, p string) error {
 	if err := b.checkArchivePaths(ctx, id, "/", []string{p}); err != nil {

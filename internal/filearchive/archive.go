@@ -208,6 +208,10 @@ func (a *Archive) Entries() []Entry {
 	return result
 }
 
+func (a *Archive) HasMember(name string) bool {
+	return slices.ContainsFunc(a.entries, func(e Entry) bool { return e.Header.Name == name })
+}
+
 func (a *Archive) BytesOwnedBy(uid, gid int) ([]byte, error) {
 	if uid == 0 && gid == 0 {
 		return a.Bytes(), nil

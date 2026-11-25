@@ -27,15 +27,18 @@ unknown paths or unsupported methods may use plain text:
 |---|---|---|---|
 | 400 | `invalid_request` | malformed JSON, invalid value, or an invalid `Last-Event-ID` | no |
 | 401 | `unauthorized` | missing or wrong API key | no |
-| 404 | `not_found` | sandbox, execution, or file does not exist | no |
+| 404 | `not_found` | sandbox, execution, volume, or file does not exist | no |
 | 409 | `invalid_state` | operation not allowed in the sandbox's current state (see transition table) | no |
 | 409 | `busy` | the sandbox execution slots are full | no |
 | 409 | `idempotency_conflict` | idempotency key reused with a different `command`, `cwd`, `env`, or `stdin` | no |
+| 409 | `volume_in_use` | another sandbox holds the volume, or its attachment is not yet confirmed removed | no |
+| 409 | `volume_read_only` | the destination volume does not allow writes | no |
 | 413 | `payload_too_large` | JSON request body, file upload, directory scan, or tar transfer exceeds a limit | no |
-| 429 | `rate_limited` | sandbox slots, deployment resource budgets or event-stream slots are exhausted | yes |
+| 429 | `rate_limited` | sandbox or volume slots, deployment resource budgets or event-stream slots are exhausted | yes |
 | 500 | `internal` | unexpected server error | yes |
 | 502 | `backend_error` | the container runtime failed | yes |
-| 503 | `unavailable` | server shutting down or not ready | yes |
+| 503 | `unavailable` | server not ready, or the requested storage feature is disabled or unavailable | yes |
+| 507 | `volume_quota_exceeded` | the destination volume cannot allocate the write | no |
 
 Clients may honor a `Retry-After` header (seconds) on 429 and 503.
 
@@ -58,6 +61,7 @@ Creation is never automatically retried; see the respective SDK contracts.
 | `nano_cpus` | int | CPU limit in units of 1e-9 CPUs, default `0` (unlimited) |
 | `network` | string | `bridge`, `none`, or administrator-configured `filtered` |
 | `runtime` | string | Selected administrator-allowed runtime when configured |
+| `mounts` | object[] | Omitted when empty. Immutable volume mount settings; does not imply a killed sandbox still holds a mount. |
 | `agent_mode` | string | `guest` after a successful handshake, `legacy` when disabled, or `unavailable` on fallback |
 | `protected` | boolean | A working root guest agent protects its control directory from the non-root workload |
 | `timeout_seconds` | int | lifetime timeout, default 300, `0` disables |
@@ -112,6 +116,10 @@ managed `timeout_ms` before create/start. Basic legacy calls need no discovery.
 The stat endpoint advertises `files.stat.v1`. Guest-enabled deployments advertise `terminals.v1` for PTY sessions. Directory listings require `files.list.v1`; archive reads and writes require
 `files.archive.v1`. These checks happen before the file request. Ordinary
 file reads and writes need no discovery; no file method downgrades to shell.
+Discover `volumes.v1` before any volume operation or nonempty `mounts` on create.
+An older server can ignore `mounts` and otherwise report a successful create.
+Configured volume support stays advertised during a journal outage. Check
+`/readyz` for health; volume operations return `503 unavailable` during the outage.
 
 ### `GET /metrics`
 
@@ -165,7 +173,7 @@ Operation results by current state:
 |---|---|---|---|---|
 | pause | 409 `invalid_state` | becomes `paused` | 200, no change | 409 `invalid_state` |
 | resume | 409 `invalid_state` | 200, no change | becomes `running` | 409 `invalid_state` |
-| delete | becomes `killed` | becomes `killed` | becomes `killed` | 200, no change |
+| delete | becomes `killed` for an ordinary delete with no mounts; otherwise 409 `invalid_state` | becomes `killed` | becomes `killed` | 200 after confirmed removal |
 | start execution | 409 `invalid_state` | allowed | resumes, then allowed | 409 `invalid_state` |
 | read/write file | 409 `invalid_state` | allowed | resumes, then allowed | 409 `invalid_state` |
 | cancel execution | n/a | allowed | resumes, then allowed | returns the stored record |
@@ -257,6 +265,35 @@ unavailable. Readiness checks connectivity, not image availability or capacity.
 
 `200 {"status": "ok", "version": "<build version>"}`. No authentication.
 
+### `POST /v1/volumes`
+
+Send `{"size_bytes":16777216}`. Choose a whole MiB between 16 MiB and the
+configured `max_volume_bytes` (at most 1 TiB). The size includes filesystem
+metadata; usable file space is smaller. Capacity is fixed at creation.
+Returns `201` with `Location: /v1/volumes/{volume_id}` and a Volume object:
+`{"id":"vol_…","size_bytes":16777216,"created_at":"2026-01-01T00:00:00Z"}`.
+The count cap is `429 rate_limited`. Creation is not idempotent. When the
+feature is disabled, all volume endpoints return `503 unavailable`.
+
+### `GET /v1/volumes`
+
+Returns `200 {"volumes":[Volume, ...]}` sorted by ID. Includes attached ready
+volumes but excludes provisioning and deleting records.
+
+### `GET /v1/volumes/{volume_id}`
+
+Returns `200` with the ready volume or `404 not_found`.
+
+### `DELETE /v1/volumes/{volume_id}`
+
+Returns `204` when backing storage is removed, `404 not_found` for an unknown
+ID, or `409 volume_in_use` while a sandbox holds it. This includes paused
+sandboxes and pending removal. If storage cleanup returns `503`, retry DELETE;
+no new attachments can start while deletion is pending.
+If the reply is lost, the Go SDK returns the transport error instead of
+replaying the deletion. GET hides volumes already being deleted. To reconcile,
+explicitly repeat DELETE: `204` confirms cleanup; `404` means the ID is absent.
+
 ### `POST /v1/sandboxes`
 
 Creation returns `409 invalid_state` when Docker reports a name collision and the existing container cannot be safely reclaimed.
@@ -267,9 +304,9 @@ Request (all fields optional):
 {"image": "python:3.12-alpine", "memory_mb": 256, "pids_limit": 512, "nano_cpus": 1000000000, "network": "none", "timeout_seconds": 600, "timeout_action": "pause", "idle_timeout_seconds": 60, "idle_timeout_action": "pause"}
 ```
 
-- `pids_limit` defaults to 1024 and must be at least 64. It bounds tasks, not
-  processes: threads count. It is what stops a fork bomb at the container
-  boundary instead of at the host's PID table.
+- `pids_limit` defaults to 1024 and must be at least 64. It bounds host cgroup
+  tasks. With runc this includes workload processes and threads; with runsc it
+  is not a limit on the number of virtual guest processes.
 - `max_concurrent_executions` defaults to 1 and accepts 1–8. It is immutable;
   see the [concurrency policy](#concurrent-execution-policy).
 - `nano_cpus` is a CPU limit in units of 1e-9 CPUs; `0`, the default, means no
@@ -278,6 +315,13 @@ Request (all fields optional):
   network namespace with outbound access, so package installs and HTTP calls
   work. `none` removes networking entirely. Host networking is not offered: it
   would expose every host socket to code the caller does not control.
+- `mounts` accepts up to eight `{ "volume_id": "vol_…", "path": "/mnt/work", "read_only": false }`
+  entries; omitting `read_only` defaults to false, while `null` is invalid.
+  Use distinct volumes and nonoverlapping canonical paths below `/mnt` of at
+  most 4096 bytes, using ASCII letters, digits, `/`, `.`, `_`, or
+  `-`. Unknown volumes return `404`, and a held volume returns `409 volume_in_use`
+  even for a read-only attachment. Pause retains the attachment. Confirmed
+  removal releases the attachment without deleting the volume.
 - `env` is the sandbox's own environment. Every execution sees it, and it
   survives a client reconnecting and creating a new Sandbox object. A
   per-execution `env` entry overrides it for that execution only. The same
@@ -323,6 +367,9 @@ No body. `200` Sandbox. Idempotent per the transition table.
 The optional query parameter `purge=true` requests permanent cleanup. Check for `sandbox.purge.v1` before sending it. A successful call confirms removal of the container and its local history. Subsequent listing excludes the ID and lookup returns 404. Ordinary deletion retains its history.
 
 `200` Sandbox in state `killed`, once the container is confirmed gone. Repeating deletion is idempotent and returns the stored killed record.
+
+A sandbox whose creation with volumes is still pending returns `409 invalid_state`.
+Purge also rejects pending creation. A volume remains reserved until removal can be confirmed.
 
 A removal the runtime refuses is `502 backend_error` with `unconfirmed container removal: <container>`: the sandbox is killed and the removal is retried in the background, but removal is unconfirmed, so answering `200` would claim cleanup that has not happened. Repeating the delete continues to report the error until the background retry confirms removal.
 
@@ -423,6 +470,11 @@ The request body contains raw bytes. The daemon creates missing parent directori
 
 The file and every parent directory this write creates are owned by the container's default user, because the archive is extracted by a root process: without that, an uploaded file in a fresh directory is root-owned and a non-root guest cannot write its output beside it. Existing parents keep their own owner and mode.
 
+For a mounted volume, regular-file replacement is staged on the destination
+filesystem. `409 volume_read_only` and `507 volume_quota_exceeded` leave the
+previous file intact. A failed request may leave newly created parent
+directories. Replacing a file requires enough free space for the new copy.
+
 <a id="directory-listing"></a>
 
 ### `GET /v1/sandboxes/{sandbox_id}/files/list`
@@ -496,6 +548,9 @@ cancellation can leave partial extraction; there is no filesystem transaction.
 SDKs therefore send archive PUT exactly once, unlike ordinary file PUT.
 No uploaded data is extracted on the daemon host. The directory/archive path
 and query validation rules are the same as directory listing.
+On a persistent volume, a read-only destination returns `409 volume_read_only`;
+exhausting space returns `507 volume_quota_exceeded`. Members completed before
+a runtime write failure are not rolled back.
 
 ## Event stream
 

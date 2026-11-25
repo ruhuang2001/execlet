@@ -178,7 +178,7 @@ and tests the installed wheel and npm tarball: 40 cases in each language plus
 the reference comparison, operations fault suite and independent cleanup.
 The original v0.0.2 commit runs foreground acceptance; v0.0.1 has no E2B or
 Python/TypeScript SDK suites. v0.0.3 already has background, guest and runtime
-acceptance but predates the release-archive MCP, installer and
+acceptance but predates the volume, release-archive MCP, installer and
 Mintlify OpenAPI checks. CI selects these exceptions by the explicit full
 commit SHA, not by missing files, ancestry or a tag name. The job uploads
 available reports and logs even on failure, but uploads the `sdk-distributions`

@@ -5,16 +5,17 @@ import (
 	"context"
 	"encoding/json/v2"
 	"errors"
+	"io"
+	"strconv"
+
 	"github.com/ruhuang2001/execlet/internal/daemon"
 	"github.com/ruhuang2001/execlet/internal/dockerapi"
 	"github.com/ruhuang2001/execlet/internal/filearchive"
 	"github.com/ruhuang2001/execlet/internal/guestprotocol"
-	"io"
-	"strconv"
 )
 
 func (b *Backend) archiveGet(ctx context.Context, id, path string) (io.ReadCloser, error) {
-	if g := b.guest(id); g != nil && g.runtime == "runsc" {
+	if g := b.guest(id); g != nil && (g.runtime == "runsc" || len(g.mounts) != 0) {
 		data, err := b.transfer(ctx, id, "get", path, nil)
 		if err != nil {
 			return nil, err
@@ -24,7 +25,7 @@ func (b *Backend) archiveGet(ctx context.Context, id, path string) (io.ReadClose
 	return b.api.ArchiveGet(ctx, id, path)
 }
 func (b *Backend) archivePut(ctx context.Context, id, path string, data []byte) error {
-	if g := b.guest(id); g != nil && g.runtime == "runsc" {
+	if g := b.guest(id); g != nil && (g.runtime == "runsc" || len(g.mounts) != 0) {
 		_, err := b.transfer(ctx, id, "put", path, data)
 		return err
 	}
@@ -51,6 +52,9 @@ func (b *Backend) transfer(ctx context.Context, id, op, path string, data []byte
 		var e protocol.Error
 		if err := json.Unmarshal(raw, &e); err != nil {
 			return nil, err
+		}
+		if op == "put" && (e.Code == protocol.CodeInsufficientStorage || e.Code == protocol.CodeReadOnlyFilesystem) {
+			return nil, &e
 		}
 		return nil, &daemon.Error{Code: daemon.Code(e.Code), Message: e.Message}
 	}

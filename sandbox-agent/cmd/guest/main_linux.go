@@ -61,6 +61,8 @@ func run(args []string) error {
 		}
 		runtime.GOMAXPROCS(1)
 		return serve(*path, id)
+	case "verify-volume-mounts":
+		return verifyVolumeMounts(args[1:])
 	case "transfer":
 		return transfer(args[1:])
 	case "proxy-accept":

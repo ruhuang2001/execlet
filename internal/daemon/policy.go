@@ -13,17 +13,19 @@ import (
 )
 
 type DeploymentPolicy struct {
-	Templates    map[string]string `json:"templates,omitempty"`
-	catalogPath  string
-	Prewarm      []PrewarmTarget `json:"prewarm,omitempty"`
-	Runtimes     []string        `json:"allowed_runtimes,omitempty"`
-	Egress       *egress.Policy  `json:"egress,omitempty"`
-	MaxSandboxes int             `json:"max_sandboxes"`
-	MemoryMB     int64           `json:"total_memory_mb"`
-	NanoCPUs     int64           `json:"total_nano_cpus"`
-	Pids         int64           `json:"total_pids"`
-	Images       []string        `json:"allowed_images"`
-	Networks     []NetworkMode   `json:"allowed_networks"`
+	Templates      map[string]string `json:"templates,omitempty"`
+	catalogPath    string
+	Prewarm        []PrewarmTarget `json:"prewarm,omitempty"`
+	Runtimes       []string        `json:"allowed_runtimes,omitempty"`
+	Egress         *egress.Policy  `json:"egress,omitempty"`
+	MaxSandboxes   int             `json:"max_sandboxes"`
+	MaxVolumes     int             `json:"max_volumes,omitempty"`
+	MaxVolumeBytes int64           `json:"max_volume_bytes,omitempty"`
+	MemoryMB       int64           `json:"total_memory_mb"`
+	NanoCPUs       int64           `json:"total_nano_cpus"`
+	Pids           int64           `json:"total_pids"`
+	Images         []string        `json:"allowed_images"`
+	Networks       []NetworkMode   `json:"allowed_networks"`
 }
 
 func LoadPolicy(path string) (DeploymentPolicy, error) {
@@ -42,6 +44,9 @@ func LoadPolicy(path string) (DeploymentPolicy, error) {
 func (p DeploymentPolicy) Validate() error {
 	if p.MaxSandboxes <= 0 || p.MemoryMB <= 0 || p.NanoCPUs <= 0 || p.Pids <= 0 || len(p.Images) == 0 || len(p.Networks) == 0 {
 		return errors.New("policy requires positive aggregate budgets, allowed_images and allowed_networks")
+	}
+	if (p.MaxVolumes != 0 || p.MaxVolumeBytes != 0) && (p.MaxVolumes < 1 || p.MaxVolumes > 256 || !validVolumeSize(p.MaxVolumeBytes)) {
+		return errors.New("volume policy requires max_volumes (1–256) and max_volume_bytes (16 MiB–1 TiB, whole MiB)")
 	}
 	if err := validateTemplates(p.Templates); err != nil {
 		return err
@@ -190,6 +195,9 @@ func (b *PolicyBackend) createFresh(ctx context.Context, spec ContainerSpec) (st
 			b.mu.Unlock()
 			return "", backendError(err)
 		}
+		if len(spec.Mounts) != 0 {
+			return id, backendError(err)
+		}
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), BackendCallTimeout)
 		defer cancel()
 		if removeErr := b.Remove(cleanup, id); removeErr != nil && !errors.Is(removeErr, ErrNotFound) {
@@ -198,6 +206,15 @@ func (b *PolicyBackend) createFresh(ctx context.Context, spec ContainerSpec) (st
 		return "", backendError(err)
 	}
 	return id, nil
+}
+
+func (b *PolicyBackend) rekeyAllocation(oldID, newID string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if spec, exists := b.allocations[oldID]; exists {
+		b.allocations[newID] = spec
+		delete(b.allocations, oldID)
+	}
 }
 
 func (b *PolicyBackend) Remove(ctx context.Context, id string) error {

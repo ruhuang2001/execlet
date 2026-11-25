@@ -515,6 +515,9 @@ jobs:
         run: |
           sudo env "PATH=$PATH" "GOCOVERDIR=$PWD/artifacts/runtime-coverage" python3 scripts/e2e-runtime.py
           sudo env "PATH=$PATH" "GOCOVERDIR=$PWD/artifacts/runtime-coverage" python3 scripts/e2e-templates.py --runtime runsc --out artifacts/runsc-template
+      - name: verify persistent volumes with both runtimes
+        if: needs.profile.outputs.legacy_tag == ''
+        run: sudo env "PATH=$PATH" TMPDIR=/var/tmp "GOCOVERDIR=$PWD/artifacts/runtime-coverage" python3 scripts/e2e-volumes.py
       - name: make runtime evidence readable
         if: always() && needs.profile.outputs.guest == 'true'
         run: if test -d artifacts; then sudo chown -R "$(id -u):$(id -g)" artifacts; fi
@@ -532,6 +535,8 @@ jobs:
           path: |
             artifacts/runtime/*.json
             artifacts/runtime/*.log
+            artifacts/volumes/*.json
+            artifacts/volumes/*.log
             artifacts/runsc-template/*.json
           retention-days: 7
 

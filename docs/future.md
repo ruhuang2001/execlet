@@ -2,15 +2,15 @@
 
 The current source covers lifecycle, execution, E2B background handles,
 capability checks, opt-in aggregate policy, conservative restart recovery,
-metrics and a repeatable warm-image latency/fault suite. SDK distributions are
-built and installed in CI; registry publication still requires owner setup and
-an explicit release. See [operations](operations.md) and [versioning](versioning.md).
+[local persistent volumes](operations.md#persistent-volumes), metrics, and a
+repeatable warm-image latency/fault suite. SDK distributions
+are built and installed in CI; registry publication still requires owner setup
+and an explicit release. See [operations](operations.md) and [versioning](versioning.md).
 The capabilities below are **not implemented**, not committed delivery plans.
 
 | Capability | Next design step | Main cost or risk |
 |---|---|---|
 | Process checkpoints | Define recovery of process memory and runtime compatibility beyond filesystem templates | Storage and consistency at checkpoint time |
-| Persistent volumes | Define mount ownership, quota, and cleanup independently of the sandbox lifetime | Data isolation, orphaned storage |
 | Secret injection | Short-lived, narrowly scoped credentials; redaction in logs and server-side audit | Leakage through logs, environment variables, or untrusted code |
 | Multi-tenancy and billing | Tenant-scoped scheduling, quotas, metering, and explicit resource termination | Noisy neighbours, authorization, billing correctness |
 | Browser automation | Isolated browser images, network controls, artifact capture, session timeouts | Larger attack surface, heavier resource use |

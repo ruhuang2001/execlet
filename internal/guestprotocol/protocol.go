@@ -77,7 +77,15 @@ func ResponseType(kind byte) byte {
 	return kind + 32
 }
 
-type Error struct{ Code, Message string }
+const (
+	CodeInsufficientStorage = "insufficient_storage"
+	CodeReadOnlyFilesystem  = "read_only_filesystem"
+)
+
+type Error struct {
+	Code, Message string
+	ArchiveMember string `json:",omitempty"`
+}
 
 func (e *Error) Error() string { return e.Message }
 

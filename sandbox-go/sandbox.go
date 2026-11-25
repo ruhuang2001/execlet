@@ -4,9 +4,37 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"path"
+	"slices"
+	"strings"
 )
 
 func (c *Client) CreateSandbox(ctx context.Context, req CreateSandboxRequest) (*Sandbox, error) {
+	if len(req.Mounts) > 8 {
+		return nil, &Error{Code: "invalid_request", Message: "sandbox: at most eight volume mounts are allowed"}
+	}
+	req.Mounts = slices.Clone(req.Mounts)
+	for i, mount := range req.Mounts {
+		p := mount.Path
+		if len(p) > 4096 {
+			return nil, &Error{Code: "invalid_request", Message: "sandbox: mount path exceeds 4096 bytes"}
+		}
+		if mount.VolumeID == "" || !strings.HasPrefix(p, "/mnt/") || path.Clean(p) != p || strings.ContainsFunc(p, func(c rune) bool {
+			switch {
+			case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', strings.ContainsRune("/._-", c):
+				return false
+			default:
+				return true
+			}
+		}) {
+			return nil, &Error{Code: "invalid_request", Message: "sandbox: mounts require a volume_id and a canonical path below /mnt"}
+		}
+		for _, prior := range req.Mounts[:i] {
+			if mount.VolumeID == prior.VolumeID || p == prior.Path || strings.HasPrefix(p, prior.Path+"/") || strings.HasPrefix(prior.Path, p+"/") {
+				return nil, &Error{Code: "invalid_request", Message: "sandbox: mounts cannot repeat a volume or overlap"}
+			}
+		}
+	}
 	var required []string
 	if req.Runtime != "" {
 		required = append(required, "sandbox.runtime.v1")
@@ -16,6 +44,9 @@ func (c *Client) CreateSandbox(ctx context.Context, req CreateSandboxRequest) (*
 	}
 	if req.MaxConcurrentExecutions != nil {
 		required = append(required, "execution.concurrent.v1")
+	}
+	if len(req.Mounts) > 0 {
+		required = append(required, volumeCapability)
 	}
 	if err := c.RequireCapabilities(ctx, required...); err != nil {
 		return nil, err

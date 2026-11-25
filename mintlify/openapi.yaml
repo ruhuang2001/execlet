@@ -19,6 +19,7 @@ tags:
   - name: sandboxes
   - name: executions
   - name: files
+  - name: volumes
 paths:
   /v1/sandboxes/{sandbox_id}/terminals:
     parameters:
@@ -99,7 +100,7 @@ paths:
     get:
       operationId: getCapabilities
       summary: Query supported capabilities before using additive fields
-      description: File metadata uses files.stat.v1, interactive terminals use terminals.v1 and record purge uses sandbox.purge.v1.
+      description: File metadata uses files.stat.v1, terminals use terminals.v1, record purge uses sandbox.purge.v1, and persistent volumes use volumes.v1.
       responses:
         '200':
           description: Authenticated server capabilities; absence is not support.
@@ -220,6 +221,83 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Readiness'
+  /v1/volumes:
+    post:
+      tags: [volumes]
+      operationId: createVolume
+      summary: Provision a persistent volume
+      description: Requires volumes.v1. Creation is not idempotent. Capacity includes filesystem overhead.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateVolumeRequest'}
+      responses:
+        '201':
+          description: A private, bounded volume is ready.
+          headers:
+            Location:
+              schema: {type: string}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Volume'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '413': {$ref: '#/components/responses/PayloadTooLarge'}
+        '429': {$ref: '#/components/responses/RateLimited'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+    get:
+      tags: [volumes]
+      operationId: listVolumes
+      summary: List persistent volumes
+      responses:
+        '200':
+          description: Ready volumes, including attached volumes, sorted by ID.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [volumes]
+                properties:
+                  volumes: {type: array, items: {$ref: '#/components/schemas/Volume'}}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /v1/volumes/{volume_id}:
+    parameters:
+      - in: path
+        name: volume_id
+        required: true
+        schema: {type: string}
+        description: Opaque volume identifier.
+    get:
+      tags: [volumes]
+      operationId: getVolume
+      summary: Read persistent volume metadata
+      responses:
+        '200':
+          description: The volume.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Volume'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+    delete:
+      tags: [volumes]
+      operationId: deleteVolume
+      summary: Remove a detached volume and release its storage
+      description: >-
+        Returns volume_in_use if a sandbox still holds the volume, including while creation or removal is pending.
+        The Go SDK retries an explicit 503 within the configured retry budget. A lost response is ambiguous;
+        it returns the transport error without replay. GET only shows ready volumes. To confirm cleanup
+        after a lost response, explicitly retry DELETE; 204 confirms removal and 404 means the ID is absent.
+      responses:
+        '204':
+          description: Backing storage and metadata removed.
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '503': {$ref: '#/components/responses/Unavailable'}
   /v1/sandboxes:
     post:
       tags: [sandboxes]
@@ -248,6 +326,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
         '413':
@@ -313,11 +393,13 @@ paths:
       summary: Kill a sandbox
       description: >-
         Marks the sandbox killed, records canceled intent for active executions,
-        and requests container removal. Unconfirmed runtime removal returns 502
-        backend_error while scheduling background retries; repeated deletes keep
-        reporting 502 until removal is confirmed, then return 200 with the stored
-        killed record. With purge=true, wait for execution settlement and
-        discard the record and its retained executions after confirmed removal.
+        and requests container removal. Pending creation with volume mounts and
+        pending creation with purge=true return 409 invalid_state. Unconfirmed
+        runtime removal returns 502 backend_error while scheduling background
+        retries; repeated deletes keep reporting 502 until removal is confirmed,
+        then return 200 with the stored killed record. With purge=true, wait
+        for execution settlement and discard the record and its retained
+        executions after confirmed removal.
       parameters:
         - in: query
           name: purge
@@ -334,6 +416,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
         '429':
           $ref: '#/components/responses/RateLimited'
         '500':
@@ -693,6 +777,7 @@ paths:
       description: >-
         Writes raw bytes, creating parent directories and replacing an existing
         file. The sandbox resumes first if it is paused. Idempotent.
+        A rejected single-file replacement on a persistent volume retains the previous file.
       requestBody:
         required: true
         content:
@@ -725,6 +810,8 @@ paths:
           $ref: '#/components/responses/BackendError'
         '503':
           $ref: '#/components/responses/Unavailable'
+        '507':
+          $ref: '#/components/responses/VolumeFull'
   /v1/sandboxes/{sandbox_id}/files/stat:
     parameters:
       - $ref: '#/components/parameters/SandboxID'
@@ -887,6 +974,8 @@ paths:
           $ref: '#/components/responses/PayloadTooLarge'
         '502':
           $ref: '#/components/responses/BackendError'
+        '507':
+          $ref: '#/components/responses/VolumeFull'
 
 components:
   securitySchemes:
@@ -950,7 +1039,7 @@ components:
             code: unauthorized
             message: missing or invalid API key
     NotFound:
-      description: '404 not_found: the sandbox, execution, or file does not exist.'
+      description: '404 not_found: the sandbox, execution, volume, or file does not exist.'
       content:
         application/json:
           schema:
@@ -961,8 +1050,8 @@ components:
     Conflict:
       description: >-
         409, one of invalid_state (the operation is not allowed in the
-        sandbox's current state), busy (the sandbox's execution slots are full), or idempotency_conflict (the key was reused with a
-        different command, cwd, env, or stdin).
+        sandbox's current state), busy (the sandbox's execution slots are full), idempotency_conflict (the key was reused with a
+        different command, cwd, env, or stdin), volume_in_use (a sandbox holds the requested volume), or volume_read_only (a mounted volume rejects writes).
       content:
         application/json:
           schema:
@@ -980,6 +1069,11 @@ components:
               value:
                 code: idempotency_conflict
                 message: idempotency key was used for a different command, cwd, environment, or stdin
+    VolumeFull:
+      description: '507 volume_quota_exceeded: the persistent volume cannot allocate the write. Free space before retrying.'
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Error'}
     PayloadTooLarge:
       description: >-
         413 payload_too_large: the JSON request body exceeds 1 MiB (8 MiB for execution starts), decoded stdin exceeds 1 MiB, or a file
@@ -1056,6 +1150,35 @@ components:
         version:
           type: string
           description: The build version.
+    Volume:
+      type: object
+      required: [id, size_bytes, created_at]
+      properties:
+        id: {type: string, description: Opaque identifier.}
+        size_bytes: {type: integer, format: int64, description: Backing capacity including filesystem overhead.}
+        created_at: {type: string, format: date-time}
+    CreateVolumeRequest:
+      type: object
+      required: [size_bytes]
+      properties:
+        size_bytes:
+          type: integer
+          format: int64
+          minimum: 16777216
+          maximum: 1099511627776
+          multipleOf: 1048576
+          description: Capacity must also fit the deployment policy's max_volume_bytes.
+    VolumeMount:
+      type: object
+      required: [volume_id, path]
+      properties:
+        volume_id: {type: string, description: Opaque persistent volume ID.}
+        path:
+          type: string
+          maxLength: 4096
+          pattern: '^/mnt/([A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+$'
+          description: Canonical ASCII directory below /mnt, at most 4096 bytes. Dot and dot-dot components are invalid. Mounts cannot overlap or repeat a volume.
+        read_only: {type: boolean, default: false}
     CreateSandboxRequest:
       type: object
       description: >-
@@ -1063,6 +1186,7 @@ components:
         can talk to an older server.
       properties:
         runtime: {type: string, enum: [runc, runsc], description: Administrator-allowed Docker runtime.}
+        mounts: {type: array, maxItems: 8, items: {$ref: '#/components/schemas/VolumeMount'}, description: Requires volumes.v1. Set only at creation.}
         image:
           type: string
           default: alpine:3.20
@@ -1082,8 +1206,8 @@ components:
           minimum: 64
           default: 1024
           description: >-
-            Bounds tasks, not processes; threads count. Stops a fork bomb at
-            the container boundary instead of at the host's PID table.
+            Bounds host cgroup tasks, including threads. Under runsc this is
+            not a limit on the number of virtual guest processes.
         nano_cpus:
           type: integer
           minimum: 0
@@ -1167,6 +1291,7 @@ components:
         - kill_reason
       properties:
         runtime: {type: string, enum: [runc, runsc], description: Administrator-allowed Docker runtime.}
+        mounts: {type: array, items: {$ref: '#/components/schemas/VolumeMount'}, description: Mount configuration at creation.}
         agent_mode: {type: string, enum: [guest, legacy, unavailable]}
         protected: {type: boolean, description: Non-root workload isolated from the guest supervisor.}
         id:
@@ -1463,6 +1588,9 @@ components:
             - idempotency_conflict
             - payload_too_large
             - rate_limited
+            - volume_in_use
+            - volume_read_only
+            - volume_quota_exceeded
             - internal
             - backend_error
             - unavailable

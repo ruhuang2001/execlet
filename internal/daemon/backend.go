@@ -54,6 +54,7 @@ func (l Liveness) String() string {
 }
 
 type ContainerSpec struct {
+	Mounts    []BindMount
 	Runtime   string
 	Image     string
 	MemoryMB  int

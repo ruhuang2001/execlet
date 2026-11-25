@@ -32,6 +32,10 @@ var routes = []Route{
 	{Operation{http.MethodGet, "/v1/capabilities"}, (*Handler).capabilities},
 	{Operation{http.MethodGet, "/v1/sandboxes/{sandbox_id}/commands/{pid}"}, (*Handler).attachCommand},
 	{Operation{http.MethodPost, "/v1/sandboxes/{sandbox_id}/executions/{execution_id}/kill"}, (*Handler).killExecution},
+	{Operation{http.MethodPost, "/v1/volumes"}, (*Handler).createVolume},
+	{Operation{http.MethodGet, "/v1/volumes"}, (*Handler).listVolumes},
+	{Operation{http.MethodGet, "/v1/volumes/{volume_id}"}, (*Handler).getVolume},
+	{Operation{http.MethodDelete, "/v1/volumes/{volume_id}"}, (*Handler).deleteVolume},
 
 	{Operation{http.MethodPost, "/v1/sandboxes"}, (*Handler).createSandbox},
 	{Operation{http.MethodGet, "/v1/sandboxes"}, (*Handler).listSandboxes},

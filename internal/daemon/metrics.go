@@ -62,7 +62,7 @@ func (h *Handler) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 		}
 		fmt.Fprintf(&out, "%s_bucket{%s,le=\"+Inf\"} %d\n%s_sum{%s} %g\n%s_count{%s} %d\n", name, labels, row.count, name, labels, row.sum, name, labels, row.count)
 	}
-	fmt.Fprintf(&out, "# HELP execlet_cleanup_failures_total Failed container removal attempts.\n# TYPE execlet_cleanup_failures_total counter\nexeclet_cleanup_failures_total %d\n", m.cleanupFailures)
+	fmt.Fprintf(&out, "# HELP execlet_cleanup_failures_total Failed storage or container cleanup attempts.\n# TYPE execlet_cleanup_failures_total counter\nexeclet_cleanup_failures_total %d\n", m.cleanupFailures)
 	m.mu.Unlock()
 	h.store.retryMu.Lock()
 	live := 0

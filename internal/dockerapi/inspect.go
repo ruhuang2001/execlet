@@ -9,6 +9,14 @@ type ContainerInspect struct {
 	Name       string         `json:"Name"`
 	State      ContainerState `json:"State"`
 	HostConfig HostConfig     `json:"HostConfig"`
+	Mounts     []MountPoint   `json:"Mounts"`
+}
+
+type MountPoint struct {
+	Type        string `json:"Type"`
+	Source      string `json:"Source"`
+	Destination string `json:"Destination"`
+	RW          *bool  `json:"RW"`
 }
 
 type ContainerState struct {

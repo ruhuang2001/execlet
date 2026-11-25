@@ -49,6 +49,10 @@ func main() {
 			os.Exit(1)
 		}
 		policy = &value
+		if policy.MaxVolumes > 0 && *stateDir == "" {
+			slog.Error("persistent volumes require -state-dir")
+			os.Exit(1)
+		}
 	}
 
 	if *owner == "" {
@@ -76,7 +80,7 @@ func main() {
 	if policy != nil {
 		backend.ConfigureEgress(policy.Egress)
 	}
-	if err := backend.SetGuestAgent(*guestMode); err != nil {
+	if err := backend.SetGuestAgent(*guestMode, policy != nil && policy.MaxVolumes > 0); err != nil {
 		slog.Error("invalid guest mode", "error", err)
 		os.Exit(1)
 	}

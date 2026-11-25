@@ -75,7 +75,8 @@ mounted volume contents.
   prerequisites. `volumes.v1` indicates configured support, not storage
   health. Execlet retries cleanup of a failed allocation in the background;
   it stays hidden and counts against the limit until cleanup is confirmed.
-  Retry a volume deletion if storage cleanup was unconfirmed.
+  If a host process still holds the backing loop device open after unmount,
+  the image and quota slot stay reserved. Close that reference and retry DELETE.
 - `429 rate_limited`: Delete a detached volume before creating another.
 - `409 volume_in_use`: For a live attachment, delete the sandbox and wait for
   confirmed removal. If creation is still pending, see the recovery case below.
@@ -91,6 +92,10 @@ container creation. Execlet waits for the matching container and confirmed
 removal. If no container ever appears, the hold has no automatic expiry;
 ask the host operator to investigate. Do not edit the journal or unmount
 the volume to clear the hold.
+
+If recording a mounted sandbox fails after Docker creates it, repair the
+state storage and restart the same daemon. Leave the container in place so
+recovery can match its ID and reconcile the attachment.
 
 There is no volume resize, shared mount, cross-host replication, or per-tenant
 access control. Treat the state directory as sensitive application data and

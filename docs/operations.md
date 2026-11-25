@@ -52,7 +52,8 @@ budgets or runtime policy requires a restart. Recovery rechecks adopted containe
 
 Set both `max_volumes` (1–256) and `max_volume_bytes` (16 MiB–1 TiB, whole
 MiB) in the policy. A volume-enabled daemon must run on the local Linux
-Docker host in Docker's mount namespace, with loop devices, mount privileges,
+Docker host in Docker's mount namespace, with loop devices visible in both
+`/dev` and `/sys/dev/block`, mount privileges,
 `mount`, `mkfs.ext4`, a private `-state-dir`, and the embedded guest agent.
 The daemon allocates a fixed-size ext4 image for each volume. Count and
 per-volume size limit new allocations; filesystem metadata uses some of the
@@ -73,6 +74,12 @@ container, records its exact ID, and releases the volume after confirmed
 removal. If the request never produces a container, there is no automatic
 timeout or force-unlock API. Escalate to the host operator; do not delete
 journal records or detach the storage to clear the conflict.
+
+If Docker created a mounted sandbox but its state could not be journaled,
+repair the state storage and restart execletd with the same owner. The daemon
+leaves the container available for reconciliation instead of deleting the
+only evidence of the create. Recovery validates active volume links before
+removing containers; history for an already removed sandbox needs no volume.
 
 ### Named images and filesystem templates
 

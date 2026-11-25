@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -67,11 +68,12 @@ func volumeCommand(binary string, args ...string) error {
 	return nil
 }
 
+func (d *linuxVolumeDisk) reserve(id string) error {
+	return os.Mkdir(filepath.Join(d.dir, id), 0o700)
+}
+
 func (d *linuxVolumeDisk) create(v Volume) error {
 	dir := filepath.Join(d.dir, v.ID)
-	if err := os.Mkdir(dir, 0o700); err != nil {
-		return err
-	}
 	f, err := os.OpenFile(d.image(v.ID), os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 	if err != nil {
 		return err
@@ -154,12 +156,7 @@ func (d *linuxVolumeDisk) mounted(v Volume) (bool, error) {
 	if fs.Type != unix.EXT4_SUPER_MAGIC || fs.Flags&unix.ST_RDONLY != 0 || unix.Major(data.Dev) != 7 {
 		return false, errors.New("volume is not a writable loop-mounted ext4 filesystem")
 	}
-	dev, err := os.Open(fmt.Sprintf("/dev/loop%d", unix.Minor(data.Dev)))
-	if err != nil {
-		return false, err
-	}
-	defer func() { _ = dev.Close() }()
-	status, err := unix.IoctlLoopGetStatus64(int(dev.Fd()))
+	status, err := loopStatus(blockNumber(data.Dev))
 	if err != nil {
 		return false, err
 	}
@@ -167,6 +164,62 @@ func (d *linuxVolumeDisk) mounted(v Volume) (bool, error) {
 		return false, errors.New("volume mount does not match its backing image")
 	}
 	return true, nil
+}
+
+func blockNumber(dev uint64) string { return fmt.Sprintf("%d:%d", unix.Major(dev), unix.Minor(dev)) }
+
+func loopStatus(number string) (*unix.LoopInfo64, error) {
+	target, err := os.Readlink(filepath.Join("/sys/dev/block", number))
+	if err != nil {
+		return nil, err
+	}
+	dev, err := os.Open(filepath.Join("/dev", filepath.Base(target)))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = dev.Close() }()
+	var node unix.Stat_t
+	if err := unix.Fstat(int(dev.Fd()), &node); err != nil {
+		return nil, err
+	}
+	if node.Mode&unix.S_IFMT != unix.S_IFBLK || blockNumber(node.Rdev) != number {
+		return nil, fmt.Errorf("loop device does not match %s", number)
+	}
+	return unix.IoctlLoopGetStatus64(int(dev.Fd()))
+}
+
+func removeDetachedImage(path string) error {
+	var image unix.Stat_t
+	if err := unix.Lstat(path, &image); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	devices, err := os.ReadDir("/sys/dev/block")
+	if err != nil {
+		return err
+	}
+	for _, device := range devices {
+		if !strings.HasPrefix(device.Name(), "7:") {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join("/sys/dev/block", device.Name(), "loop")); errors.Is(err, os.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return err
+		}
+		status, err := loopStatus(device.Name())
+		if errors.Is(err, unix.ENXIO) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if status.Device == image.Dev && status.Inode == image.Ino {
+			return fmt.Errorf("volume image is still attached to block device %s", device.Name())
+		}
+	}
+	return os.Remove(path)
 }
 
 func (d *linuxVolumeDisk) remove(v Volume) error {
@@ -197,7 +250,7 @@ func (d *linuxVolumeDisk) remove(v Volume) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if err := os.Remove(d.image(v.ID)); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := removeDetachedImage(d.image(v.ID)); err != nil {
 		return err
 	}
 	if err := os.Remove(dir); err != nil {

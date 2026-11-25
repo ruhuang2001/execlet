@@ -9,7 +9,7 @@ require a separate Execlet API or a browser service.
 
 ## Run the offline example
 
-From a source checkout with Docker and Python 3.10 or newer:
+From a source checkout with the [build tools](/installation), Docker, and Python 3.10 or newer:
 
 ```sh
 make browser-e2e
@@ -22,9 +22,10 @@ assets. The suite verifies the network in Docker, then uses these existing APIs:
 1. Create a sandbox from the local preset image.
 2. Upload the page with `PUT /v1/sandboxes/{sandbox_id}/files`.
 3. Start a command that runs headless Chromium and saves a PNG in the sandbox.
-4. Download the image with `GET /v1/sandboxes/{sandbox_id}/files`. Compare the
-   PNG dimensions and SHA-256 with the rendered artifact.
-5. Delete the sandbox and verify that no run-owned containers remain.
+4. Download the image with `GET /v1/sandboxes/{sandbox_id}/files`. Check its
+   SHA-256 against Chromium's output, decode the 800 × 480 image, and verify
+   the fixture's background, teal border, and white card.
+5. Delete the sandbox and check for run-owned containers before stopping the daemon.
 
 The per-run directory under `artifacts/browser/` contains `screenshot.png`,
 `result.json`, and logs. When the image build, command, download, or cleanup

@@ -316,7 +316,7 @@ jobs:
   build:
     needs: profile
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
@@ -386,6 +386,23 @@ jobs:
           go build -o "$RUNNER_TEMP/mcp-client" ./cmd/execletctl/testdata/mcp-client
           python3 scripts/e2e-mcp-workflow.py dist/*_linux_amd64.tar.gz "$RUNNER_TEMP/mcp-client" --runs 1 --out dist/mcp-python.json
           python3 scripts/e2e-mcp-workflow.py dist/*_linux_amd64.tar.gz "$RUNNER_TEMP/mcp-client" --go --runs 1 --out dist/mcp-go.json
+      - name: verify quickstart, repair and recovery from the same snapshot
+        if: needs.profile.outputs.legacy_tag == '' && (inputs.ref == '' || hashFiles('scripts/release-preflight.py') != '')
+        env:
+          ARTIFACTS: dist/acceptance
+        run: |
+          make release-preflight
+          release=$(mktemp -d "$RUNNER_TEMP/execlet-release.XXXXXXXX")
+          tar -xzf dist/*_linux_amd64.tar.gz -C "$release"
+          MCP_IMAGE=$(jq -er '.image' dist/mcp-python.json)
+          export MCP_IMAGE SERVER="$release/execletd" CLI="$release/execletctl" MCP_EXAMPLES="$release/examples/mcp"
+          make pilot soak
+          python3 -B scripts/test-host-acceptance.py -v
+      - name: no acceptance containers remain on the disposable runner
+        if: always() && needs.profile.outputs.legacy_tag == '' && (inputs.ref == '' || hashFiles('scripts/release-preflight.py') != '')
+        run: |
+          remaining=$(docker ps -aq --filter 'label=execlet.owner')
+          test -z "$remaining"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

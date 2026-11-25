@@ -2,11 +2,17 @@ BIN := bin
 PYTHON ?= python3
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 ARTIFACTS ?= artifacts
+MCP_IMAGE ?= execlet-mcp:local
+MCP_EXAMPLES ?= examples/mcp
+CLI ?= $(BIN)/execletctl
+SERVER ?= $(BIN)/execletd
+DIST ?= dist
 COMMENT_PYTHON := .venv/comment-lint/bin/python
 COMMENT_DEPS := .venv/comment-lint/requirements.stamp
 LDFLAGS := -X main.version=$(VERSION)
 
 .PHONY: build test vet lint comment-lint-env comment-lint comment-lint-e2e race fmt check-commit install-hooks python-build python-e2e typescript typescript-e2e clean
+.PHONY: release-preflight pilot soak mcp-image
 
 build: agent
 	go build -ldflags '$(LDFLAGS)' -o $(BIN)/execletd ./cmd/execletd
@@ -66,6 +72,18 @@ typescript:
 
 typescript-e2e:
 	bash scripts/e2e-typescript.sh artifacts/typescript-e2e
+
+mcp-image:
+	docker build -t "$(MCP_IMAGE)" "$(MCP_EXAMPLES)"
+
+release-preflight:
+	$(PYTHON) scripts/release-preflight.py $(if $(ARCHIVE),--archive "$(ARCHIVE)",--dist "$(DIST)") --docs docs/quickstart.md --out "$(ARTIFACTS)/release-preflight.json"
+
+pilot:
+	$(PYTHON) scripts/pilot.py --cli "$(CLI)" --server "$(SERVER)" --image "$(MCP_IMAGE)" --demo "$(MCP_EXAMPLES)/demo" --out "$(ARTIFACTS)/pilot.json"
+
+soak:
+	$(PYTHON) scripts/soak.py --server "$(SERVER)" --image "$(MCP_IMAGE)" --duration 60 --concurrency 4 --restart --out "$(ARTIFACTS)/soak.json"
 
 .PHONY: agent
 agent: internal/dockerbackend/guestbin/guest-linux-amd64 internal/dockerbackend/guestbin/guest-linux-arm64

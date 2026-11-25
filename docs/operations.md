@@ -303,6 +303,42 @@ Use the same build flags and an idle host for comparisons: CI uses coverage
 instrumentation and its small sample is a semantics/cleanup check, not a
 latency threshold. Neither workload measures cold pulls or pool hits.
 
+### Single-host soak
+
+The baseline is serial and short. To exercise concurrent clients on one host:
+
+```sh
+make build mcp-image
+make soak
+```
+
+`make soak` runs four clients for 60 seconds of steady load against a private,
+journaled daemon. Each round creates an offline sandbox, streams a unique
+output marker, verifies the terminal result, and deletes the sandbox. Every
+worker must finish rounds; a connection error fails the run. `artifacts/soak.json`
+reports confirmed rounds per minute and client-observed p50/p95/max for create,
+first output, command completion, delete and the whole round. Use the same host,
+binary, image and resource limits when comparing runs.
+
+Two separate probes check recovery. A new client sees the command still running
+after its observer disconnects, then explicitly cancels it. Halfway through the
+load test, workers drain. The harness kills the daemon with one known command
+running and restarts it with the same journal and owner. The interrupted result
+must be `unknown`, with no exit code and truncated output; its sandbox must be
+`killed` and its container gone. The report separates restart-to-ready time from
+steady-state throughput. It does **not** measure requests arriving during an
+outage. Each load phase must finish with zero owned containers, live sandboxes,
+pending cleanups and cleanup failures.
+
+For a longer run:
+
+```sh
+python3 scripts/soak.py --image execlet-mcp:local --duration 1800 --concurrency 4 --restart --progress
+```
+
+Omit `--restart` to measure uninterrupted load; add `--journal` to keep journaling
+enabled without a crash. The CI run is a correctness check, not a capacity SLA.
+
 ## Prewarmed templates
 
 A deployment policy can reserve fresh running containers for repeated requests. Set `templates` to an immutable image reference and add a `prewarm` target to the same policy. For example, the following fields belong alongside the existing aggregate budgets and allowlists.

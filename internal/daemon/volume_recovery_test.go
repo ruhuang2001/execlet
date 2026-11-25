@@ -3,12 +3,15 @@ package daemon
 import (
 	"context"
 	"errors"
+	"maps"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/cryptotest"
 	"time"
 )
 
@@ -18,6 +21,7 @@ type volumeDiskStub struct {
 	reclaim   func(Volume) error
 }
 
+func (volumeDiskStub) reserve(string) error    { return nil }
 func (d volumeDiskStub) create(v Volume) error { return d.provision(v) }
 func (d volumeDiskStub) ensure(v Volume) error { return d.verify(v) }
 func (d volumeDiskStub) remove(v Volume) error { return d.reclaim(v) }
@@ -204,5 +208,150 @@ func TestRetentionSkipsProtectedHistory(t *testing.T) {
 	s.pruneKilled()
 	if len(s.order) != 1 || s.order[0] != a || s.byID[b.id] != nil {
 		t.Fatal("retention must keep only the protected record")
+	}
+}
+
+func TestVolumeIDCollisionPreservesStoredData(t *testing.T) {
+	files := map[string]string{}
+	s := volumeStore(t, volumeDiskStub{provision: func(v Volume) error {
+		if _, exists := files[v.ID]; exists {
+			return os.ErrExist
+		}
+		files[v.ID] = ""
+		return nil
+	}, reclaim: func(v Volume) error { delete(files, v.ID); return nil }}, 2)
+	req := CreateVolumeRequest{SizeBytes: minVolumeBytes}
+	cryptotest.SetGlobalRandom(t, 59)
+	a, err := s.CreateVolume(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files[a.ID] = "keep me"
+	cryptotest.SetGlobalRandom(t, 59)
+	b, err := s.CreateVolume(req)
+	if err != nil || a.ID == b.ID || files[a.ID] != "keep me" {
+		t.Fatalf("second create: %v, %v; original data: %q", b, err, files[a.ID])
+	}
+	if got, err := s.GetVolume(a.ID); err != nil || got != a {
+		t.Fatalf("original volume: %v, %v", got, err)
+	}
+}
+
+type volumeRecoveryBackend struct {
+	Backend
+	live        map[string]string
+	afterCreate func()
+}
+
+func (b *volumeRecoveryBackend) Create(_ context.Context, spec ContainerSpec) (string, error) {
+	id := "container-" + spec.Name
+	b.live[spec.Labels[SandboxIDLabelKey]] = id
+	if b.afterCreate != nil {
+		b.afterCreate()
+	}
+	return id, nil
+}
+
+func (*volumeRecoveryBackend) VerifyLimits(context.Context, string, ContainerSpec) error { return nil }
+func (*volumeRecoveryBackend) Liveness(context.Context, string) (Liveness, error) {
+	return LivenessRunning, nil
+}
+func (b *volumeRecoveryBackend) Owned(context.Context, string) ([]string, error) {
+	return slices.Collect(maps.Values(b.live)), nil
+}
+func (b *volumeRecoveryBackend) ResolveVolumeCreate(_ context.Context, sandbox, _ string) (string, error) {
+	if id := b.live[sandbox]; id != "" {
+		return id, nil
+	}
+	return "", ErrVolumeCreateUnconfirmed
+}
+func (b *volumeRecoveryBackend) Remove(_ context.Context, id string) error {
+	for sandbox, container := range b.live {
+		if container == id {
+			delete(b.live, sandbox)
+			return nil
+		}
+	}
+	return ErrNotFound
+}
+
+func TestVolumeAttachmentSurvivesJournalFailure(t *testing.T) {
+	ok := func(Volume) error { return nil }
+	disk := volumeDiskStub{ok, ok, ok}
+	s := volumeStore(t, disk, 1)
+	b := &volumeRecoveryBackend{live: map[string]string{}, afterCreate: func() { s.journal.failure = errors.New("disk offline") }}
+	s.backend = b
+	v, err := s.CreateVolume(CreateVolumeRequest{SizeBytes: minVolumeBytes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := CreateRequest{Mounts: []VolumeMount{{VolumeID: v.ID, Path: "/mnt/work"}}}
+	if _, err := s.Create(t.Context(), req); CodeOf(err) != CodeUnavailable {
+		t.Fatalf("create: %v", err)
+	}
+	for _, sb := range s.List() {
+		if _, err := s.Delete(t.Context(), sb.ID); err == nil {
+			t.Error("DELETE confirmed cleanup with an unavailable journal")
+		}
+	}
+	if err := s.journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+	j, err := OpenJournal(s.journal.dir, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = j.Close() })
+	p, err := NewPolicyBackend(b, DeploymentPolicy{MaxSandboxes: 1, MemoryMB: DefaultMemoryMB, Pids: DefaultPidsLimit, NanoCPUs: 1_000_000_000, Images: []string{DefaultImage}, Networks: []NetworkMode{NetworkNone}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted := New(p, WithMaxSandboxes(1))
+	restarted.volumes = &volumes{disk: disk, maxSize: minVolumeBytes, limit: 1}
+	if err := restarted.Recover(t.Context(), j, b); err != nil {
+		t.Fatal(err)
+	}
+	if len(b.live) != 0 {
+		t.Fatalf("unreclaimed containers: %v", b.live)
+	}
+	b.afterCreate = nil
+	if _, err := restarted.Create(t.Context(), req); err != nil {
+		t.Fatalf("reattach after repair: %v", err)
+	}
+}
+
+func TestMissingActiveVolumeStopsRecoveryBeforeCleanup(t *testing.T) {
+	ok := func(Volume) error { return nil }
+	s := volumeStore(t, volumeDiskStub{ok, ok, ok}, 1)
+	b := &volumeRecoveryBackend{live: map[string]string{}}
+	s.backend = b
+	v, err := s.CreateVolume(CreateVolumeRequest{SizeBytes: minVolumeBytes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.Create(t.Context(), CreateRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.Create(t.Context(), CreateRequest{Mounts: []VolumeMount{{VolumeID: v.ID, Path: "/mnt/work"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record storedSandbox
+	if err := s.journal.read(first.ID+".json", &record); err != nil {
+		t.Fatal(err)
+	}
+	record.Sandbox.State = StateKilled
+	if err := s.journal.write(first.ID+".json", record); err != nil {
+		t.Fatal(err)
+	}
+	s.journal.remove(v.ID + ".json")
+	restarted := New(b)
+	restarted.volumes = &volumes{disk: s.volumes.disk}
+	if err := restarted.Recover(t.Context(), s.journal, b); err == nil {
+		t.Fatal("accepted missing volume")
+	}
+	if len(b.live) != 2 {
+		t.Fatalf("changed Docker state before discovering missing volume: %v", b.live)
 	}
 }

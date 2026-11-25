@@ -120,6 +120,7 @@ Optional request fields are pointers, so unset and explicit zero stay distinct.
 | `PidsLimit` | 1024 tasks | ≥ 64 |
 | `NanoCPUs` | `0` (unlimited) | `1e9` = one CPU |
 | `Network` | `sandbox.NetworkBridge` without a policy | `NetworkBridge`, `NetworkNone`, `NetworkFiltered` (requires policy) |
+| `Mounts` | None | Up to eight [persistent volumes](/operations/volumes), specified as `[]sandbox.VolumeMount` |
 
 These are fixed at creation and returned on `Sandbox`.
 

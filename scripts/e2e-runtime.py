@@ -196,11 +196,7 @@ class SandboxChecks:
             evidence["download_members"] = members
             evidence["download_sha256"] = hashlib.sha256(tf.extractfile(sample.name).read()).hexdigest()
 
-        def archive_fields(entry):
-            return {key: value for key, value in entry.items() if key not in ("uid", "gid")}
-
-        expected_members = {h.name: archive_fields(metadata(h)) for h in (directory, sample, link)}
-        actual_members = {name: archive_fields(fields) for name, fields in members.items()}
+        expected_members = {h.name: dict(metadata(h), uid=0, gid=0) for h in (directory, sample, link)}
         link_stat = self.request("GET", self.base + "/files/stat?path=/tmp/workspace/link")
         evidence["link_stat"] = link_stat
         expected_link = evidence["link_expected_on_disk"] = dict(
@@ -218,7 +214,7 @@ class SandboxChecks:
             "sha256sum", "/tmp/workspace/sample", "/tmp/workspace/link"
         ).splitlines()
         guest_hashes = [line.split()[0] for line in evidence["guest_sha256"]]
-        assert len(headers) == len(expected_members) and actual_members == expected_members, members
+        assert len(headers) == len(expected_members) and members == expected_members, members
         assert evidence["download_sha256"] == digest, "archive download bytes changed"
         assert guest_hashes == [digest, digest], "guest file or symlink target bytes changed"
         assert {key: link_stat.get(key) for key in expected_link} == expected_link, (link_stat, expected_link)
@@ -274,6 +270,7 @@ class SandboxChecks:
         if runtime != "runsc":
             assert frozen[1] == 1 and all(snap["host_frozen"] == 1 for snap in snapshots), frozen
         assert all(snap["state"] == "running" for snap in snapshots), snapshots
+        assert snapshots[0]["last_tick"] == snapshots[1]["last_tick"], f"heartbeat advanced during pause: {snapshots}"
         assert ex["pid"] == initial["pid"] and ex["exit_code"] == 0 and not ex["output_truncated"], ex
         assert ex["termination_reason"] == "exited", ex
         assert [tick[0] for tick in produced] == list(range(1, PAUSE_TICKS + 1)), produced
@@ -472,10 +469,20 @@ class SandboxChecks:
         pressure, ex = probe("memory_pressure", OOM_MIB, 0)
         reason = ex["termination_reason"]
         pressure["api_reported_oom"] = reason == "oom"
-        pressure["sandbox_state"] = self.request("GET", self.base)["state"]
         delta = pressure.get("delta", {})
         assert all(delta.get(key, 0) > 0 for key in keys), f"no scoped host OOM kill verified: {delta}"
-        assert "allocation-completed:" not in ex["stdout"] and ex["exit_code"] != 0, ex
+        assert "allocation-completed:" not in ex["stdout"], ex
+        if runtime == "runsc" and (reason == "evicted" or not self.scope.exists()):
+            wait_for("lost sandbox to be retired", lambda: True if self.request("GET", self.base)["state"] == "killed" else None)
+        state = pressure["sandbox_state"] = self.request("GET", self.base)["state"]
+        if state == "running":
+            survivor = pressure["survivor_execution"] = self.completed(self.exec("/bin/true"))
+            assert survivor["termination_reason"] == "exited" and survivor["exit_code"] == 0, survivor
+            assert reason != "evicted" and ex["exit_code"] not in (None, 0), ex
+        else:
+            assert runtime == "runsc" and state == "killed" and ex["exit_code"] != 0, (state, ex)
+            remaining = docker("ps", "-q", "--no-trunc", "--filter", "id=" + self.cid)
+            assert not remaining, f"retired OOM sandbox is still running: {remaining}"
         if runtime == "runsc":
             assert reason in ("oom", "evicted", "exited", "unknown"), ex
             pressure["finding"] = "sandbox_cgroup_oom_without_guest_victim_proof"
@@ -748,6 +755,8 @@ def main():
                         failure("cleanup", RuntimeError(f"daemon left own containers: {remaining}"))
                         docker("rm", "-f", *remaining)
                     report["remaining_owned_containers"] = docker(*owned).splitlines()
+                    if report["remaining_owned_containers"]:
+                        failure("cleanup", RuntimeError(f"owned containers remain: {report['remaining_owned_containers']}"))
                 except Exception as err:
                     failure("cleanup", err)
             report["status"] = "failed" if report["failures"] else "passed"

@@ -334,6 +334,16 @@ func (s *Sandboxes) Recover(ctx context.Context, j *Journal, backend RecoveryBac
 	for _, id := range owned {
 		ownedSet[id] = true
 	}
+	for _, value := range sandboxes {
+		if !ownedSet[value.Container] && value.Sandbox.State != StatePending && !strings.HasPrefix(value.Container, PendingVolumeCreatePrefix) {
+			continue
+		}
+		for _, mount := range value.Sandbox.Mounts {
+			if s.volumes == nil || s.volumes.records[mount.VolumeID].State != "ready" {
+				return fmt.Errorf("recover sandbox %s: attached volume %s is missing or not ready", value.Sandbox.ID, mount.VolumeID)
+			}
+		}
+	}
 	s.journal = j
 	s.fingerprintKey = j.key
 	slices.SortFunc(sandboxes, func(a, b storedSandbox) int { return a.Sandbox.CreatedAt.Compare(b.Sandbox.CreatedAt) })

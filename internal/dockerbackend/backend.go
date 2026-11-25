@@ -441,25 +441,35 @@ func (b *Backend) OOMKillCount(ctx context.Context, containerID string) (int64, 
 			}
 		}
 	}
-	if c.HostConfig.Runtime != "runsc" {
+	rt := c.HostConfig.Runtime
+	if g := b.guest(containerID); inspectErr != nil && g != nil {
+		rt = g.runtime
+	}
+	if rt != "runsc" {
 		if n, ok := localOOMKillCount(b.cgroupRoot, containerID); ok {
+			return n, nil
+		}
+	}
+	if inspectErr != nil && rt != "runc" {
+		return 0, fmt.Errorf("dockerbackend: inspect for oom_kill: %w", inspectErr)
+	}
+	if rt == "runsc" {
+		if c.State.OOMKilled {
+			return 1, nil
+		}
+		return 0, errors.New("dockerbackend: runsc host oom_kill counter unavailable")
+	}
+	out, err := b.captureControl(ctx, containerID, []string{"/bin/sh", "-c", dockerapi.OOMScript})
+	if err == nil {
+		var n int64
+		if n, err = dockerapi.ParseOOMKill(out); err == nil {
 			return n, nil
 		}
 	}
 	if c.State.OOMKilled {
 		return 1, nil
 	}
-	if inspectErr != nil {
-		return 0, fmt.Errorf("dockerbackend: inspect for oom_kill: %w", inspectErr)
-	}
-	if c.HostConfig.Runtime == "runsc" {
-		return 0, errors.New("dockerbackend: runsc host oom_kill counter unavailable")
-	}
-	out, err := b.captureControl(ctx, containerID, []string{"/bin/sh", "-c", dockerapi.OOMScript})
-	if err != nil {
-		return 0, fmt.Errorf("dockerbackend: read oom_kill: %w", err)
-	}
-	return dockerapi.ParseOOMKill(out)
+	return 0, fmt.Errorf("dockerbackend: read oom_kill: %w", err)
 }
 
 func (b *Backend) ReadFile(ctx context.Context, containerID, path string) ([]byte, error) {

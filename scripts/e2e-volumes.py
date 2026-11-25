@@ -242,15 +242,34 @@ class Suite:
 
         final_allocated = int(shell("du", "-B1", image).split()[0])
         assert final_allocated >= SIZE, (allocated, final_allocated, SIZE)
+        replacement = self.new_volume()
+        stat = image.stat()
+        identity = [f"{os.major(stat.st_dev)}:{os.minor(stat.st_dev)}", str(stat.st_ino)]
+
+        def attached():
+            rows = shell("losetup", "--list", "--noheadings", "--raw", "--output", "BACK-MAJ:MIN,BACK-INO")
+            return any(row.split() == identity for row in rows.splitlines())
+
+        device = loop.split(":", 1)[0]
+        with open(device, "rb", buffering=0):
+            assert attached(), identity
+            check["busy_loop_delete"] = self.request("DELETE", va, 503, code="unavailable")
+            assert image.exists() and attached(), identity
+            self.request("POST", "/v1/volumes", 429, {"size_bytes": SIZE}, code="rate_limited")
+        deadline = time.monotonic() + 5
+        while attached() and time.monotonic() < deadline:
+            time.sleep(.05)
         self.request("DELETE", va, 204)
-        assert not image.parent.exists() and not shell("losetup", "-j", image), loop
+        still_attached = attached()
+        assert not image.parent.exists() and not still_attached, (device, identity)
         self.request("GET", va, 404, code="not_found")
-        assert self.request("GET", "/v1/volumes", 200) == {"volumes": []}
         check["disk_reclaimed"] = {"allocated_bytes_at_create": allocated, "allocated_bytes_before_delete": final_allocated,
                                    "directory_exists_after": image.parent.exists(),
-                                   "loop_before": loop.split(":", 1)[0], "loop_attached_after": False}
-        replacement = self.new_volume()
+                                   "loop_before": device, "backing_identity": identity, "loop_attached_after": still_attached}
+        reused = self.new_volume()
+        self.request("DELETE", "/v1/volumes/" + reused["id"], 204)
         self.request("DELETE", "/v1/volumes/" + replacement["id"], 204)
+        assert self.request("GET", "/v1/volumes", 200) == {"volumes": []}
 
     def check_delayed_create(self, volume, crash):
         from local import DockerFault

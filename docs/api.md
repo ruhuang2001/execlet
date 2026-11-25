@@ -294,6 +294,9 @@ If the reply is lost, the native SDKs return the transport error instead of
 replaying the deletion. GET hides volumes already being deleted. To reconcile,
 explicitly repeat DELETE: `204` confirms cleanup; `404` means the ID is absent.
 
+The daemon briefly retries a busy device after unmount. If a loop device still
+holds the image, DELETE returns `503` and the image still counts against the limit.
+
 ### `POST /v1/sandboxes`
 
 Creation returns `409 invalid_state` when Docker reports a name collision and the existing container cannot be safely reclaimed.

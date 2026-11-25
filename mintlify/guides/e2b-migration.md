@@ -23,7 +23,7 @@ export SANDBOX_DOMAIN="${SANDBOX_DOMAIN:-http://127.0.0.1:8080}"
 
 `Sandbox.create()` accepts an omitted template or `base`. Set the `image`
 option or `SANDBOX_E2B_IMAGE` to the immutable image ID or digest, not a tag.
-The compatibility image includes Bash, Python, and a non-root user with
+The compatibility image includes Bash, Python, uv, and a non-root user with
 `/home/user`. It is not E2B's hosted base image.
 
 ```python
@@ -40,6 +40,31 @@ The TypeScript equivalents are `await Sandbox.create()`,
 `await handle.wait()`. Use `await sb.kill()` in `finally` for cleanup.
 `endpoint` and `api_key` (Python) or `apiKey` (TypeScript) override
 `SANDBOX_DOMAIN` and `SANDBOX_API_KEY`; the facades do not read `E2B_*`.
+
+### Install a local wheel without network access
+
+To keep the sandbox offline, configure the [daemon policy](/operations/policy)
+to allow only the `none` network. `--no-index` disables the package index;
+it does not disable networking. While the sandbox is running, upload the built
+Execlet SDK wheel from your client. Here `wheel` is its local `pathlib.Path`:
+
+```python
+sb.files.write(f"/home/user/wheels/{wheel.name}", wheel.read_bytes())
+```
+
+Run these commands with `sb.commands.run` in the sandbox's home directory:
+
+```sh
+uv venv --python /usr/bin/python3 .venv
+uv pip install --python .venv/bin/python --no-index --find-links ./wheels execlet
+```
+
+For pip, upload the wheel to a fresh sandbox and run these commands instead:
+
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install --no-index --find-links ./wheels execlet
+```
 
 ## What to change in your application
 

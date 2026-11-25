@@ -43,6 +43,16 @@ program's output and nothing else.
 | `mcp --workspace DIR --image IMAGE` | Serve sandbox tools over stdin/stdout. See [MCP](/guides/mcp) |
 | `version`, `help` | Build version (injected via `-ldflags`), usage |
 
+If your [policy](/operations/policy) allowlists only `python:3.12-alpine`, pass
+`--image python:3.12-alpine` to keep using it, or add the exact default image
+reference to `allowed_images`:
+
+```text
+ghcr.io/astral-sh/uv:0.13.10-python3.12-alpine@sha256:b6bb7deef90d036429b6e38719c5e77b82d09f799e5d6e6f9a5ce1f8aebdbe2e
+```
+
+Changing the client default does not change daemon policy.
+
 ## `run` flags
 
 | Flag | Notes |

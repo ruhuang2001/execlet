@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field, fields
 from typing import Any, TypeVar
 
 _M = TypeVar("_M", bound="_Model")
+_MIB = 1 << 20
 
 
 @dataclass(kw_only=True)
@@ -52,6 +54,48 @@ class _Model:
 
 
 @dataclass(kw_only=True)
+class Volume(_Model):
+    id: str
+    size_bytes: int
+    created_at: str
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Volume:
+        from ._errors import Error
+
+        volume = super().from_dict(data)
+        if not 0 < volume.size_bytes < 2**63 or not volume.created_at:
+            raise Error("decode", "invalid volume metadata")
+        return volume
+
+
+@dataclass(kw_only=True)
+class VolumeMount(_Model):
+    volume_id: str
+    path: str
+    read_only: bool | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        from ._errors import Error
+
+        if isinstance(self.path, str) and len(self.path) > 4096:
+            raise Error("invalid_request", "mount path exceeds 4096 bytes")
+        if not isinstance(self.volume_id, str) or not self.volume_id or (
+            not isinstance(self.path, str) or not self.path.startswith("/mnt/") or any(
+                part in {".", ".."} or not re.fullmatch(r"[A-Za-z0-9_.-]+", part)
+                for part in self.path.split("/")[2:]
+            )
+        ):
+            raise Error("invalid_request", "mounts require a volume_id and a canonical path below /mnt")
+        if self.read_only is not None and type(self.read_only) is not bool:
+            raise Error("invalid_request", "mount read_only must be a boolean")
+        payload: dict[str, Any] = {"volume_id": self.volume_id, "path": self.path}
+        if self.read_only is not None:
+            payload["read_only"] = self.read_only
+        return payload
+
+
+@dataclass(kw_only=True)
 class Sandbox(_Model):
     agent_mode: str | None = None
     protected: bool | None = None
@@ -71,6 +115,18 @@ class Sandbox(_Model):
     created_at: str = ""
     expires_at: str | None = None
     kill_reason: str | None = None
+    mounts: list[VolumeMount] | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Sandbox:
+        from ._errors import Error
+
+        if isinstance(data, dict) and "mounts" in data:
+            mounts = data["mounts"]
+            if not isinstance(mounts, list):
+                raise Error("decode", "sandbox mounts must be an array")
+            data = {**data, "mounts": [VolumeMount.from_dict(mount) for mount in mounts]}
+        return super().from_dict(data)
 
 
 @dataclass(kw_only=True)
@@ -128,6 +184,19 @@ class _Request:
 
 
 @dataclass(kw_only=True)
+class CreateVolumeRequest(_Request):
+    size_bytes: int
+
+    def to_dict(self) -> dict[str, Any]:
+        from ._errors import Error
+
+        size = self.size_bytes
+        if type(size) is not int or not 16 * _MIB <= size <= (1 << 40) or size % _MIB:
+            raise Error("invalid_request", "size_bytes must be a whole MiB between 16 MiB and 1 TiB")
+        return {"size_bytes": size}
+
+
+@dataclass(kw_only=True)
 class CreateSandboxRequest(_Request):
     runtime: str | None = None
     image: str | None = None
@@ -141,6 +210,34 @@ class CreateSandboxRequest(_Request):
     idle_timeout_seconds: int | None = None
     idle_timeout_action: str | None = None
     env: dict[str, str] | None = None
+    mounts: list[VolumeMount] | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        from ._errors import Error
+
+        payload = super().to_dict()
+        mounts = payload.pop("mounts", None)
+        if mounts is None:
+            return payload
+        if not isinstance(mounts, list):
+            raise Error("invalid_request", "mounts must be a list of VolumeMount objects")
+        if len(mounts) > 8:
+            raise Error("invalid_request", "at most eight volume mounts are allowed")
+        entries = []
+        for mount in mounts:
+            if not isinstance(mount, VolumeMount):
+                raise Error("invalid_request", "mounts must be a list of VolumeMount objects")
+            entry = mount.to_dict()
+            path = entry["path"]
+            for prior in entries:
+                other = prior["path"]
+                if (entry["volume_id"] == prior["volume_id"] or path == other or
+                        path.startswith(other + "/") or other.startswith(path + "/")):
+                    raise Error("invalid_request", "mounts cannot repeat a volume or overlap")
+            entries.append(entry)
+        if entries:
+            payload["mounts"] = entries
+        return payload
 
 
 @dataclass(kw_only=True)

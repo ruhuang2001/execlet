@@ -34,7 +34,7 @@ resize or discard existing volumes. Watch host disk space separately.
 
 ## Create, mount, and reuse
 
-1. Check `GET /v1/capabilities` for `volumes.v1`. The Go SDK does this
+1. Check `GET /v1/capabilities` for `volumes.v1`. The native SDKs do this
    automatically before a volume operation or a sandbox create with mounts.
 2. Send `POST /v1/volumes` with `{"size_bytes":16777216}` and keep the returned
    `id`. Do not automatically retry an ambiguous create: list volumes first.
@@ -58,7 +58,7 @@ resize or discard existing volumes. Watch host disk space separately.
    still there. Set `"read_only": true` on the new mount to deny writes.
 6. When the data is no longer needed, delete the detached volume with
    `DELETE /v1/volumes/{volume_id}`. `204` confirms storage removal.
-   If the response is lost, the Go SDK returns a transport error. Repeat the
+   If the response is lost, the SDK returns a transport error. Repeat the
    deletion explicitly to check: `204` confirms removal and `404` means the
    ID is absent. GET alone cannot confirm cleanup; it only shows ready volumes.
 

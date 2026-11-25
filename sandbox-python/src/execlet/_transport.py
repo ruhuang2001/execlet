@@ -305,7 +305,8 @@ class Transport:
                 except Error as exc:
                     error = exc
                     dispatched = dispatched or getattr(exc, "_dispatched", False)
-                if not retry or not error.retryable or attempt == self._max_retries:
+                can_retry = error.status_code == 503 if retry == "503-only" else retry and error.retryable
+                if not can_retry or attempt == self._max_retries:
                     raise error
                 _sleep(_backoff(attempt, after), cancel)
         except _Cancellation as exc:

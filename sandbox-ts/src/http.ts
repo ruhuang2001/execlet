@@ -72,7 +72,7 @@ export class Transport {
   async request(
     method: string,
     path: string,
-    repeatable: boolean,
+    repeatable: boolean | '503-only',
     signal?: AbortSignal,
     body?: string | Uint8Array
   ): Promise<Uint8Array> {
@@ -82,7 +82,7 @@ export class Transport {
   async requestStatus(
     method: string,
     path: string,
-    repeatable: boolean,
+    repeatable: boolean | '503-only',
     signal?: AbortSignal,
     body?: string | Uint8Array
   ): Promise<{ status: number; bytes: Uint8Array }> {
@@ -106,7 +106,8 @@ export class Transport {
         if (signal?.aborted) throw canceled(signal);
         error = transportError(cause);
       }
-      if (!repeatable || !error.retryable || attempt >= this.maxRetries) throw error;
+      const canRetry = repeatable === '503-only' ? error.statusCode === 503 : repeatable && error.retryable;
+      if (!canRetry || attempt >= this.maxRetries) throw error;
       await sleep(after || backoff(attempt), signal);
     }
   }

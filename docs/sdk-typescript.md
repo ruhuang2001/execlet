@@ -227,6 +227,10 @@ DELETE, ordinary file PUT (archive PUT excluded), pause/resume/cancel and keyed 
 once, as are relative lifetime PATCH requests. A complete malformed JSON body
 is a decode error, not a transport retry.
 
+`deleteVolume` retries only an explicit HTTP 503. On a lost response it rejects
+with `transport` without replaying. To reconcile, explicitly repeat the delete:
+`204` confirms cleanup; `404` means the ID is absent. `getVolume` only sees ready volumes.
+
 Delay is sampled uniformly between half and all of the cap
 min(2000ms, 200ms * 2^attempt). Positive integer Retry-After seconds override
 ordinary delays; zero, dates, fractions and invalid values use backoff.

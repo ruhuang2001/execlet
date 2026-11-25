@@ -290,8 +290,8 @@ paths:
       summary: Remove a detached volume and release its storage
       description: >-
         Returns volume_in_use if a sandbox still holds the volume, including while creation or removal is pending.
-        The Go SDK retries an explicit 503 within the configured retry budget. A lost response is ambiguous;
-        it returns the transport error without replay. GET only shows ready volumes. To confirm cleanup
+        The SDKs retry an explicit 503 within the configured retry budget. A lost response is ambiguous;
+        they return the transport error without replay. GET only shows ready volumes. To confirm cleanup
         after a lost response, explicitly retry DELETE; 204 confirms removal and 404 means the ID is absent.
       responses:
         '204':

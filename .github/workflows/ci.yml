@@ -25,6 +25,7 @@ permissions:
 env:
   GOTOOLCHAIN: local
   CI_SOURCE: ${{ inputs.ref || github.sha }}
+  EXECLET_UV_VERSION: '0.13.10'
 
 jobs:
   profile:
@@ -82,6 +83,10 @@ jobs:
         if: needs.profile.outputs.sdks == 'true'
         with:
           python-version: '3.15'
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d
+        if: needs.profile.outputs.sdks == 'true'
+        with:
+          version: ${{ env.EXECLET_UV_VERSION }}
       - name: prepare pinned references and SDK build tools
         if: needs.profile.outputs.sdks == 'true'
         run: |
@@ -255,6 +260,10 @@ jobs:
         if: needs.profile.outputs.guest == 'true'
         with:
           python-version: '3.12'
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d
+        if: needs.profile.outputs.guest == 'true'
+        with:
+          version: ${{ env.EXECLET_UV_VERSION }}
       - name: enforce the comment ratchet
         if: needs.profile.outputs.guest == 'true'
         env:
@@ -612,14 +621,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d
+        with:
+          version: ${{ env.EXECLET_UV_VERSION }}
       - name: build Python distribution
-        run: |
-          python -m pip install build
-          python -m build --outdir artifacts/python-dist sandbox-python
+        run: uv build --python "$(command -v python)" --out-dir artifacts/python-dist sandbox-python
       - name: verify the wheel before installation
         if: needs.profile.outputs.legacy_tag == ''
         run: python scripts/check-sdk-wheel.py artifacts/python-dist/*.whl
-      - name: install the built wheel
+      - name: install the built wheel with uv
+        if: matrix.python-version != '3.10'
+        run: uv pip install --python "$(command -v python)" --reinstall artifacts/python-dist/*.whl
+      - name: verify standard pip installation on the oldest supported Python
+        if: matrix.python-version == '3.10'
         run: python -m pip install --force-reinstall artifacts/python-dist/*.whl
       - name: Python end-to-end contract and entry gate
         env:

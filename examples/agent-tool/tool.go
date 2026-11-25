@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ruhuang2001/execlet/internal/guestimage"
 	"github.com/ruhuang2001/execlet/internal/wirejson"
 	sandbox "github.com/ruhuang2001/execlet/sandbox-go"
 )
@@ -65,7 +66,7 @@ type Tool struct {
 }
 
 func New(client *sandbox.Client) *Tool {
-	return &Tool{client: client, image: "python:3.12-alpine", memory: 256}
+	return &Tool{client: client, image: guestimage.Python, memory: 256}
 }
 
 func (t *Tool) Run(ctx context.Context, input Input) Result {

@@ -12,8 +12,13 @@ inherited client raises `forked_client`; its sockets belong to the parent.
 Install the unreleased `0.1.0` SDK from this checkout, not from a registry:
 
 ```sh
-python3 -m pip install ./sandbox-python
+uv venv --python python3 .venv
+. .venv/bin/activate
+uv pip install ./sandbox-python
 ```
+
+Without uv, create the environment with `python3 -m venv .venv`, activate it,
+and run `python -m pip install ./sandbox-python` instead.
 
 Start `execletd` with access to Docker, then run:
 
@@ -386,11 +391,8 @@ deduplication, then cancels and requires a terminal snapshot. It also exercises
 unconfirmed cancellation instead of treating an accepted request as success.
 
 ```sh
-python3 -m pip install build
-python3 -m build --outdir artifacts/python-dist sandbox-python
-python3 scripts/check-sdk-wheel.py artifacts/python-dist/*.whl
-python3 -m pip install --force-reinstall artifacts/python-dist/*.whl
-PYTHON=python3 SDK_INSTALLED=1 bash scripts/e2e-python.sh artifacts/python-e2e
+make python-build
+make python-e2e
 ```
 
 The suite retains a JSON report, HTTP proxy trace, daemon logs, source identity,

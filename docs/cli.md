@@ -15,7 +15,7 @@ Status: normative. Contract for `execletctl`. It is a thin layer over the [Go SD
 |---|---|
 | `doctor` | environment and connectivity checks, see below |
 | `run [flags] -- CMD [ARG...]` | create a sandbox (or use `--sandbox ID`), start `CMD`, stream output, print the final status |
-| `run [flags] -- code 'PYTHON'` | shorthand for `python3 -c 'PYTHON'`; a newly created sandbox uses `python:3.12-alpine` unless `--image` is given |
+| `run [flags] -- code 'PYTHON'` | shorthand for `python3 -c 'PYTHON'`; new sandboxes use the [digest-pinned Python 3.12 Alpine image with uv and pip](../internal/guestimage/python.go) unless `--image` is given |
 | `shell SANDBOX [TERMINAL]` | open a PTY or reconnect by its printed ID. Ctrl-] detaches and shell exit closes the terminal |
 | `mcp --workspace DIR --image IMAGE` | serve eight sandbox tools over standard input and output. [Cursor setup and workflow](../examples/mcp/README.md) |
 | `attach SANDBOX EXECUTION` | stream an existing execution from the beginning; Ctrl+C cancels it |
@@ -28,6 +28,8 @@ Status: normative. Contract for `execletctl`. It is a thin layer over the [Go SD
 | `files archive download SANDBOX PATH LOCAL_TAR` | download a validated tar with an atomic local save |
 | `version` | print the build version (injected with `-ldflags`) |
 | `help` | usage |
+
+If your deployment allowlists only `python:3.12-alpine`, pass `--image python:3.12-alpine` to keep using it, or allow the exact new image reference linked above. Changing the client default does not change daemon policy.
 
 `run` flags: `--sandbox ID`, `--image`, `--memory MB`, `--max-concurrent-executions N`, `--pids-limit N`, `--nano-cpus N`, `--network bridge|filtered|none`, `--timeout S`, `--timeout-action kill|pause`, `--idle-timeout S`, `--idle-action kill|pause`, `--exec-timeout S`, `--env NAME=VALUE`, `--cwd DIR`, `--stdin-file FILE`, `--rm` (request cleanup of a sandbox created by this invocation). `--max-concurrent-executions` is a creation-only flag (1–8, default 1). Creation flags together with `--sandbox` are an error. `--rm` does not remove a sandbox supplied through `--sandbox`. Successful cleanup is quiet. If deletion fails or the reply does not confirm the requested sandbox is killed, the CLI prints `cleanup unconfirmed` with the sandbox ID on stderr. Stdout and exit status still report the command outcome. Retry cleanup with `execletctl kill ID`.
 

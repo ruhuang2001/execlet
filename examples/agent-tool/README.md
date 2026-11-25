@@ -73,12 +73,12 @@ In a second terminal, run arbitrary Python:
     SANDBOX_DOMAIN=http://127.0.0.1:8080 go run ./examples/agent-tool/cmd/demo -timeout 60 -code 'print(sum([10, 20, 30]))'
 
 On success, stdout contains 60 followed by a newline. If the image is missing,
-the Docker backend pulls python:3.12-alpine, which requires registry access.
+the Docker backend pulls the [pinned Python image](../../internal/guestimage/python.go) from `ghcr.io`, which requires registry access.
 If the server uses SANDBOX_API_KEY, configure the client with the same value.
 
 Each Tool.Run call creates a fresh sandbox:
 
-- The image is fixed to python:3.12-alpine, with a 256 MB memory limit.
+- The image includes Python 3.12, uv and pip, with a 256 MB memory limit.
 - The default sandbox lifetime is 60 seconds. Set timeout_seconds in tool
   arguments, or -timeout in the demo, to change it. This is the sandbox lifetime,
   not a separate Python CPU time limit.

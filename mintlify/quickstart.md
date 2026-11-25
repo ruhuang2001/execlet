@@ -47,7 +47,7 @@ export SANDBOX_DOMAIN=http://127.0.0.1:8080
 
 `doctor` should end with `Ready`. The Python command prints `1024` to stdout
 and `completed (exited), exit 0` in the status line on stderr. The daemon pulls
-`alpine:3.20` for `doctor` and `python:3.12-alpine` for `code` if they are not
+`alpine:3.20` for `doctor` and a digest-pinned `ghcr.io/astral-sh/uv` Python 3.12 Alpine image for `code` if they are not
 available locally. The pull requires registry access from Docker, even though
 `--network none` leaves the Python sandbox offline.
 

@@ -20,10 +20,7 @@ unset PYTHONPATH CONTRACT_MODULE CONTRACT_TS_MODULE CONTRACT_TS_WORKER
 
 "$HERE/node_modules/.bin/tsc" -p "$HERE/tsconfig.json"
 mkdir -p "$OUT/wheels" "$OUT/npm" "$OUT/consumer"
-"$PYTHON" -m venv "$OUT/venv"
-"$OUT/venv/bin/python" -m pip wheel --no-deps --wheel-dir "$OUT/wheels" "$ROOT/sandbox-python" >"$OUT/install-python.log" 2>&1
-"$OUT/venv/bin/python" "$ROOT/scripts/check-sdk-wheel.py" "$OUT"/wheels/execlet-*.whl >>"$OUT/install-python.log" 2>&1
-"$OUT/venv/bin/python" -m pip install --no-deps "$OUT"/wheels/execlet-*.whl >>"$OUT/install-python.log" 2>&1
+PYTHON="$PYTHON" bash "$ROOT/scripts/python-tools.sh" install-sdk "$OUT/venv" "$OUT/wheels" >"$OUT/install-python.log" 2>&1
 (cd "$ROOT/sandbox-ts" && npm pack --pack-destination "$OUT/npm" && npm run check) >"$OUT/install-typescript.log" 2>&1
 npm install --prefix "$OUT/consumer" --ignore-scripts --no-audit --no-fund "$OUT"/npm/execlet-sdk-*.tgz >>"$OUT/install-typescript.log" 2>&1
 sed "s|'../src/e2b.js'|'@execlet/sdk/e2b'|" "$ROOT/sandbox-ts/checks/e2b-api.ts" >"$OUT/consumer/contract.mts"

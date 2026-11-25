@@ -24,9 +24,8 @@ vet:
 lint: comment-lint
 	golangci-lint run ./...
 
-$(COMMENT_DEPS): scripts/comment-lint/requirements.txt
-	$(PYTHON) -m venv .venv/comment-lint
-	$(COMMENT_PYTHON) -m pip install -r $<
+$(COMMENT_DEPS): scripts/comment-lint/requirements.txt scripts/python-tools.sh
+	PYTHON="$(PYTHON)" bash scripts/python-tools.sh requirements .venv/comment-lint $<
 	@touch $@
 
 comment-lint-env: $(COMMENT_DEPS)
@@ -47,7 +46,7 @@ install-hooks:
 	git config core.hooksPath .githooks
 
 python-build:
-	$(PYTHON) -m build --outdir artifacts/python-dist sandbox-python
+	PYTHON="$(PYTHON)" bash scripts/python-tools.sh dist artifacts/python-dist
 	$(PYTHON) scripts/check-sdk-wheel.py artifacts/python-dist/execlet-*.whl
 
 python-e2e:

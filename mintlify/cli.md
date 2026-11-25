@@ -30,7 +30,7 @@ program's output and nothing else.
 | --- | --- |
 | `doctor` | Environment and connectivity checks |
 | `run [flags] -- CMD [ARG...]` | Create or reuse a sandbox, run, stream, print the final status |
-| `run [flags] -- code 'PYTHON'` | Shorthand for `python3 -c 'PYTHON'`; new sandboxes use `python:3.12-alpine` unless `--image` is given |
+| `run [flags] -- code 'PYTHON'` | Shorthand for `python3 -c 'PYTHON'`; new sandboxes use Astral's digest-pinned Python 3.12 Alpine image with uv and pip unless `--image` is given |
 | `shell SANDBOX [TERMINAL]` | Open a PTY, or reconnect by its printed ID. Ctrl-] detaches; shell exit closes the terminal |
 | `attach SANDBOX EXECUTION` | Replay retained events and follow output; Ctrl+C requests remote cancellation |
 | `logs SANDBOX EXECUTION` | Print retained output and current status without streaming |

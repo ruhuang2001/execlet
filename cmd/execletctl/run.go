@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/ruhuang2001/execlet/internal/guestimage"
 	sandbox "github.com/ruhuang2001/execlet/sandbox-go"
 )
 
@@ -125,7 +126,7 @@ func (in *invocation) runCommand(args []string) int {
 		}
 		command = []string{"python3", "-c", command[1]}
 		if rf.image == "" && rf.sandboxID == "" {
-			rf.image = "python:3.12-alpine"
+			rf.image = guestimage.Python
 		}
 	}
 

@@ -52,6 +52,11 @@ PauseSandbox(ctx, sandboxID) (*Sandbox, error)
 ResumeSandbox(ctx, sandboxID) (*Sandbox, error)
 KillSandbox(ctx, sandboxID) (*Sandbox, error)
 
+CreateVolume(ctx, CreateVolumeRequest) (*Volume, error)
+GetVolume(ctx, volumeID) (*Volume, error)
+ListVolumes(ctx) ([]Volume, error)
+DeleteVolume(ctx, volumeID) error
+
 StartExecution(ctx, sandboxID, ExecuteRequest) (*Execution, error)
 StreamExecution(ctx, sandboxID, executionID, onEvent func(Event) error) (*Execution, error)
 GetExecution(ctx, sandboxID, executionID) (*Execution, error)
@@ -86,7 +91,8 @@ so that "unset" and an explicit zero value are distinct.
 | `MemoryMB` | `*int` | 512 MB; minimum 16 |
 | `PidsLimit` | `*int` | 1024 tasks, including threads; minimum 64 |
 | `NanoCPUs` | `*int64` | `0` means unlimited; `1000000000` is one CPU |
-| `Network` | `*string` | `NetworkBridge` (outbound access) or `NetworkNone`; default bridge |
+| `Network` | `*string` | `NetworkBridge` (default without policy), `NetworkNone`, or `NetworkFiltered` (requires policy) |
+| `Mounts` | `[]VolumeMount` | No mounts by default; up to eight [persistent volumes](operations.md#persistent-volumes) |
 
 These values are fixed at creation and returned on `Sandbox`. See the
 [HTTP contract](api.md#sandbox) for the remaining fields and timeout defaults.

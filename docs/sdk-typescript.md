@@ -73,6 +73,11 @@ pauseSandbox(sandboxID, options?): Promise<Sandbox>
 resumeSandbox(sandboxID, options?): Promise<Sandbox>
 killSandbox(sandboxID, options?): Promise<Sandbox>
 
+createVolume(request: CreateVolumeRequest, options?): Promise<Volume>
+getVolume(volumeID, options?): Promise<Volume>
+listVolumes(options?): Promise<Volume[]>
+deleteVolume(volumeID, options?): Promise<void>
+
 startExecution(sandboxID, request: ExecuteRequest, options?): Promise<Execution>
 getExecution(sandboxID, executionID, options?): Promise<Execution>
 listExecutions(sandboxID, options?): Promise<Execution[]>
@@ -99,9 +104,12 @@ The explicit `@execlet/sdk/e2b` subpath provides the optional
 runtime dependency. It does not change native argv or browser behavior.
 
 `CreateSandboxRequest` accepts optional `image`, `memory_mb`,
-`max_concurrent_executions`, `pids_limit`, `nano_cpus`, `network`,
+`max_concurrent_executions`, `pids_limit`, `nano_cpus`, `network`, `runtime`,
 `timeout_seconds`, `timeout_action`, `idle_timeout_seconds`,
-`idle_timeout_action`, and `env`. Create-time env persists with the sandbox;
+`idle_timeout_action`, `env`, and `mounts`. Each `VolumeMount` contains
+`volume_id`, `path`, and optional `read_only`; see
+[persistent volumes](operations.md#persistent-volumes) for setup and lifecycle.
+Create-time env persists with the sandbox;
 execution env overrides it for that invocation. Neither is echoed in metadata.
 `UpdateSandboxRequest` accepts exactly one of `timeout_seconds` (replace) and
 `extend_seconds` (extend without shortening). `updateSandbox` sends one PATCH,
@@ -226,6 +234,10 @@ response bodies) and HTTP 429/500/502/503/504. Repeatable operations are GET,
 DELETE, ordinary file PUT (archive PUT excluded), pause/resume/cancel and keyed starts. Creation is attempted
 once, as are relative lifetime PATCH requests. A complete malformed JSON body
 is a decode error, not a transport retry.
+
+`deleteVolume` retries only an explicit HTTP 503. On a lost response it rejects
+with `transport` without replaying. To reconcile, explicitly repeat the delete:
+`204` confirms cleanup; `404` means the ID is absent. `getVolume` only sees ready volumes.
 
 Delay is sampled uniformly between half and all of the cap
 min(2000ms, 200ms * 2^attempt). Positive integer Retry-After seconds override

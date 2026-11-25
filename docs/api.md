@@ -290,7 +290,7 @@ Returns `204` when backing storage is removed, `404 not_found` for an unknown
 ID, or `409 volume_in_use` while a sandbox holds it. This includes paused
 sandboxes and pending removal. If storage cleanup returns `503`, retry DELETE;
 no new attachments can start while deletion is pending.
-If the reply is lost, the Go SDK returns the transport error instead of
+If the reply is lost, the native SDKs return the transport error instead of
 replaying the deletion. GET hides volumes already being deleted. To reconcile,
 explicitly repeat DELETE: `204` confirms cleanup; `404` means the ID is absent.
 

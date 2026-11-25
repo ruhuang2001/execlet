@@ -2,6 +2,21 @@ export type OpenString<T extends string> = T | (string & {});
 export type Action = 'kill' | 'pause';
 export type TerminationReason = 'exited' | 'canceled' | 'timeout' | 'oom' | 'evicted' | 'unknown';
 
+export interface Volume {
+  id: string;
+  size_bytes: number;
+  created_at: string;
+  [field: string]: unknown;
+}
+
+export interface CreateVolumeRequest { size_bytes: number }
+
+export interface VolumeMount {
+  volume_id: string;
+  path: string;
+  read_only?: boolean;
+}
+
 export interface Sandbox {
   agent_mode?: OpenString<'guest' | 'legacy' | 'unavailable'>;
   protected?: boolean;
@@ -21,6 +36,7 @@ export interface Sandbox {
   created_at: string;
   expires_at: string | null;
   kill_reason: OpenString<'requested' | 'timeout' | 'idle_timeout' | 'evicted'> | null;
+  mounts?: VolumeMount[];
   [field: string]: unknown;
 }
 
@@ -71,6 +87,7 @@ export interface CreateSandboxRequest {
   idle_timeout_seconds?: number;
   idle_timeout_action?: Action;
   env?: Readonly<Record<string, string>>;
+  mounts?: readonly VolumeMount[];
 }
 
 export interface UpdateSandboxRequest { timeout_seconds?: number; extend_seconds?: number }

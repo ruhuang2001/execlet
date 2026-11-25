@@ -129,8 +129,28 @@ and keyed starts retry transport failures and 429/500/502/503/504.
 `min(2000ms, 200ms * 2^attempt)`, uniformly sampled between half and the full
 cap. A positive integer `Retry-After` overrides it; SSE reconnects ignore it.
 
-**Attempted once, never retried:** sandbox creation, lifetime `PATCH`, and
-archive uploads. Their effects are not safely repeatable.
+**Attempted once, never retried:** sandbox or volume creation, lifetime `PATCH`,
+and archive uploads. Their effects are not safely repeatable.
+
+For [persistent volumes](/operations/volumes), pass
+`mounts: [{ volume_id: volume.id, path: "/mnt/work" }]` to `createSandbox`.
+Each `VolumeMount` has `volume_id`, `path`, and an optional `read_only`.
+`createVolume({ size_bytes })`, `getVolume(volumeID)`, `listVolumes()`, and
+`deleteVolume(volumeID)` manage volumes and check the `volumes.v1` capability
+first. `getVolume` and `listVolumes` only return ready volumes:
+
+```typescript
+const volume = await client.createVolume({ size_bytes: 16 * 1024 * 1024 });
+const sandbox = await client.createSandbox({
+  image: "alpine:3.20",
+  network: "none",
+  mounts: [{ volume_id: volume.id, path: "/mnt/work" }],
+});
+```
+
+`deleteVolume` retries only an explicit HTTP 503. If its response is lost, it
+rejects with `transport` without replaying. Repeat the delete to reconcile:
+`204` confirms cleanup and `404` means the ID is absent.
 
 ## Browser notes
 

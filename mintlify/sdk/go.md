@@ -146,6 +146,41 @@ Use `WriteFileInfo` to get metadata from a successful file write.
 many files or want to preserve symlinks, modes, and timestamps. Archive uploads
 make **one attempt**: extraction is not safely repeatable.
 
+## Volumes
+
+When the daemon has [persistent volumes](/operations/volumes) enabled,
+`CreateVolume`, `GetVolume`, `ListVolumes`, and `DeleteVolume` manage them.
+This example uses a disposable volume and an image allowed by your policy:
+
+```go
+vol, err := client.CreateVolume(ctx, sandbox.CreateVolumeRequest{SizeBytes: 16 << 20})
+if err != nil {
+    return err
+}
+sb, err := client.CreateSandbox(ctx, sandbox.CreateSandboxRequest{
+    Image:   new("alpine:3.20"),
+    Network: new(sandbox.NetworkNone),
+    Mounts:  []sandbox.VolumeMount{{VolumeID: vol.ID, Path: "/mnt/work"}},
+})
+if err != nil {
+    return err
+}
+if _, err := client.KillSandbox(ctx, sb.ID); err != nil {
+    return err
+}
+return client.DeleteVolume(ctx, vol.ID)
+```
+
+Killing the sandbox releases the attachment, not the data. Omit the final
+delete and keep `vol.ID` to attach the volume to another sandbox.
+
+The SDK requires the `volumes.v1` capability before any volume operation or a
+create with mounts. It rejects a size that is not a whole MiB between 16 MiB
+and 1 TiB, more than eight mounts, a repeated volume, and paths that overlap or
+are not canonical paths below `/mnt` before sending the request. Set
+`ReadOnly: true` on a mount to deny writes. `GetVolume` and `ListVolumes`
+only return ready volumes.
+
 ## Retry rules worth remembering
 
 - `MaxRetries: 0` selects three retries after the initial attempt; a positive
@@ -160,3 +195,7 @@ make **one attempt**: extraction is not safely repeatable.
   the supplied `IdempotencyKey` or generates one and keeps it across retries.
 - Stream reconnects consume the same retry budget; received output does not
   reset it.
+- `CreateVolume` is not retried. `DeleteVolume` retries only an explicit HTTP
+  503. If its response is lost, it returns the transport error without
+  replaying. Repeat the delete to reconcile: `204` confirms cleanup and `404`
+  means the ID is absent.

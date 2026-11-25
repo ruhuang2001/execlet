@@ -132,9 +132,30 @@ cap. A positive integer `Retry-After` overrides it; SSE reconnects ignore it.
 **Attempted once, never retried:** sandbox or volume creation, lifetime `PATCH`,
 and archive uploads. Their effects are not safely repeatable.
 
-For [persistent volumes](/operations/volumes), pass
-`mounts: [{ volume_id: volume.id, path: "/mnt/work" }]` to `createSandbox`.
-`deleteVolume` retries only an explicit HTTP 503, not a lost response.
+## Volumes
+
+When [persistent volumes](/operations/volumes) are enabled, pass `mounts` to
+`createSandbox`. Each mount takes `volume_id`, `path`, and an optional
+`read_only`. This example uses a disposable volume and an image allowed by
+your policy:
+
+```typescript
+const volume = await client.createVolume({ size_bytes: 16 * 1024 * 1024 });
+const sandbox = await client.createSandbox({
+  image: "alpine:3.20",
+  network: "none",
+  mounts: [{ volume_id: volume.id, path: "/mnt/work" }],
+});
+await client.killSandbox(sandbox.id);
+await client.deleteVolume(volume.id);
+```
+
+`killSandbox` releases the attachment. Omit the final delete and keep
+`volume.id` to reuse the data. The client checks the `volumes.v1` capability
+for volume operations; `getVolume` and `listVolumes` only return ready volumes.
+`deleteVolume` retries only an explicit HTTP 503. If its response is lost, it
+rejects with `SandboxError` code `transport` without replaying. Repeat the
+delete to reconcile: `204` confirms cleanup and `404` means the ID is absent.
 
 ## Browser notes
 

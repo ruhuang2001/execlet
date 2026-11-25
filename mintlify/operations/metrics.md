@@ -83,6 +83,48 @@ repeated runs on the same hardware, with the same image, on an idle host —
 coverage-instrumented CI builds are a semantics check, not a latency threshold.
 </Warning>
 
+### Single-host soak
+
+The latency workload is serial and short. To exercise concurrent clients on one
+host, build the binaries and the MCP example image, then run the soak:
+
+```sh
+make build mcp-image
+make soak
+```
+
+`make soak` runs four clients for 60 seconds of steady load against a private,
+journaled daemon. Each round creates an offline sandbox, streams a unique output
+marker, verifies the terminal result, and deletes the sandbox. Every worker must
+finish rounds, and a connection error fails the run. `artifacts/soak.json`
+reports confirmed rounds per minute and client-observed p50, p95 and max for
+create, first output, command completion, delete and the whole round. Use the
+same host, binary, image and resource limits when you compare runs.
+
+The soak also checks recovery with two probes:
+
+- A new client sees a command still running after its observer disconnects,
+  then explicitly cancels it.
+- Halfway through the load test, workers drain. The harness kills the daemon
+  with one known command running and restarts it with the same journal and
+  owner. The interrupted result must be `unknown`, with no exit code and
+  truncated output. Its sandbox must be `killed` and its container gone.
+
+The report separates restart-to-ready time from steady-state throughput. It
+does **not** measure requests that arrive during an outage. Each load phase must
+finish with zero owned containers, live sandboxes, pending cleanups and cleanup
+failures.
+
+For a longer run:
+
+```sh
+python3 scripts/soak.py --image execlet-mcp:local --duration 1800 --concurrency 4 --restart --progress
+```
+
+Omit `--restart` to measure uninterrupted load. Add `--journal` to keep
+journaling enabled without a crash. The CI run is a correctness check, not a
+capacity SLA.
+
 ## Keeping evidence honest
 
 Store `environment.json` (image ID, source HEAD, server checksum, Docker and

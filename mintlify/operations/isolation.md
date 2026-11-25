@@ -43,10 +43,10 @@ embeds the guest agent required for runsc filesystem access.
 | Area | What to verify on your host |
 | --- | --- |
 | Admission | With a policy, `execletd` needs the Linux Docker host's `/proc` and cgroup v2 tree. It checks memory, swap, CPU and PID limits in the matching host scope. If it cannot verify them, creation fails. |
-| Task limits and reaping | Host `pids.max` caps host tasks in that scope; it is not a cap of the same size on virtual guest PIDs. Reaching the host limit can terminate the whole sandbox. Check guest reaping and task pressure separately. |
+| Task limits and reaping | `pids.max` counts host tasks, not virtual guest PIDs. Under `runsc`, reaching that limit can terminate the whole sandbox. Check guest reaping separately from task pressure. |
 | Pause and resume | Verify that the workload stops making progress and resumes. Do not infer that from a Docker `Paused` flag or assume the host cgroup freezer behaves identically under both runtimes. |
-| Files and archives | Live transfers use the guest helper to read the actual runsc overlay. Verify the content and metadata you rely on, including after idle-container recovery. Ownership in downloaded archives is normalized, so it does not reliably represent guest user IDs. |
-| OOM | Execlet reads `memory.events` in the matching host cgroup. Under either runtime, an OOM can take the whole sandbox down before a command reports an exit code. A scoped OOM kill does not identify which guest process was killed. Treat `oom`, `evicted`, and uncertain outcomes separately; exit 137 alone is not evidence. |
+| Files and archives | Live transfers read the runsc overlay through the guest helper. Downloaded tar headers have UID and GID `0` under either runtime. Use file `stat` in the sandbox for actual ownership, including after recovery. |
+| OOM | An increase in `oom_kill` in the sandbox's host `memory.events` confirms an OOM kill in that scope, not which guest process died. Either runtime can lose the whole sandbox before a command reports an exit code. Distinguish `oom`, `evicted`, and `unknown`; exit 137 alone does not prove OOM. |
 
 Use a dedicated local Linux Docker host with cgroup v2, `runc` and `runsc`
 registered, and loop devices and ext4 tooling available. Build the binaries

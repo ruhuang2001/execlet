@@ -457,6 +457,9 @@ jobs:
           mkdir -p artifacts/feature-coverage
           export GOCOVERDIR="$PWD/artifacts/feature-coverage"
           GOFLAGS='-cover -covermode=atomic -coverpkg=./...' make feature-e2e
+      - name: render and retrieve an offline Chromium screenshot
+        if: needs.profile.outputs.legacy_tag == ''
+        run: make browser-e2e
       - uses: actions/upload-artifact@v4
         if: needs.profile.outputs.guest == 'true'
         with:
@@ -471,6 +474,7 @@ jobs:
           path: |
             artifacts/**/*.json
             artifacts/**/*.log
+            artifacts/browser/**/*.png
           retention-days: 7
 
   runtime-e2e:

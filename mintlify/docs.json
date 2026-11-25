@@ -36,7 +36,7 @@
           {
             "group": "Guides",
             "icon": "compass",
-            "pages": ["guides/agent-tool", "guides/e2b-migration", "guides/mcp"]
+            "pages": ["guides/agent-tool", "guides/e2b-migration", "guides/mcp", "guides/playwright"]
           },
           {
             "group": "Reference",

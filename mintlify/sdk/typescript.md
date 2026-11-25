@@ -129,8 +129,12 @@ and keyed starts retry transport failures and 429/500/502/503/504.
 `min(2000ms, 200ms * 2^attempt)`, uniformly sampled between half and the full
 cap. A positive integer `Retry-After` overrides it; SSE reconnects ignore it.
 
-**Attempted once, never retried:** sandbox creation, lifetime `PATCH`, and
-archive uploads. Their effects are not safely repeatable.
+**Attempted once, never retried:** sandbox or volume creation, lifetime `PATCH`,
+and archive uploads. Their effects are not safely repeatable.
+
+For [persistent volumes](/operations/volumes), pass
+`mounts: [{ volume_id: volume.id, path: "/mnt/work" }]` to `createSandbox`.
+`deleteVolume` retries only an explicit HTTP 503, not a lost response.
 
 ## Browser notes
 

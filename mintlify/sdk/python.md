@@ -73,7 +73,12 @@ a `CancellationToken` for a local deadline or explicit caller cancellation.
 
 `CreateSandboxRequest` accepts `image`, `memory_mb`, `max_concurrent_executions`,
 `pids_limit`, `nano_cpus`, `network`, `runtime`, `timeout_seconds`, `timeout_action`,
-`idle_timeout_seconds`, `idle_timeout_action`, and `env`.
+`idle_timeout_seconds`, `idle_timeout_action`, `env`, and `mounts`.
+
+To attach an existing [persistent volume](/operations/volumes), import
+`VolumeMount` from `execlet` and pass
+`mounts=[VolumeMount(volume_id=volume.id, path="/mnt/work")]`. Removing the
+sandbox releases the attachment but does not delete the volume.
 
 `None` omits a field. Explicit zero is sent, which is how you distinguish "use
 the server default" from "disable this timeout". The client never invents a

@@ -7,8 +7,13 @@ builds from compatible revisions.
 Install from the repository root:
 
 ```sh
-python3 -m pip install ./sandbox-python
+uv venv --python python3 .venv
+. .venv/bin/activate
+uv pip install ./sandbox-python
 ```
+
+If uv isn't installed, use `python3 -m venv .venv`, activate it, and run
+`python -m pip install ./sandbox-python`. Neither installer is needed at runtime.
 
 To distribute a wheel from this checkout, build into a fresh directory and check
 its contents before installing or sharing it. The build reads `src/execlet`
@@ -16,7 +21,7 @@ directly; it does not reuse a previous setuptools `build/lib` directory.
 
 ```sh
 out=$(mktemp -d)
-python3 -m pip wheel --no-deps --wheel-dir "$out" ./sandbox-python
+uv build --wheel --out-dir "$out" ./sandbox-python
 python3 scripts/check-sdk-wheel.py "$out"/*.whl
 ```
 

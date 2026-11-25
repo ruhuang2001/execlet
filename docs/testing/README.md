@@ -5,6 +5,7 @@ Each suite below states which wrong implementation it must catch. Assertions liv
 | Area | Wrong implementation the suite must expose | Entry point |
 | --- | --- | --- |
 | Lifecycle, execution, CLI | Pause that only changes a state field, exit 137 reported as OOM, cancellation that leaves child processes, orphans that survive a restart | `bash scripts/e2e.sh artifacts/e2e` |
+| CLI Python image | Default `run -- code` needs a network download inside the guest to create a venv, or no longer includes pip | `scripts/e2e.sh` (`python-image`) |
 | Real Docker backend | The same lifecycle and environment failures, isolated from HTTP; a conflicting container name removed without verifying ownership | `go test -tags docker ./internal/dockerbackend -run '^TestReal'` (run by `e2e.sh`) |
 | Environment and working directory | Limits off by one byte, replay that ignores env or cwd, raw env retained in records, an executable named `A=B` treated as an assignment | `scripts/e2e-env/run.py` (run by `e2e.sh`) |
 | CLI `--rm` cleanup | A failed or unconfirmed delete hidden behind the command's exit status; SIGINT during an accepted start that skips cleanup | `scripts/e2e-cli-cleanup.py` (run by `e2e.sh`) |

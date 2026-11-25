@@ -10,10 +10,13 @@ that built your daemon. From your application directory, create a virtual
 environment and install from that checkout:
 
 ```sh
-python3 -m venv .venv
+uv venv --python python3 .venv
 . .venv/bin/activate
-python -m pip install "$EXECLET_SRC/sandbox-python"
+uv pip install "$EXECLET_SRC/sandbox-python"
 ```
+
+Without uv, create the venv with `python3 -m venv .venv`, activate it, and run
+`python -m pip install "$EXECLET_SRC/sandbox-python"`.
 
 The distribution and import are both named `execlet`. The SDK is synchronous,
 requires Python 3.10+, and has no runtime dependencies outside the standard

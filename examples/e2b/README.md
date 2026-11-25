@@ -24,15 +24,20 @@ supports these fields. If the server requires authentication, configure
 docker build -t execlet-e2b:local examples/e2b
 export SANDBOX_E2B_IMAGE=$(docker image inspect execlet-e2b:local --format '{{.Id}}')
 export SANDBOX_DOMAIN=http://localhost:8080
-python3 -m pip install ./sandbox-python
+uv venv --python python3 .venv
+. .venv/bin/activate
+uv pip install ./sandbox-python
 npm --prefix sandbox-ts ci
 (cd sandbox-ts && npm pack)
 ```
 
 Install `sandbox-ts/execlet-sdk-<version>.tgz` in your application. The compatibility profile
 targets Python 3.11+ and Node 22+ (the reference harness requires Node 22.19+).
-The image has Bash, Python 3, coreutils and a non-root `user` with `/home/user`;
-it does not reproduce every package in E2B's cloud template. Pin the **resulting
+The image has Bash, Python 3, uv, coreutils and a non-root `user` with `/home/user`.
+Inside the guest, use `uv venv .venv` and `uv pip install` in its home directory;
+`python3 -m venv .venv` creates a pip-enabled environment for older workflows.
+With networking disabled, install from local wheels with `--no-index`.
+The image does not reproduce every package in E2B's cloud template. Pin the **resulting
 image ID**, not `:local`. The pinned base alone does not pin apt package updates.
 
 ## Python

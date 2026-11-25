@@ -82,6 +82,9 @@ done
 curl -fsS "$SANDBOX_DOMAIN/healthz" >"$OUT/healthz.json" 2>&1
 check "healthz" "health endpoint answers" "$(grep -c '"status":"ok"' "$OUT/healthz.json")" "1"
 
+"$BIN/execletctl" run --rm --network none -- code 'import subprocess, sys; subprocess.run(["uv", "venv", "--offline", "/tmp/venv"], check=True); subprocess.run([sys.executable, "-m", "pip", "--version"], check=True)' >"$OUT/python-image.log" 2>&1
+check "python-image" "default code sandbox can use uv offline and still has pip; see $OUT/python-image.log" "$?" "0"
+
 python3 -B "$ROOT/scripts/e2e-cli-cleanup.py" "$BIN/execletctl" "$SANDBOX_DOMAIN" "$OUT/cli-cleanup" >"$OUT/cli-cleanup.log" 2>&1
 check "cli-cleanup" "command outcome and cleanup diagnostics; see $OUT/cli-cleanup.log" "$?" "0"
 

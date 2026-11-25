@@ -126,13 +126,14 @@ aligned with the project release when preparing a release; the minimum
 supported interpreter is Python 3.10. CI builds wheel/source distributions and
 tests installed wheels. Ordinary CI does not publish them or add them to the
 binary Release. Until an authorized package publication, install from this
-checkout with `python3 -m pip install ./sandbox-python`, or from its tested
+checkout in a virtual environment with `uv pip install ./sandbox-python` (or
+`python -m pip install ./sandbox-python` without uv), or from its tested
 CI wheel. The npm tarball is likewise installable directly with `npm install
 ./execlet-sdk-VERSION.tgz`; do not assume the package name exists in a registry.
 
 ## Release checklist
 
-Requires Go 1.27+, Docker CLI/Unix socket, curl, Node 22.19+, Python 3.11+,
+Requires Go 1.27+, Docker CLI/Unix socket, curl, Node 22.19+, Python 3.11+, uv (or pip and `build`),
 golangci-lint, and GoReleaser. Ensure `python3` is a supported interpreter on
 `PATH`; `PYTHON` selects the interpreter for the Python and file SDK runners.
 The higher interpreter requirement is for the E2B reference harness; the native
@@ -157,7 +158,6 @@ bash scripts/e2e-observability.sh artifacts/observability-e2e
 mkdir -p artifacts/cov-unit
 go test -race -covermode=atomic -coverpkg=./... ./... \
   -args -test.gocoverdir="$PWD/artifacts/cov-unit"
-python3 -m pip install build
 make python-build
 make python-e2e
 bash scripts/e2b-compatibility/setup.sh

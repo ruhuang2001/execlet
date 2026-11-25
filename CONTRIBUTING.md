@@ -7,7 +7,8 @@
 - For SDK and full coverage checks: Node 22+ and Python 3.10+. CI uses Python
   3.10 and 3.15; select a suitable local interpreter with `PYTHON`. Scripts
   that call `python3` directly also require that executable on `PATH`.
-- `make lint` needs golangci-lint and Python 3.10+ with venv and pip. The first run installs the comment parsers. Install GoReleaser for release verification.
+- Install [uv](https://docs.astral.sh/uv/getting-started/installation/) for Python builds, installs, and virtual environments. Without it the scripts use stdlib `venv` and pip; `make python-build` then also needs `build` installed in the selected interpreter.
+- `make lint` needs golangci-lint. The first run installs the comment parsers. Install GoReleaser for release verification.
 
 Build the daemon and CLI with `make build`. See the [quick start](docs/quickstart.md)
 for Docker socket selection and running the service.
@@ -44,7 +45,6 @@ Set `SDK_INSTALLED=1` only when testing a wheel already installed in that
 interpreter. To build distributions separately:
 
 ~~~sh
-python3 -m pip install build
 make python-build
 ~~~
 

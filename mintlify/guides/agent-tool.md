@@ -47,7 +47,7 @@ the demo uses an in-memory stub that does not run Python.
    the original call ID. Check `is_error` and `output_truncated`, and cap
    what you send to the model to fit its context budget.
 
-`Run` uses a fresh `python:3.12-alpine` sandbox with 256 MiB of memory. It
+`Run` uses a fresh Python 3.12 Alpine sandbox with uv, pip and 256 MiB of memory. It
 leaves the network mode to the daemon; use a [policy](/operations/policy)
 with `allowed_networks: ["none"]` if the workload must run offline. Keep
 image, network, and resource settings under application control. The example

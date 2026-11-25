@@ -74,7 +74,7 @@ agent: internal/dockerbackend/guestbin/guest-linux-amd64 internal/dockerbackend/
 internal/dockerbackend/guestbin/guest-linux-%: $(wildcard sandbox-agent/cmd/guest/*.go internal/guestprotocol/*.go sandbox-agent/go.*)
 	cd sandbox-agent && GOFLAGS= CGO_ENABLED=0 GOOS=linux GOARCH=$* go build -trimpath -ldflags='-s -w' -o ../$@ ./cmd/guest
 
-.PHONY: feature-e2e runtime-e2e runtime-image volumes-e2e docs-openapi docs-check
+.PHONY: feature-e2e runtime-e2e runtime-image volumes-e2e browser-e2e docs-openapi docs-check
 
 feature-e2e: build typescript
 	$(PYTHON) scripts/e2e-mcp.py $(ARTIFACTS)/mcp-e2e
@@ -100,3 +100,6 @@ runtime-e2e: build runtime-image
 
 volumes-e2e: build runtime-image
 	$(PYTHON) scripts/e2e-volumes.py --out $(ARTIFACTS)/volumes
+
+browser-e2e: build
+	$(PYTHON) scripts/e2e-playwright.py --out $(ARTIFACTS)/browser

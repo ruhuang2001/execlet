@@ -2,8 +2,9 @@
 
 The current source covers lifecycle, execution, E2B background handles,
 capability checks, opt-in aggregate policy, conservative restart recovery,
-[local persistent volumes](operations.md#persistent-volumes), metrics, and a
-repeatable warm-image latency/fault suite. SDK distributions
+[local persistent volumes](operations.md#persistent-volumes), metrics, a
+repeatable warm-image latency/fault suite, and an
+[offline Playwright example](../mintlify/guides/playwright.md). SDK distributions
 are built and installed in CI; registry publication still requires owner setup
 and an explicit release. See [operations](operations.md) and [versioning](versioning.md).
 The capabilities below are **not implemented**, not committed delivery plans.
@@ -13,7 +14,6 @@ The capabilities below are **not implemented**, not committed delivery plans.
 | Process checkpoints | Define recovery of process memory and runtime compatibility beyond filesystem templates | Storage and consistency at checkpoint time |
 | Secret injection | Short-lived, narrowly scoped credentials; redaction in logs and server-side audit | Leakage through logs, environment variables, or untrusted code |
 | Multi-tenancy and billing | Tenant-scoped scheduling, quotas, metering, and explicit resource termination | Noisy neighbours, authorization, billing correctness |
-| Browser automation | Isolated browser images, network controls, artifact capture, session timeouts | Larger attack surface, heavier resource use |
 | Additional SDK languages beyond Go, Python, and TypeScript | Generate plain requests from the stable OpenAPI core, then implement and verify retries, replay, errors and cancellation per language | Semantic drift between clients |
 | Kubernetes or microVM backend | Implement the existing `daemon.Backend` interface and verify lifecycle and execution semantics against the new runtime | Pause, OOM, eviction, and network semantics differ |
 | Live execution recovery and HA | Extend the current single-writer local journal without replaying interrupted commands | Durable live output, ownership fencing, process identity and multi-host reconciliation; not equivalent to memory checkpoints |

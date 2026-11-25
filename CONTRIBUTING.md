@@ -58,6 +58,8 @@ inspect diagnostics; setup retries do not retry scenario requests.
 Docker host with cgroup v2, `runc` and `runsc` registered, and loop-backed
 ext4 support. To build as a regular user and elevate only the probes, follow
 the [runtime verification commands](docs/operations.md#runtime-verification).
+`make browser-e2e` needs Docker and download access for the initial image
+build; the screenshot run itself is offline.
 
 The E2B subset has its own [setup and acceptance requirements](scripts/e2b-compatibility/README.md),
 including a compatible image digest, Python 3.11+ and Node 22.19+. Its source-derived

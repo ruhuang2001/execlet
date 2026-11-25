@@ -46,6 +46,8 @@ Use the docs at the release tag for the released contract; the links below descr
   on the local Linux Docker host.
 - Open or reconnect to an interactive terminal with `execletctl shell`.
 - Sync a workspace into an offline sandbox from an MCP client with `execletctl mcp`.
+- [Render a trusted local page in Chromium](mintlify/guides/playwright.md) and
+  retrieve the PNG through the ordinary file API.
 
 ## Documentation
 

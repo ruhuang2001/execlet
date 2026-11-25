@@ -13,13 +13,15 @@ from urllib.parse import quote, urlencode
 from ._cancel import CancellationToken, _Cancellation
 from ._errors import Error
 from ._models import (
-    Capabilities, CommandAttachment, CreateSandboxRequest, ExecuteRequest, Execution,
-    ExecutionKillResult, FileEntry, FileList, Sandbox, UpdateSandboxRequest,
+    Capabilities, CommandAttachment, CreateSandboxRequest, CreateVolumeRequest, ExecuteRequest,
+    Execution, ExecutionKillResult, FileEntry, FileList, Sandbox, UpdateSandboxRequest, Volume,
 )
 from ._transport import Transport
 
 _P = ParamSpec("_P")
 _T = TypeVar("_T")
+_VOLUME_CAPABILITY = "volumes.v1"
+_VOLUMES_PATH = "/v1/volumes"
 
 
 def _public_cancellation(method: Callable[_P, _T]) -> Callable[_P, _T]:
@@ -44,6 +46,12 @@ def _resource_items(payload: dict[str, Any], field: str) -> list[dict[str, Any]]
     if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
         raise Error("decode", f"Response field {field!r} must be an array of objects")
     return items
+
+
+def _volume_path(volume_id: str) -> str:
+    if not isinstance(volume_id, str) or volume_id in {"", ".", ".."}:
+        raise Error("invalid_request", "invalid volume_id")
+    return _VOLUMES_PATH + "/" + quote(volume_id, safe="")
 
 
 class SandboxAPI(Transport, ABC):
@@ -75,6 +83,36 @@ class SandboxAPI(Transport, ABC):
         missing = set(required).difference(flags)
         if missing:
             raise Error("incompatible_server", "server lacks " + ", ".join(sorted(missing)))
+
+    @_public_cancellation
+    def create_volume(
+        self, request: CreateVolumeRequest, *, cancel: CancellationToken | None = None,
+    ) -> Volume:
+        payload = request.to_dict()
+        self.require_capabilities(_VOLUME_CAPABILITY, cancel=cancel)
+        return Volume.from_dict(self._json(
+            "POST", _VOLUMES_PATH, json_body=payload, cancel=cancel, retry=False,
+        ))
+
+    @_public_cancellation
+    def list_volumes(self, *, cancel: CancellationToken | None = None) -> list[Volume]:
+        self.require_capabilities(_VOLUME_CAPABILITY, cancel=cancel)
+        volumes = self._json("GET", _VOLUMES_PATH, cancel=cancel).get("volumes")
+        if not isinstance(volumes, list):
+            raise Error("decode", "volumes must be an array")
+        return [Volume.from_dict(volume) for volume in volumes]
+
+    @_public_cancellation
+    def get_volume(self, volume_id: str, *, cancel: CancellationToken | None = None) -> Volume:
+        path = _volume_path(volume_id)
+        self.require_capabilities(_VOLUME_CAPABILITY, cancel=cancel)
+        return Volume.from_dict(self._json("GET", path, cancel=cancel))
+
+    @_public_cancellation
+    def delete_volume(self, volume_id: str, *, cancel: CancellationToken | None = None) -> None:
+        path = _volume_path(volume_id)
+        self.require_capabilities(_VOLUME_CAPABILITY, cancel=cancel)
+        self._request("DELETE", path, cancel=cancel, retry="503-only")
 
     @_public_cancellation
     def get_command(
@@ -149,6 +187,8 @@ class SandboxAPI(Transport, ABC):
             required.append("execution.env-cwd.v1")
         if payload.get("max_concurrent_executions") is not None:
             required.append("execution.concurrent.v1")
+        if payload.get("mounts"):
+            required.append(_VOLUME_CAPABILITY)
         self.require_capabilities(*required, cancel=cancel)
         return Sandbox.from_dict(
             self._json("POST", "/v1/sandboxes", json_body=payload, cancel=cancel, retry=False)

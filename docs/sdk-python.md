@@ -327,6 +327,9 @@ The policy matches Go except for configuring zero retries:
 - Repeat only safe operations: GET, DELETE, ordinary file PUT (archive PUT excluded), pause, resume, cancel,
   and execution starts carrying an idempotency key. Sandbox creation is
   attempted once, including on a lost response.
+- `delete_volume` retries only an explicit HTTP 503. On a lost response it raises
+  `transport` without replaying. To reconcile, explicitly repeat the delete:
+  `204` confirms cleanup; `404` means the ID is absent. `get_volume` only sees ready volumes.
 - For retry index `n` starting at zero, the cap is
   `min(2 seconds, 200 milliseconds * 2**n)`; uniformly sample a delay from
   half that cap to the cap.

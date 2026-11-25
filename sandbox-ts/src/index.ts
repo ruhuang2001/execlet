@@ -4,5 +4,5 @@ export type { SandboxErrorDetails } from './errors.js';
 export type {
   FileEntry, FileEntryType, FileList, ListFilesOptions, Action, ClientConfig, CompletedExecution, CreateSandboxRequest, Event, EventHandler,
   ExecuteRequest, Execution, ExecutionOptions, ExecutionOutcome, OpenString, RequestOptions, Sandbox, TerminationReason, UpdateSandboxRequest,
-  Capabilities, CommandAttachment, KillExecutionResponse, StreamExecutionOptions,
+  Capabilities, CommandAttachment, CreateVolumeRequest, KillExecutionResponse, StreamExecutionOptions, Volume, VolumeMount,
 } from './types.js';

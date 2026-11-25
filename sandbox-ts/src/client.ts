@@ -5,8 +5,26 @@ import { consume, streamEvents } from './stream.js';
 import type {
   FileEntry, FileList, ListFilesOptions, ClientConfig, CompletedExecution, CreateSandboxRequest, Event, EventHandler,
   ExecuteRequest, Execution, ExecutionOptions, ExecutionOutcome, RequestOptions, Sandbox, UpdateSandboxRequest,
-  Capabilities, CommandAttachment, KillExecutionResponse, StreamExecutionOptions,
+  Capabilities, CommandAttachment, CreateVolumeRequest, KillExecutionResponse, StreamExecutionOptions, Volume, VolumeMount,
 } from './types.js';
+
+const volumeCapability = 'volumes.v1';
+const volumesPath = '/v1/volumes';
+const mib = 1024 ** 2;
+
+function validateVolume(volume: Volume): void {
+  if (typeof volume?.id !== 'string' || !volume.id || !Number.isSafeInteger(volume.size_bytes) || volume.size_bytes <= 0 ||
+      typeof volume.created_at !== 'string' || !volume.created_at) {
+    throw new SandboxError('decode', 'invalid volume metadata');
+  }
+}
+
+function volumePath(id: string): string {
+  if (typeof id !== 'string' || !id || id === '.' || id === '..') {
+    throw new SandboxError('invalid_request', 'sandbox: invalid volume_id');
+  }
+  return volumesPath + '/' + encodeURIComponent(id);
+}
 
 function validateFileEntry(entry: FileEntry): void {
   if (!entry || typeof entry.name !== 'string' || !Number.isInteger(entry.size) || !Number.isInteger(entry.mode) ||
@@ -79,14 +97,78 @@ export class Client {
     if (missing.length) throw new SandboxError('incompatible_server', 'server lacks ' + missing.join(', '));
   }
 
+  async createVolume(request: CreateVolumeRequest, options: RequestOptions = {}): Promise<Volume> {
+    const size = request?.size_bytes;
+    if (!Number.isSafeInteger(size) || size < 16 * mib || size > 1024 ** 4 || size % mib !== 0) {
+      throw new SandboxError('invalid_request', 'sandbox: size_bytes must be a whole MiB between 16 MiB and 1 TiB');
+    }
+    await this.requireCapabilities([volumeCapability], options);
+    const volume = await this.transport.json<Volume>('POST', volumesPath, false, options.signal, { size_bytes: size });
+    validateVolume(volume);
+    return volume;
+  }
+
+  async listVolumes(options: RequestOptions = {}): Promise<Volume[]> {
+    await this.requireCapabilities([volumeCapability], options);
+    const list = await this.transport.json<{ volumes: Volume[] }>('GET', volumesPath, true, options.signal);
+    if (!Array.isArray(list?.volumes)) {
+      throw new SandboxError('decode', 'volumes must be an array');
+    }
+    for (const volume of list.volumes) validateVolume(volume);
+    return list.volumes;
+  }
+
+  async getVolume(volumeID: string, options: RequestOptions = {}): Promise<Volume> {
+    const path = volumePath(volumeID);
+    await this.requireCapabilities([volumeCapability], options);
+    const volume = await this.transport.json<Volume>('GET', path, true, options.signal);
+    validateVolume(volume);
+    return volume;
+  }
+
+  async deleteVolume(volumeID: string, options: RequestOptions = {}): Promise<void> {
+    const path = volumePath(volumeID);
+    await this.requireCapabilities([volumeCapability], options);
+    await this.transport.request('DELETE', path, '503-only', options.signal);
+  }
+
   async createSandbox(request: CreateSandboxRequest = {}, options: RequestOptions = {}): Promise<Sandbox> {
-    const snapshot = { ...request, ...(request.env ? { env: { ...request.env } } : {}) };
+    const { mounts, ...snapshot } = { ...request, ...(request.env ? { env: { ...request.env } } : {}) };
+    const volumeMounts: VolumeMount[] = [];
+    if (mounts !== undefined) {
+      if (!Array.isArray(mounts)) {
+        throw new SandboxError('invalid_request', 'sandbox: mounts must be an array');
+      }
+      if (mounts.length > 8) {
+        throw new SandboxError('invalid_request', 'sandbox: at most eight volume mounts are allowed');
+      }
+      for (const mount of mounts) {
+        const { volume_id, path, read_only } = mount ?? {};
+        if (typeof path === 'string' && path.length > 4096) {
+          throw new SandboxError('invalid_request', 'sandbox: mount path exceeds 4096 bytes');
+        }
+        if (typeof volume_id !== 'string' || !volume_id || typeof path !== 'string' || !path.startsWith('/mnt/') ||
+            path.slice(5).split('/').some(part => !part || part === '.' || part === '..' || /[^A-Za-z0-9_.-]/.test(part))) {
+          throw new SandboxError('invalid_request', 'sandbox: mounts require a volume_id and a canonical path below /mnt');
+        }
+        if (read_only !== undefined && typeof read_only !== 'boolean') {
+          throw new SandboxError('invalid_request', 'sandbox: mount read_only must be a boolean');
+        }
+        if (volumeMounts.some(prior => volume_id === prior.volume_id || path === prior.path ||
+            path.startsWith(prior.path + '/') || prior.path.startsWith(path + '/'))) {
+          throw new SandboxError('invalid_request', 'sandbox: mounts cannot repeat a volume or overlap');
+        }
+        volumeMounts.push({ volume_id, path, ...(read_only === undefined ? {} : { read_only }) });
+      }
+    }
     const required = [];
     if (snapshot.runtime !== undefined) required.push('sandbox.runtime.v1');
     if (snapshot.env && Object.keys(snapshot.env).length) required.push('execution.env-cwd.v1');
     if (snapshot.max_concurrent_executions !== undefined) required.push('execution.concurrent.v1');
+    if (volumeMounts.length) required.push(volumeCapability);
     await this.requireCapabilities(required, options);
-    return this.transport.json('POST', '/v1/sandboxes', false, options.signal, snapshot);
+    return this.transport.json('POST', '/v1/sandboxes', false, options.signal,
+      volumeMounts.length ? { ...snapshot, mounts: volumeMounts } : snapshot);
   }
 
   getSandbox(sandboxID: string, options: RequestOptions = {}): Promise<Sandbox> {

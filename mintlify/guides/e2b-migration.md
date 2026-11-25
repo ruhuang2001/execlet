@@ -23,8 +23,11 @@ export SANDBOX_DOMAIN="${SANDBOX_DOMAIN:-http://127.0.0.1:8080}"
 
 `Sandbox.create()` accepts an omitted template or `base`. Set the `image`
 option or `SANDBOX_E2B_IMAGE` to the immutable image ID or digest, not a tag.
-The compatibility image includes Bash, Python, and a non-root user with
-`/home/user`. It is not E2B's hosted base image.
+The compatibility image includes Bash, Python, uv, and a non-root user with
+`/home/user`. It is not E2B's hosted base image. Inside the sandbox, use
+`uv venv .venv` and `uv pip install` in the home directory. `python3 -m venv .venv`
+also works and creates a pip-enabled environment for older workflows. With
+networking disabled, install from local wheels with `--no-index`.
 
 ```python
 from execlet.e2b import Sandbox

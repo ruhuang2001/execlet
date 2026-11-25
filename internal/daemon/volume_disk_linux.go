@@ -216,13 +216,24 @@ func removeDetachedImage(path string) error {
 			return err
 		}
 		if status.Device == image.Dev && status.Inode == image.Ino {
-			return fmt.Errorf("volume image is still attached to block device %s", device.Name())
+			return fmt.Errorf("volume image is still attached to block device %s: %w", device.Name(), unix.EBUSY)
 		}
 	}
 	return os.Remove(path)
 }
 
 func (d *linuxVolumeDisk) remove(v Volume) error {
+	deadline := time.Now().Add(250 * time.Millisecond)
+	for {
+		err := d.removeOnce(v)
+		if !errors.Is(err, unix.EBUSY) || time.Now().After(deadline) {
+			return err
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+func (d *linuxVolumeDisk) removeOnce(v Volume) error {
 	dir, p := filepath.Join(d.dir, v.ID), d.path(v.ID)
 	info, err := os.Lstat(dir)
 	if errors.Is(err, os.ErrNotExist) {
